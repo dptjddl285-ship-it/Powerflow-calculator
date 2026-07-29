@@ -21,7 +21,9 @@ async def startup_event():
     print("\n" + "★"*60)
     print(" 🚀 [PowerLens] 통합 서버 가동 시작!")
     try:
-        yolo_model = YOLO(r"C:\Users\dptjd\Downloads\PowerLens\backend_api\models\best3.pt")
+        # best3.pt(640 안정)도 있으나, 2026_07_01_03.pt가 imgsz=1280에서 괴물박스 없이 검출 수가 더 많음.
+        # vision_logic.py의 추론 imgsz=1280과 반드시 함께 사용해야 함.
+        yolo_model = YOLO(r"C:\Users\dptjd\Downloads\PowerLens\backend_api\models\2026_07_01_03.pt")
         print(" ✅ AI 모델(YOLO) 로딩 완료!")
     except Exception as e:
         print(f" ❌ 모델 로딩 실패: {e}")

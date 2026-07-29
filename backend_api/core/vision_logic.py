@@ -213,7 +213,10 @@ def analyze_circuit_image(image_bytes, model):
     h_img, w_img = img.shape[:2]
 
     # 2. YOLO 추론 (main.py 역할)
-    results = model.predict(img, conf=0.4, iou=0.4, line_width=1)
+    # 주의: 모델이 imgsz=1280으로 학습되었으므로 추론도 1280로 맞춰야 함.
+    # 640(기본값)으로 추론하면 박스 회귀가 붕괴하여 화면을 덮는 괴물박스가 발생함.
+    # conf를 0.3으로 낮춰 놓친 심볼 회수(괴물박스는 아래 필터에서 제거).
+    results = model.predict(img, conf=0.3, iou=0.4, imgsz=1280, line_width=1)
     
     predictions = []
     components = {}
@@ -225,7 +228,19 @@ def analyze_circuit_image(image_bytes, model):
             conf_score = float(box.conf[0])
             cls = int(box.cls[0])
             name = model.names[cls]
-            
+
+            # 🛡️ 괴물박스 후처리 필터
+            # 1) 박스가 이미지 대비 너무 크면(면적비 > 0.12) 괴물박스로 간주하여 제거
+            # 2) bus(모선)는 얇은 선이어야 함. w·h 비율이 둘 다 0.08 초과면
+            #    사각형 덩어리(=가짜 bus)이므로 제거. 진짜 모선은 한쪽이 ~0.01.
+            w_ratio = w / w_img
+            h_ratio = h / h_img
+            area_ratio = w_ratio * h_ratio
+            if area_ratio > 0.12:
+                continue
+            if name.lower() == 'bus' and w_ratio > 0.08 and h_ratio > 0.08:
+                continue
+
             comp_id = f"{name}_{len(predictions)}"
             
             predictions.append({

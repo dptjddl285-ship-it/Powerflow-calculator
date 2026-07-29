@@ -1,0 +1,10 @@
+# Python
+__pycache__/
+*.pyc
+
+# 재생성 가능한 진단/산출물
+backend_api/temp_data/
+괴물박스_비교결과/
+
+# 학습용 원본 이미지(라벨은 Roboflow에 있음)
+학습 IEEE/
