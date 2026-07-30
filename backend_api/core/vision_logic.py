@@ -213,10 +213,10 @@ def analyze_circuit_image(image_bytes, model):
     h_img, w_img = img.shape[:2]
 
     # 2. YOLO 추론 (main.py 역할)
-    # 주의: 모델이 imgsz=1280으로 학습되었으므로 추론도 1280로 맞춰야 함.
-    # 640(기본값)으로 추론하면 박스 회귀가 붕괴하여 화면을 덮는 괴물박스가 발생함.
-    # conf를 0.3으로 낮춰 놓친 심볼 회수(괴물박스는 아래 필터에서 제거).
-    results = model.predict(img, conf=0.3, iou=0.4, imgsz=1280, line_width=1)
+    # 2026_07_30_aug.pt는 imgsz=640으로 학습됨. 추론도 640으로 맞춰야 변압기까지 잡힘.
+    # (주의: 1280으로 추론하면 학습/추론 해상도 불일치로 변압기를 놓침.
+    #  구모델 2026_07_01_03은 640에서 괴물박스가 나 1280을 썼으나, 신모델은 640이 깔끔.)
+    results = model.predict(img, conf=0.3, iou=0.4, imgsz=640, line_width=1)
     
     predictions = []
     components = {}

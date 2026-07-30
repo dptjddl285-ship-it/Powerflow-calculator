@@ -21,9 +21,10 @@ async def startup_event():
     print("\n" + "★"*60)
     print(" 🚀 [PowerLens] 통합 서버 가동 시작!")
     try:
-        # best3.pt(640 안정)도 있으나, 2026_07_01_03.pt가 imgsz=1280에서 괴물박스 없이 검출 수가 더 많음.
-        # vision_logic.py의 추론 imgsz=1280과 반드시 함께 사용해야 함.
-        yolo_model = YOLO(r"C:\Users\dptjd\Downloads\PowerLens\backend_api\models\2026_07_01_03.pt")
+        # 2026_07_30_aug.pt: 런타임 증강(mosaic/fliplr/hsv/scale) 켜서 재학습한 최신 모델.
+        # 구모델(2026_07_01_03, aug=0)은 640 추론에서 괴물박스 + 변압기 저신뢰도 문제가 있었으나 해결됨.
+        # 640/1280 추론 모두 괴물박스 0, 변압기 conf 0.89+ 로 Roboflow 수준.
+        yolo_model = YOLO(r"C:\Users\dptjd\Downloads\PowerLens\backend_api\models\2026_07_30_aug.pt")
         print(" ✅ AI 모델(YOLO) 로딩 완료!")
     except Exception as e:
         print(f" ❌ 모델 로딩 실패: {e}")
