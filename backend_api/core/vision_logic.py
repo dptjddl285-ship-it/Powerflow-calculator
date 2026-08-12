@@ -4,6 +4,7 @@ import numpy as np
 import math
 from collections import deque
 from cv_bus_refined_experiment import detect_cv_buses
+from cv_load_experiment import SCALE as LOAD_SCALE, detect_cv_loads
 
 # ==========================================
 # 1. Topology 보조 함수들 (기존 코드와 100% 동일)
@@ -278,6 +279,32 @@ def analyze_circuit_image(image_bytes, model):
             "class": "bus",
             "bbox": [x_center, y_center, w, h],
             "confidence": float(bus["confidence"]),
+        })
+        x1 = max(0, int(x_center - w / 2))
+        y1 = max(0, int(y_center - h / 2))
+        x2 = min(w_img - 1, int(x_center + w / 2))
+        y2 = min(h_img - 1, int(y_center + h / 2))
+        components[comp_id] = (x1, y1, x2, y2)
+
+    # Loads are simple filled-arrow symbols, so CV is more stable than the
+    # current small YOLO dataset.  `detect_cv_loads` additionally verifies
+    # the arrow's lead against a CV bus; transformers remain intentionally
+    # excluded until their dedicated detector is validated.
+    cv_loads, _, _ = detect_cv_loads(img)
+    for load in cv_loads:
+        x_center = float((load.x + load.w / 2) / LOAD_SCALE)
+        y_center = float((load.y + load.h / 2) / LOAD_SCALE)
+        w = float(load.w / LOAD_SCALE)
+        h = float(load.h / LOAD_SCALE)
+        # Shape score is already gated by the CV detector.  Expose a bounded
+        # confidence in the same schema used by YOLO nodes.
+        confidence = min(0.94, max(0.75, float(load.triangle_score) + 0.45))
+        comp_id = f"load_{len(predictions)}"
+        predictions.append({
+            "id": comp_id,
+            "class": "load",
+            "bbox": [x_center, y_center, w, h],
+            "confidence": confidence,
         })
         x1 = max(0, int(x_center - w / 2))
         y1 = max(0, int(y_center - h / 2))

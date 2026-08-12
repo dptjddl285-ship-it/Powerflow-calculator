@@ -9,6 +9,7 @@ cv_bus_refined_comparison/
 cv_bus_topology_recovery_comparison/
 cv_generator_hybrid_comparison/
 hybrid_api_verification/
+cv_load_comparison/
 괴물박스_비교결과/
 
 # 학습용 원본 이미지(라벨은 Roboflow에 있음)

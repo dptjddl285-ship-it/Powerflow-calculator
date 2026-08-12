@@ -557,6 +557,14 @@ def recover_locally_connected_buses(
         bar.perpendicular_branches = _perpendicular_branch_count(
             network, bar, thin_line_width, endpoint_exclusion_ratio
         )
+        short_lead_branches = 0
+        if bar.profile_score >= 0.90:
+            short_lead_branches = _perpendicular_branch_count(
+                network,
+                bar,
+                max(2, int(round(thin_line_width * 0.5))),
+                endpoint_exclusion_ratio,
+            )
         bar.bent_endpoints = max(
             _bent_endpoint_count(network, bar, thin_line_width),
             _immediate_endpoint_turn_count(network, bar, thin_line_width),
@@ -567,7 +575,18 @@ def recover_locally_connected_buses(
         # Most recovered buses have two or more true local branches.  A short,
         # clearly thick bar with two separate path components also covers a
         # bus connected very close to device/arrow artwork (e.g. bus 7).
-        if bar.perpendicular_branches >= 2 or bar.traced_components >= 2:
+        strong_single_branch = (
+            bar.profile_score >= 0.90 and bar.perpendicular_branches >= 1
+        )
+        strong_short_leads = (
+            bar.profile_score >= 0.90 and short_lead_branches >= 2
+        )
+        if (
+            bar.perpendicular_branches >= 2
+            or bar.traced_components >= 2
+            or strong_single_branch
+            or strong_short_leads
+        ):
             recovered.append(bar)
     return recovered
 
