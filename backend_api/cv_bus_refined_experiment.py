@@ -225,7 +225,29 @@ def skeletonize(binary: np.ndarray) -> np.ndarray:
     return skeleton
 
 
-def pixel_path_connected_buses(binary: np.ndarray, buses: list[Bar]) -> list[Bar]:
+def _network_without_candidate(skeleton: np.ndarray, bar: Bar) -> np.ndarray:
+    """Return the skeleton with only the candidate under examination removed."""
+    network = skeleton.copy()
+    cv2.rectangle(network, (bar.x, bar.y), (bar.x + bar.w, bar.y + bar.h), 0, -1)
+    return network
+
+
+def _pixel_path_component_count(network: np.ndarray, bar: Bar) -> int:
+    """Count real line components touching the one-pixel ring around a bar."""
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(network, connectivity=8)
+    local_mask = np.zeros_like(network)
+    cv2.rectangle(local_mask, (bar.x, bar.y), (bar.x + bar.w, bar.y + bar.h), 255, -1)
+    ring = cv2.dilate(local_mask, np.ones((3, 3), np.uint8))
+    ring[local_mask > 0] = 0
+    component_ids = np.unique(labels[(ring > 0) & (network > 0)])
+    min_path_pixels = 24
+    return sum(
+        component_id != 0 and stats[component_id, cv2.CC_STAT_AREA] >= min_path_pixels
+        for component_id in component_ids
+    )
+
+
+def _pixel_path_connected_buses_global(binary: np.ndarray, buses: list[Bar]) -> list[Bar]:
     """후보 경계에서 출발한 실제 픽셀 경로가 선로망까지 이어지는지 검사한다.
 
     모든 후보 막대를 임시로 지운 뒤 선로를 skeleton으로 만든다. 이후 각 막대의
@@ -255,6 +277,39 @@ def pixel_path_connected_buses(binary: np.ndarray, buses: list[Bar]) -> list[Bar
         if bar.traced_components:
             connected.append(bar)
     return connected
+
+
+def _pixel_path_connected_buses_local(
+    binary: np.ndarray,
+    buses: list[Bar],
+    thin_line_width: int,
+) -> list[Bar]:
+    """Keep candidates with local path or branch evidence.
+
+    Each candidate is examined against the original skeleton with only itself
+    removed.  Removing every candidate at once breaks valid connections where
+    a nearby bus/line was also proposed as a candidate.
+    """
+    skeleton = skeletonize(binary)
+    connected: list[Bar] = []
+    for bar in buses:
+        network = _network_without_candidate(skeleton, bar)
+        bar.traced_components = _pixel_path_component_count(network, bar)
+        local_branches = _perpendicular_branch_count(
+            network, bar, thin_line_width, endpoint_exclusion_ratio=0.05
+        )
+        if bar.traced_components or local_branches:
+            connected.append(bar)
+    return connected
+
+
+def pixel_path_connected_buses(
+    binary: np.ndarray,
+    buses: list[Bar],
+    thin_line_width: int | None = None,
+) -> list[Bar]:
+    """Use the conservative global-mask path check for normal candidates."""
+    return _pixel_path_connected_buses_global(binary, buses)
 
 
 def _count_runs(values: np.ndarray) -> int:
@@ -377,6 +432,51 @@ def _bent_endpoint_count(network: np.ndarray, bar: Bar, thin_line_width: int) ->
     return count
 
 
+def _immediate_endpoint_turn_count(network: np.ndarray, bar: Bar, thin_line_width: int) -> int:
+    """Count 90-degree turns attached directly to either end of a candidate.
+
+    The previous bend check removed every candidate first.  When a routed line
+    was also found as another candidate, that erased its next segment and hid
+    the bend.  Here only the candidate being examined is removed, so the
+    actual line path at its endpoint remains visible.
+    """
+    h_img, w_img = network.shape
+    support_length = max(16, thin_line_width * 7)
+    cross = max(12, thin_line_width * 5)
+    horizontal_support = cv2.morphologyEx(
+        network,
+        cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (support_length, 1)),
+    )
+    vertical_support = cv2.morphologyEx(
+        network,
+        cv2.MORPH_OPEN,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (1, support_length)),
+    )
+
+    turns = 0
+    if bar.orientation == "horizontal":
+        center_y = bar.y + bar.h // 2
+        for edge_x in (bar.x, bar.x + bar.w):
+            x1, x2 = max(0, edge_x - 2), min(w_img, edge_x + 3)
+            above = np.any(vertical_support[max(0, center_y - cross):max(0, bar.y), x1:x2])
+            below = np.any(
+                vertical_support[min(h_img, bar.y + bar.h):min(h_img, center_y + cross), x1:x2]
+            )
+            turns += int(above or below)
+        return turns
+
+    center_x = bar.x + bar.w // 2
+    for edge_y in (bar.y, bar.y + bar.h):
+        y1, y2 = max(0, edge_y - 2), min(h_img, edge_y + 3)
+        left = np.any(horizontal_support[y1:y2, max(0, center_x - cross):max(0, bar.x)])
+        right = np.any(
+            horizontal_support[y1:y2, min(w_img, bar.x + bar.w):min(w_img, center_x + cross)]
+        )
+        turns += int(left or right)
+    return turns
+
+
 def topology_refined_buses(
     binary: np.ndarray,
     buses: list[Bar],
@@ -385,12 +485,17 @@ def topology_refined_buses(
 ) -> list[Bar]:
     """분기 접속 + 꺾임 조건으로 bus 후보를 한 번 더 걸러낸다."""
     network = _network_after_removing_bars(binary, buses)
+    skeleton = skeletonize(binary)
     kept: list[Bar] = []
     for bar in buses:
         bar.perpendicular_branches = _perpendicular_branch_count(
             network, bar, thin_line_width, endpoint_exclusion_ratio
         )
-        bar.bent_endpoints = _bent_endpoint_count(network, bar, thin_line_width)
+        local_network = _network_without_candidate(skeleton, bar)
+        bar.bent_endpoints = max(
+            _bent_endpoint_count(network, bar, thin_line_width),
+            _immediate_endpoint_turn_count(local_network, bar, thin_line_width),
+        )
         # A retained bus must have a real line entering or leaving it.  This
         # excludes detached digits/text and plain line fragments.
         if bar.perpendicular_branches < 1:
@@ -417,6 +522,56 @@ def topology_refined_buses(
     return kept
 
 
+def recover_locally_connected_buses(
+    binary: np.ndarray,
+    buses: list[Bar],
+    base_buses: list[Bar],
+    thin_line_width: int,
+    endpoint_exclusion_ratio: float = 0.05,
+) -> list[Bar]:
+    """Recover only high-confidence bars hidden by the global path mask.
+
+    This is deliberately stricter than the normal filter.  It is used only
+    after the conservative global-mask pipeline has rejected a candidate, so
+    ordinary routed line fragments cannot be promoted merely because they
+    touch a branch elsewhere in the diagram.
+    """
+    base_ids = {id(bar) for bar in base_buses}
+    skeleton = skeletonize(binary)
+    recovered: list[Bar] = []
+    for bar in buses:
+        if id(bar) in base_ids or bar.orientation != "horizontal":
+            continue
+
+        long_side, short_side = max(bar.w, bar.h), min(bar.w, bar.h)
+        is_substantial_bus_bar = (
+            long_side >= thin_line_width * 25
+            and short_side >= thin_line_width * 3.0
+            and bar.profile_score >= 0.85
+        )
+        if not is_substantial_bus_bar:
+            continue
+
+        network = _network_without_candidate(skeleton, bar)
+        bar.traced_components = _pixel_path_component_count(network, bar)
+        bar.perpendicular_branches = _perpendicular_branch_count(
+            network, bar, thin_line_width, endpoint_exclusion_ratio
+        )
+        bar.bent_endpoints = max(
+            _bent_endpoint_count(network, bar, thin_line_width),
+            _immediate_endpoint_turn_count(network, bar, thin_line_width),
+        )
+        if bar.bent_endpoints:
+            continue
+
+        # Most recovered buses have two or more true local branches.  A short,
+        # clearly thick bar with two separate path components also covers a
+        # bus connected very close to device/arrow artwork (e.g. bus 7).
+        if bar.perpendicular_branches >= 2 or bar.traced_components >= 2:
+            recovered.append(bar)
+    return recovered
+
+
 def draw(original: np.ndarray, bars: list[Bar], rejected: list[Bar], title: str) -> np.ndarray:
     canvas = original.copy()
     for bar in rejected:
@@ -440,6 +595,48 @@ def save(path: Path, image: np.ndarray) -> None:
     encoded.tofile(str(path))
 
 
+def detect_cv_buses(image: np.ndarray) -> list[dict[str, float | str]]:
+    """Detect bus bars for the API without writing any comparison files.
+
+    The returned coordinates use the original image scale and the same
+    ``[x_center, y_center, width, height]`` format as Ultralytics boxes.
+    """
+    binary = binarize_and_repair(image)
+    thin_width = estimate_thin_line_width(binary)
+    min_thickness = max(5, int(round(thin_width * 1.6)))
+    horizontal_mask, vertical_mask = directional_bar_masks(binary, min_thickness)
+    horizontal, recovery_h, _ = collect_bars(
+        horizontal_mask, binary, "horizontal", thin_width
+    )
+    vertical, recovery_v, _ = collect_bars(
+        vertical_mask, binary, "vertical", thin_width
+    )
+    clear_buses = deduplicate(horizontal + vertical)
+    recovery_buses = deduplicate(recovery_h + recovery_v)
+    candidates = deduplicate(clear_buses + recovery_buses)
+    traced_buses = pixel_path_connected_buses(binary, candidates, thin_width)
+    base_buses = topology_refined_buses(
+        binary, traced_buses, thin_width, endpoint_exclusion_ratio=0.05
+    )
+    locally_recovered = recover_locally_connected_buses(
+        binary, candidates, base_buses, thin_width, endpoint_exclusion_ratio=0.05
+    )
+    local_ids = {id(bar) for bar in locally_recovered}
+    final_buses = deduplicate(base_buses + locally_recovered)
+    detected: list[dict[str, float | str]] = []
+    for bar in final_buses:
+        detected.append({
+            "x": (bar.x + bar.w / 2) / SCALE,
+            "y": (bar.y + bar.h / 2) / SCALE,
+            "w": bar.w / SCALE,
+            "h": bar.h / SCALE,
+            "orientation": bar.orientation,
+            # The local recovery rule is intentionally slightly less certain.
+            "confidence": 0.90 if id(bar) in local_ids else 0.95,
+        })
+    return detected
+
+
 def main() -> None:
     OUTPUT.mkdir(exist_ok=True)
     for source in INPUTS:
@@ -454,15 +651,20 @@ def main() -> None:
         recovery_buses = deduplicate(recovery_h + recovery_v)
         buses = deduplicate(clear_buses + recovery_buses)
         rejected = rejected_h + rejected_v
-        baseline_traced_buses = pixel_path_connected_buses(binary, clear_buses)
+        baseline_traced_buses = pixel_path_connected_buses(binary, clear_buses, thin_width)
         baseline_topology_buses = topology_refined_buses(
             binary, baseline_traced_buses, thin_width, endpoint_exclusion_ratio=0.05
         )
         connected_buses = [bar for bar in buses if has_network_connection(binary, bar, thin_width)]
-        traced_buses = pixel_path_connected_buses(binary, buses)
-        topology_buses = topology_refined_buses(
+        traced_buses = pixel_path_connected_buses(binary, buses, thin_width)
+        base_topology_buses = topology_refined_buses(
             binary, traced_buses, thin_width, endpoint_exclusion_ratio=0.05
         )
+        locally_recovered_buses = recover_locally_connected_buses(
+            binary, buses, base_topology_buses, thin_width, endpoint_exclusion_ratio=0.05
+        )
+        topology_buses = deduplicate(base_topology_buses + locally_recovered_buses)
+        metrics_buses = deduplicate(traced_buses + locally_recovered_buses)
 
         folder = OUTPUT / source.stem
         folder.mkdir(exist_ok=True)
@@ -510,7 +712,7 @@ def main() -> None:
             )
             writer.writeheader()
             kept_ids = {id(bar) for bar in topology_buses}
-            for index, bar in enumerate(traced_buses, start=1):
+            for index, bar in enumerate(metrics_buses, start=1):
                 writer.writerow({
                     "candidate": f"B{index}", "orientation": bar.orientation,
                     "x": round(bar.x / SCALE, 1), "y": round(bar.y / SCALE, 1),
@@ -530,6 +732,7 @@ def main() -> None:
             f"topology_recovery_candidates={len(recovery_buses)}\n"
             f"network_connected_candidates={len(connected_buses)}\n"
             f"pixel_path_connected_candidates={len(traced_buses)}\n"
+            f"locally_recovered_candidates={len(locally_recovered_buses)}\n"
             f"topology_refined_candidates={len(topology_buses)}\n"
             f"rejected_candidates={len(rejected)}\n",
             encoding="utf-8",

@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import math
 from collections import deque
+from cv_bus_refined_experiment import detect_cv_buses
 
 # ==========================================
 # 1. Topology 보조 함수들 (기존 코드와 100% 동일)
@@ -213,10 +214,11 @@ def analyze_circuit_image(image_bytes, model):
     h_img, w_img = img.shape[:2]
 
     # 2. YOLO 추론 (main.py 역할)
-    # 2026_07_30_aug.pt는 imgsz=640으로 학습됨. 추론도 640으로 맞춰야 변압기까지 잡힘.
-    # (주의: 1280으로 추론하면 학습/추론 해상도 불일치로 변압기를 놓침.
-    #  구모델 2026_07_01_03은 640에서 괴물박스가 나 1280을 썼으나, 신모델은 640이 깔끔.)
-    results = model.predict(img, conf=0.3, iou=0.4, imgsz=640, line_width=1)
+    # 2026_07_30_coslr.pt(cos_lr 재학습)는 imgsz=960에서 최적.
+    # - 640: 24bus 변압기는 잡히나 IEEE24bus 변압기 0개 + 괴물박스 다수
+    # - 960: 24bus/IEEE24bus/1234 변압기 모두 잡히고 괴물박스 최소(IEEE24bus 일부는 아래 필터로 제거)
+    # - 1280: 1234 변압기 누락. 따라서 960이 만능 해상도.
+    results = model.predict(img, conf=0.3, iou=0.4, imgsz=960, line_width=1)
     
     predictions = []
     components = {}
@@ -233,6 +235,12 @@ def analyze_circuit_image(image_bytes, model):
             # 1) 박스가 이미지 대비 너무 크면(면적비 > 0.12) 괴물박스로 간주하여 제거
             # 2) bus(모선)는 얇은 선이어야 함. w·h 비율이 둘 다 0.08 초과면
             #    사각형 덩어리(=가짜 bus)이므로 제거. 진짜 모선은 한쪽이 ~0.01.
+            # This phase uses YOLO exclusively for generators.  Buses come
+            # from OpenCV below; load/transformer recognition will be added as
+            # separate CV modules after their own validation.
+            if name.lower() != 'generator':
+                continue
+
             w_ratio = w / w_img
             h_ratio = h / h_img
             area_ratio = w_ratio * h_ratio
@@ -256,6 +264,27 @@ def analyze_circuit_image(image_bytes, model):
             components[comp_id] = (x1, y1, x2, y2)
 
     # 3. Topology 선로 인식 (topology_analyzer.py 역할)
+    # OpenCV owns bus detection; all other symbols above remain YOLO results.
+    # Keep the YOLO-compatible bbox schema so the editor/topology stages need
+    # no detector-specific branching.
+    for bus in detect_cv_buses(img):
+        x_center = float(bus["x"])
+        y_center = float(bus["y"])
+        w = float(bus["w"])
+        h = float(bus["h"])
+        comp_id = f"bus_{len(predictions)}"
+        predictions.append({
+            "id": comp_id,
+            "class": "bus",
+            "bbox": [x_center, y_center, w, h],
+            "confidence": float(bus["confidence"]),
+        })
+        x1 = max(0, int(x_center - w / 2))
+        y1 = max(0, int(y_center - h / 2))
+        x2 = min(w_img - 1, int(x_center + w / 2))
+        y2 = min(h_img - 1, int(y_center + h / 2))
+        components[comp_id] = (x1, y1, x2, y2)
+
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     _, bin_global = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
     bin_adapt = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 15, 10)

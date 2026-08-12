@@ -45,9 +45,9 @@ def main() -> None:
         binary, max(5, round(thin * 1.6))
     )
     raw_mask = cv2.bitwise_or(horizontal_mask, vertical_mask)
-    h_bars, _ = cvbus.collect_bars(horizontal_mask, binary, "horizontal", thin)
-    v_bars, _ = cvbus.collect_bars(vertical_mask, binary, "vertical", thin)
-    traced = cvbus.pixel_path_connected_buses(binary, cvbus.deduplicate(h_bars + v_bars))
+    h_bars, _, _ = cvbus.collect_bars(horizontal_mask, binary, "horizontal", thin)
+    v_bars, _, _ = cvbus.collect_bars(vertical_mask, binary, "vertical", thin)
+    traced = cvbus.pixel_path_connected_buses(binary, cvbus.deduplicate(h_bars + v_bars), thin)
     final = cvbus.topology_refined_buses(binary, traced, thin, endpoint_exclusion_ratio=0.05)
 
     raw_bgr = cv2.cvtColor(
