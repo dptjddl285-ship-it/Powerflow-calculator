@@ -208,6 +208,72 @@ def walk_skeleton_endpoint_v14(skel_img, start_pt, comp_id, endpoints, endpoint_
 # ==========================================
 # 2. 통합 핵심 로직 (YOLO + 선로 추적)
 # ==========================================
+def _looks_like_transformer_pair(
+    image: np.ndarray,
+    x_center: float,
+    y_center: float,
+    width: float,
+    height: float,
+) -> bool:
+    """Reject an elongated YOLO generator box containing two transformer coils."""
+    short_side = min(width, height)
+    if short_side <= 0 or max(width, height) / short_side < 1.28:
+        return False
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    padding = max(10, int(round(short_side * 0.35)))
+    x1 = max(0, int(round(x_center - width / 2)) - padding)
+    y1 = max(0, int(round(y_center - height / 2)) - padding)
+    x2 = min(image.shape[1], int(round(x_center + width / 2)) + padding)
+    y2 = min(image.shape[0], int(round(y_center + height / 2)) + padding)
+    roi = gray[y1:y2, x1:x2]
+    if roi.size == 0:
+        return False
+
+    expected_radius = short_side / 2
+    blurred = cv2.GaussianBlur(roi, (5, 5), 1.2)
+    circles = cv2.HoughCircles(
+        blurred,
+        cv2.HOUGH_GRADIENT,
+        dp=1.0,
+        minDist=max(8, int(round(expected_radius * 0.8))),
+        param1=80,
+        param2=13,
+        minRadius=max(8, int(round(expected_radius * 0.45))),
+        maxRadius=max(12, int(round(expected_radius * 1.4))),
+    )
+    if circles is None:
+        return False
+
+    detected = []
+    for local_x, local_y, radius in circles[0]:
+        global_x, global_y = local_x + x1, local_y + y1
+        if (
+            abs(global_x - x_center) <= width * 0.75
+            and abs(global_y - y_center) <= height * 0.75
+        ):
+            detected.append((float(global_x), float(global_y), float(radius)))
+
+    for index, first in enumerate(detected):
+        for second in detected[index + 1:]:
+            center_distance = float(np.hypot(
+                first[0] - second[0], first[1] - second[1]
+            ))
+            radius_ratio = min(first[2], second[2]) / max(first[2], second[2])
+            if center_distance < max(8.0, short_side * 0.25):
+                continue
+            if radius_ratio < 0.78:
+                continue
+            dx = abs(first[0] - second[0])
+            dy = abs(first[1] - second[1])
+            aligned_with_long_axis = (
+                dy >= dx * 1.5 if height >= width else dx >= dy * 1.5
+            )
+            if aligned_with_long_axis:
+                return True
+    return False
+
+
 def analyze_circuit_image(image_bytes, model):
     # 1. 바이트를 OpenCV 이미지로 변환 (파일 저장 불필요)
     nparr = np.frombuffer(image_bytes, np.uint8)
@@ -240,6 +306,9 @@ def analyze_circuit_image(image_bytes, model):
             # from OpenCV below; load/transformer recognition will be added as
             # separate CV modules after their own validation.
             if name.lower() != 'generator':
+                continue
+
+            if _looks_like_transformer_pair(img, x_center, y_center, w, h):
                 continue
 
             w_ratio = w / w_img
