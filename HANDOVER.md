@@ -1,6 +1,6 @@
 # 📋 Powerflow Simulator - 개발 및 운영 인수인계서 (Handover Guide)
 
-> **문서 목적**: 다른 컴퓨터에서 본 프로젝트(`my-powersimulator`)를 새로 클론(Clone)하여 즉시 개발, 테스트, 시연을 진행할 수 있도록 환경 구축부터 서버 및 앱 구동까지의 전 과정을 상세히 기술합니다.
+> **문서 목적**: 다른 컴퓨터에서 본 프로젝트(`my-powersimulator`)를 새로 클론(Clone)하여 즉시 개발, 테스트, 시연을 진행할 수 있도록 환경 구축부터 서버 및 앱 구동, 화면 조작 매뉴얼까지의 전 과정을 상세히 기술합니다.
 
 ---
 
@@ -103,10 +103,6 @@ uvicorn backend_api.server.main_server:app --host 0.0.0.0 --port 8000 --reload
 
 - **Swagger API 대화형 문서**: 브라우저에서 `http://localhost:8000/docs` 접속
 - **서버 헬스체크**: `http://localhost:8000/api/health`
-- **주요 엔드포인트**:
-  - `POST /api/predict`: 도면 이미지 업로드 -> 심볼 및 토폴로지 추출
-  - `POST /api/powerflow/solve`: 회로망 JSON 데이터 기반 조류계산 수행
-  - `GET /api/demo/ieee30`: IEEE 30-Bus 데모 결과 및 시각화 이미지(Base64) 조회
 
 ---
 
@@ -134,7 +130,32 @@ python -m backend_api.validation_tests.auto_tune_evaluator --split train --modul
 
 ---
 
-## 4. 디렉터리 및 주요 파일 안내
+## 4. 화면 및 기능별 조작 매뉴얼 (Screen Walkthrough)
+
+### 4.1 메인 회로 캔버스 조작법
+- **기기 배치**: 상단 툴바에서 `모선`, `발전기`, `부하`, `변압기` 칩을 클릭한 후 캔버스 위를 클릭하면 해당 위치에 심볼이 자동 스냅되어 생성됩니다.
+- **선로 연결**: 툴바의 `선로연결` 선택 후, 시작 모선 클릭 -> 끝 모선 클릭 시 선로가 자동 연결됩니다.
+- **캔버스 이동/확대**: `선택/이동` 모드에서 마우스 드래그(팬) 및 휠 스크롤(줌)으로 자유롭게 탐색할 수 있습니다.
+
+### 4.2 부품별 제원 설정 창 (Properties Dialog)
+- 캔버스 위에 배치된 기기를 클릭하면 **제원 설정 팝업 다이얼로그**가 열립니다.
+  - **모선(Bus)**: 버스 번호, 기준 전압($V_{pu}$), 초기 위상각($\theta_{deg}$) 입력
+  - **발전기(Generator)**: 발전 유효전력($P_{pu}$), 지정 전압($V_{pu}$), **슬랙 모선(Slack Bus) 토글 스위치**
+  - **부하(Load)**: 유효 부하($P_{pu}$), 무효 부하($Q_{pu}$)
+  - **선로(Line)**: 저항($R_{pu}$), 리액턴스($X_{pu}$)
+- `저장` 버튼을 누르면 입력값이 즉시 반영되며 화면 상의 정보 라벨이 갱신됩니다.
+
+### 4.3 도면 사진 분석 창 (Image Upload Dialog)
+- 툴바의 보라색 **[도면 사진 분석]** 버튼 클릭
+- 단선도 이미지 파일(.jpg, .png)을 선택하면 FastAPI 서버의 AI 엔진으로 전송되어 기기와 선로를 자동 추출합니다.
+
+### 4.4 Swagger 웹 대시보드 창 (`/docs`)
+- 브라우저에서 `http://localhost:8000/docs` 접속
+- `/run_simulation`, `/ieee_cases`, `/render_ieee_image/case14` 등의 API를 [Try it out] 버튼으로 직접 호출하여 반환 데이터 및 렌더링 이미지를 실시간으로 검증할 수 있습니다.
+
+---
+
+## 5. 디렉터리 및 주요 파일 안내
 
 ```
 my-powersimulator/
@@ -173,7 +194,7 @@ my-powersimulator/
 
 ---
 
-## 5. 핵심 모델 가중치(Weights) 체크포인트 위치
+## 6. 핵심 모델 가중치(Weights) 체크포인트 위치
 
 1. **메인 심볼 인식 가중치 (Primary Model)**:
    - 경로: `backend_api/icon_recognition/models/best.pt`
@@ -184,7 +205,7 @@ my-powersimulator/
 
 ---
 
-## 6. 문제 해결 (Troubleshooting & FAQ)
+## 7. 문제 해결 (Troubleshooting & FAQ)
 
 ### Q1. `ModuleNotFoundError: No module named 'backend_api'` 발생 시
 - **원인**: Python 실행 시 루트 디렉터리가 `PYTHONPATH`에 잡히지 않은 경우.
