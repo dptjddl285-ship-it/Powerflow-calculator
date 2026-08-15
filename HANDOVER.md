@@ -223,3 +223,106 @@ my-powersimulator/
 
 ### Q3. Flutter 실행 시 백엔드 API 주소 설정
 - 로컬 에뮬레이터 또는 다른 기기에서 접속 시 `frontend_app` 내 API 설정에서 `http://10.0.2.2:8000` (안드로이드 에뮬레이터) 또는 PC의 실제 로컬 IP(`http://192.168.x.x:8000`)로 설정해야 합니다.
+
+---
+
+## 8. IEEE 표준 계통 및 공공데이터 / 오픈 API 연동 가이드
+
+본 프로젝트는 단선도 AI 인식뿐만 아니라, 글로벌 전력계통 표준 벤치마크 케이스(IEEE Systems) 및 오픈 공공데이터와 완벽히 호환되도록 설계되어 있습니다.
+
+### 8.1 주요 오픈 데이터 소스 및 아카이브
+
+| 데이터 소스 | 제공 형식 | 지원 케이스 | 특징 및 활용 방안 |
+| :--- | :--- | :--- | :--- |
+| **pandapower.networks** | Python 내장 API | IEEE 14, 30, 57, 118, 300 Bus | 설치 즉시 `pn.case14()` 등으로 한 줄 로드 가능. 본 프로젝트 주력 연동 엔진 |
+| **PGLib-OPF (IEEE PES)** | GitHub (.m, JSON) | IEEE 표준 ~ 10,000+ Bus | IEEE 공식 최신 최적조류(OPF) 벤치마크. 대규모 계통 확장 시 활용 (`github.com/power-grid-lib/pglib-opf`) |
+| **UW Test Case Archive** | Raw CDF / 텍스트 | IEEE 14, 30, 57, 118, 300 | 워싱턴 대학교 원조 IEEE 전력망 데이터 아카이브 |
+| **Texas A&M ACTIVSg** | MATPOWER / PSS/E | 200, 500, 2000, 10000 Bus | 실제 전력망 보안 규제를 우회하여 실제 지리(GIS) 특성을 완벽 재현한 공개 합성 전력망 |
+| **U.S. EIA Open API** | RESTful JSON API | 미국 전역 실시간 수급/발전량 | 실시간 계통 한계 가격 및 발전원별 시계열 데이터 연동 무료 API |
+| **한전 전력빅데이터센터** | OpenAPI (data.go.kr) | 국내 지역별 전력 사용량 통계 | 공공데이터포털 연계 전력수급 및 부하 통계 데이터 (토폴로지는 보안상 비공개) |
+
+---
+
+### 8.2 파이썬 코드로 즉시 호출 및 시뮬레이션 예제
+
+```python
+import pandapower as pp
+import pandapower.networks as pn
+
+# 1. IEEE 표준 14-Bus 계통 로드
+net = pn.case14()
+
+# 2. AC Newton-Raphson 조류계산 실행
+pp.runpp(net)
+
+# 3. 주요 결과 조회
+print("=== 모선 전압 프로파일 (p.u.) ===")
+print(net.res_bus[['vm_pu', 'va_degree']])
+
+print("\n=== 선로 조류 및 부하율 (%) ===")
+print(net.res_line[['p_from_mw', 'q_from_mvar', 'loading_percent']])
+```
+
+---
+
+### 8.3 합성 단선도(Synthetic SLD) 생성 및 AI 학습 데이터 자동 증강
+
+IEEE 표준 데이터셋의 토폴로지를 기반으로 단선도 이미지를 자동 렌더링하여, Vision AI 모델(`best.pt`) 학습용 합성 데이터(Synthetic Dataset)를 무한정 생성할 수 있습니다.
+
+```python
+import pandapower.networks as pn
+import pandapower.plotting as pplot
+import matplotlib.pyplot as plt
+
+# IEEE 30-Bus 로드 후 단선도 다이어그램 자동 렌더링
+net = pn.case30()
+ax = pplot.simple_plot(net, show_plot=False)
+plt.title("IEEE 30-Bus Synthetic Single Line Diagram")
+plt.savefig("ieee30_synthetic_sld.png", dpi=300, bbox_inches='tight')
+print("단선도 이미지 생성 완료: ieee30_synthetic_sld.png")
+```
+
+---
+
+### 8.4 FastAPI 서버를 통한 IEEE 케이스 웹 API 테스트
+
+FastAPI 백엔드 서버(`main_server.py`)가 구동 중일 때, 브라우저나 클라이언트에서 표준 케이스를 즉시 요청할 수 있습니다:
+- **지원 케이스 목록 조회**: `GET http://localhost:8000/api/ieee_cases`
+- **특정 케이스 조류계산 실행**: `POST http://localhost:8000/api/ieee_cases/case30`
+- **단선도 시각화 이미지 렌더링**: `GET http://localhost:8000/api/render_ieee_image/case14`
+
+---
+
+## 9. 표준 심볼 라이브러리 및 합성 데이터 자동 생성 엔진 (Synthetic Data Engine)
+
+### 9.1 배경 및 목적
+실제 도면 인식에서 발생하는 숫자 오탐(0, 6, 9 발전기 오탐, 1, 4, 7 부하 오탐) 및 2원형 변압기 인식 한계를 극복하기 위해, **100% 무결점 정답지(JSON / YOLO txt)가 동시에 자동 출력되는 합성 단선도 생성기**를 탑재했습니다.
+
+### 9.2 핵심 구현 파일
+1. **표준 심볼 라이브러리**: [`backend_api/synthetic_circuit_engine/create_canonical_symbol_library.py`](file:///C:/Users/hpo20/orca/workspaces/Powerflow-calculator/antigravity-independent-feedback-loop/backend_api/synthetic_circuit_engine/create_canonical_symbol_library.py)
+   - 모선(수평/수직 실선), 발전기(물결 `~`, 문자 `G`), **종단 역삼각 부하(끝에서 딱 끝나는 형태)**, **2원형 교차 변압기** 등 16종 벡터 렌더링 함수 구현.
+2. **실제 데이터셋 심볼 추출기**: [`backend_api/icon_recognition/extract_all_symbol_icons.py`](file:///C:/Users/hpo20/orca/workspaces/Powerflow-calculator/antigravity-independent-feedback-loop/backend_api/icon_recognition/extract_all_symbol_icons.py)
+   - Train/Test 데이터셋에서 총 1,261개 실제 부품 아이콘 전수 크롭 및 마스터 카탈로그 생성.
+3. **IEEE 표준 계통 복제 생성기**: [`backend_api/synthetic_circuit_engine/generate_authentic_ieee_circuits.py`](file:///C:/Users/hpo20/orca/workspaces/Powerflow-calculator/antigravity-independent-feedback-loop/backend_api/synthetic_circuit_engine/generate_authentic_ieee_circuits.py)
+   - `test_image2.jpg` 등 실제 데이터셋 도면 토폴로지(IEEE 5-Bus, 14-Bus 등)와 1:1 완벽 일치하는 다이어그램 및 정답지 동시 출력.
+
+### 9.3 실행 및 산출물 생성 명령어
+
+```powershell
+# 1. 16종 표준 심볼 쇼케이스 이미지 생성
+python backend_api/synthetic_circuit_engine/create_canonical_symbol_library.py
+
+# 2. 실제 데이터셋 1,261개 심볼 전수 추출 및 마스터 카탈로그 생성
+python backend_api/icon_recognition/extract_all_symbol_icons.py
+
+# 3. IEEE 표준 5-Bus 실도면 복제 생성 및 정답지 출력
+python backend_api/synthetic_circuit_engine/generate_authentic_ieee_circuits.py
+```
+
+### 9.4 3대 게이트 검증 스위트 (Gate 1=100%, Gate 2>=98%, Gate 3 Benchmark)
+
+```powershell
+# Gate 1(Native Train 100%), Gate 2(Matrix 강건성), Gate 3(New Pictures) 전수 자동 채점
+python backend_api/validation_tests/run_independent_gates.py --gate all
+```
+

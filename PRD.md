@@ -2,7 +2,7 @@
 
 > **프로젝트 명**: Powerflow Simulator (VisionFlow)  
 > **부제**: Edge AI 기반 전력계통 단선도(SLD) 자동 인식 및 조류계산(Power Flow) 통합 시뮬레이션 시스템  
-> **버전**: v1.1.0  
+> **버전**: v1.2.0  
 > **작성일자**: 2026-08-15  
 
 ---
@@ -71,10 +71,12 @@
   3. **Port-aware Connection**: 각 기기별 접속 단자(Port) 위치를 계산하여 가장 가까운 유효 전선 세그먼트와 연결.
   4. **인접 행렬 및 그래프 생성**: Bus-to-Bus, Bus-to-Gen, Bus-to-Load 연결망 JSON 데이터 구조화.
 
-### 3.3 [Simulation] 전력 조류계산 엔진 (PandaPower Simulation)
-- **요구사항**: 복원된 회로망 구조와 전기적 파라미터를 기반으로 물리적으로 엄밀한 조류계산 수행.
+### 3.3 [Simulation] 전력 조류계산 엔진 & IEEE 표준 데이터셋 연동 (PandaPower & Open Datasets)
+- **요구사항**: 복원된 회로망 구조 및 IEEE 표준 벤치마크/공공데이터를 기반으로 물리적으로 엄밀한 조류계산 수행.
 - **주요 기능**:
-  - **표준 계통 지원**: IEEE 14, IEEE 30, IEEE 57 등 벤치마크 계통 원클릭 시뮬레이션.
+  - **표준 벤치마크 계통 지원**: IEEE 14, 30, 57, 118, 300-Bus 등 글로벌 표준 테스트 케이스 원클릭 로드 및 시뮬레이션 (`pandapower.networks`, `PGLib-OPF`, `UW Archive`).
+  - **공공데이터 및 대규모 합성망(Synthetic Grid) 연계**: Texas A&M ACTIVSg (200~2000 Bus), 미국 EIA API 실시간 수급 데이터 및 한국전력 통계 연동 인터페이스 지원.
+  - **단선도 자동 렌더링(Synthetic SLD) & AI 데이터 증강**: IEEE 표준 케이스의 토폴로지를 기반으로 단선도 이미지를 자동 렌더링하여 비전 AI 모델 학습용 데이터셋으로 지속 확장.
   - **사용자 정의 계통 해석**: AI가 인식한 회로 구조에 맞춤형 파라미터(저항 $R$, 리액턴스 $X$, 피상전력 $P/Q$, 기준전압 $V_{base}$) 주입.
   - **수렴 안정성 확보**: 자동 Slack Bus 지정, 초기치 설정, 수렴 실패 시 진단 메시지 반환.
   - **출력 데이터**:
@@ -82,7 +84,22 @@
     - 각 선로의 유효/무효 전력 흐름 ($P_{flow}, Q_{flow}$, MW/MVar) 및 선로 부하율(Loading %).
     - 발전기 유효/무효 출력 및 시스템 총 손실(Losses).
 
-### 3.4 [Frontend] 인터랙티브 캔버스 및 수동 에디터 (Interactive Editor)
+### 3.4 [Data Engine] 표준 IEEE 계통 기반 합성 데이터 생성 및 자동 라벨링 (Synthetic SLD & Auto-GT)
+- **요구사항**: 소수 데이터셋의 과적합(Overfitting)을 극복하고, 새로운 도면에서도 95% 이상의 높은 인식률을 보장하기 위한 무한 데이터 증강 파이프라인.
+- **주요 기능**:
+  - **표준 계통 토폴로지 자동 렌더링**: IEEE 4, 5, 6, 9, 14, 24, 30, 39-Bus 등 글로벌 공인 다이어그램 구조를 프로그래밍 방식으로 100% 벡터 렌더링.
+  - **100% 무결점 정답지(Ground Truth) 동시 출력**:
+    - **JSON 정답지**: 부품별 픽셀 BBox, 모선 연결 관계, 전력량/임피던스 값 자동 구조화.
+    - **YOLO `.txt` 라벨**: 학습 즉시 투입 가능한 정규화 라벨 자동 생성.
+    - **시각적 대조 정답지 (`_gt.png`)**: 원본과 정답 박스가 결합된 검증 이미지 출력.
+  - **표준 심볼 딕셔너리(Symbol Dictionary) 통합**:
+    - `Bus`: 수평/수직 굵은 실선 바, 단자 접속 돌기 바.
+    - `Generator`: 단일 원형 물결(`~`), 원 안 문자(`G`, `M`), 이중 원(Slack).
+    - `Load`: **선로 끝에서 딱 끝나는 종단 역삼각 부하(Terminal Triangle)**, 윤곽선 부하, 4방향 인출 화살표, 파란색 강조 부하.
+    - `Transformer`: **2원형 교차 수직/수평 변압기**, 4권선 코일형(`33`, `3E`) 변압기.
+  - **Domain Randomization**: 다양한 폰트(Serif, Sans-serif), 텍스트 크기, 노이즈를 자동 주입하여 **AI가 숫자(0~99)를 부품으로 오인식하지 않도록 텍스트 레이어 격리 학습**.
+
+### 3.5 [Frontend] 인터랙티브 캔버스 및 수동 에디터 (Interactive Editor)
 - **요구사항**: Flutter CustomPaint 기반의 직관적인 다이어그램 뷰어 및 편집기.
 - **주요 기능**:
   - AI가 인식한 회로도 및 파라미터 오버레이 렌더링.
@@ -126,7 +143,7 @@
 | :--- | :--- | :--- |
 | **Phase 1** | AI 데이터셋 구축 & YOLO 심볼 모델 학습 | Roboflow 데이터셋, `best.pt` 가중치 완성 |
 | **Phase 2** | OpenCV 기반 선로 토폴로지 복원 알고리즘 | `vision_logic_topology_hybrid.py`, 포트 인식 모듈 |
-| **Phase 3** | PandaPower 전력 해석 엔진 통합 | `pandapower_engine.py`, IEEE 14/30 해석 검증 완료 |
-| **Phase 4** | FastAPI 백엔드 엔드포인트 연동 | `main_server.py` API 구축 완료 |
+| **Phase 3** | PandaPower 전력 해석 엔진 & IEEE 벤치마크 통합 | `pandapower_engine.py`, IEEE 14/30/118 Bus 및 합성 SLD 생성 검증 |
+| **Phase 4** | FastAPI 백엔드 엔드포인트 연동 | `main_server.py` API 구축 완료 (IEEE 케이스 로드/렌더링 API 포함) |
 | **Phase 5** | Flutter 프론트엔드 UI & 인터랙티브 캔버스 | `frontend_app` 캔버스 에디터 및 통신 모듈 |
-| **Phase 6** | 종합 테스트 및 시뮬레이션 대시보드 고도화 | 배포 빌드, 인수인계서 및 실증 시연 완료 |
+| **Phase 6** | 종합 테스트, 대규모 계통 확장 및 인수인계 완료 | 배포 빌드, IEEE/공공데이터 가이드, 인수인계서 및 실증 시연 완료 |

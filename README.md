@@ -27,9 +27,10 @@
    - OpenCV 모폴로지 세선화(Skeletonization) 및 선로 연결망 그래프 자동 복원
    - 기기 단자(Port) 기반 연결성 매핑
 
-3. **산업 표준급 전력 조류계산 (pandapower Integration)**
+3. **산업 표준급 전력 조류계산 & 오픈 벤치마크 (pandapower & IEEE Datasets)**
    - AC Power Flow (Newton-Raphson) 알고리즘 탑재
-   - IEEE 14, 30 Bus 표준 계통 및 사용자 정의 계통의 전압/위상각/선로 조류/과부하율 계산
+   - IEEE 14, 30, 57, 118, 300 Bus 표준 벤치마크 계통 지원 및 합성 단선도(Synthetic SLD) 생성
+   - PGLib-OPF, UW Archive, Texas A&M Synthetic Grid, 공공데이터 API 연동 지원
 
 4. **인터랙티브 회로 캔버스 (Interactive Canvas)**
    - Flutter CustomPaint 기반의 그래픽 에디터

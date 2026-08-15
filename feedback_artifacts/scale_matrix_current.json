@@ -1,0 +1,142 @@
+[
+  {
+    "size": [
+      640,
+      640
+    ],
+    "images": 19,
+    "score": 100.0,
+    "totals": {
+      "tp": 416,
+      "fn": 0,
+      "fp": 0
+    },
+    "per_class": {
+      "bus": {
+        "tp": 198
+      },
+      "generator": {
+        "tp": 75
+      },
+      "load": {
+        "tp": 123
+      },
+      "transformer": {
+        "tp": 20
+      }
+    },
+    "failures": []
+  },
+  {
+    "size": [
+      912,
+      900
+    ],
+    "images": 19,
+    "score": 100.0,
+    "totals": {
+      "tp": 416,
+      "fn": 0,
+      "fp": 0
+    },
+    "per_class": {
+      "bus": {
+        "tp": 198
+      },
+      "generator": {
+        "tp": 75
+      },
+      "load": {
+        "tp": 123
+      },
+      "transformer": {
+        "tp": 20
+      }
+    },
+    "failures": []
+  },
+  {
+    "size": [
+      1280,
+      720
+    ],
+    "images": 19,
+    "score": 100.0,
+    "totals": {
+      "tp": 416,
+      "fn": 0,
+      "fp": 0
+    },
+    "per_class": {
+      "bus": {
+        "tp": 198
+      },
+      "generator": {
+        "tp": 75
+      },
+      "load": {
+        "tp": 123
+      },
+      "transformer": {
+        "tp": 20
+      }
+    },
+    "failures": []
+  },
+  {
+    "size": [
+      1600,
+      900
+    ],
+    "images": 19,
+    "score": 100.0,
+    "totals": {
+      "tp": 416,
+      "fn": 0,
+      "fp": 0
+    },
+    "per_class": {
+      "bus": {
+        "tp": 198
+      },
+      "generator": {
+        "tp": 75
+      },
+      "load": {
+        "tp": 123
+      },
+      "transformer": {
+        "tp": 20
+      }
+    },
+    "failures": []
+  },
+  {
+    "size": [
+      900,
+      1400
+    ],
+    "images": 19,
+    "score": 100.0,
+    "totals": {
+      "tp": 416,
+      "fn": 0,
+      "fp": 0
+    },
+    "per_class": {
+      "bus": {
+        "tp": 198
+      },
+      "generator": {
+        "tp": 75
+      },
+      "load": {
+        "tp": 123
+      },
+      "transformer": {
+        "tp": 20
+      }
+    },
+    "failures": []
+  }
+]

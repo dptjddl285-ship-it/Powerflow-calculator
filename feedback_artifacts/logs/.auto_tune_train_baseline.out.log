@@ -1,0 +1,88 @@
+{
+  "split": "train",
+  "module": "backend_api.line_recognition.logic.vision_logic_topology_hybrid",
+  "iou_threshold": 0.4,
+  "score": 99.29078014184397,
+  "exact_100": false,
+  "totals": {
+    "tp": 490,
+    "fn": 5,
+    "fp": 2
+  },
+  "failures": [
+    {
+      "image": "test_image10.jpg",
+      "tp": 32,
+      "fn": 1,
+      "fp": 0,
+      "predictions": 32,
+      "targets": 33
+    },
+    {
+      "image": "test_image18.jpg",
+      "tp": 53,
+      "fp": 1,
+      "fn": 0,
+      "predictions": 54,
+      "targets": 53
+    },
+    {
+      "image": "test_image48.jpg",
+      "tp": 53,
+      "fn": 4,
+      "fp": 0,
+      "predictions": 53,
+      "targets": 57
+    },
+    {
+      "image": "test_image5.jpg",
+      "tp": 18,
+      "fp": 1,
+      "fn": 0,
+      "predictions": 19,
+      "targets": 18
+    }
+  ],
+  "per_class": {
+    "bus": {
+      "tp": 237,
+      "fp": 0,
+      "fn": 0,
+      "targets": 237,
+      "detected_correctly": 237,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "generator": {
+      "tp": 85,
+      "fp": 0,
+      "fn": 0,
+      "targets": 85,
+      "detected_correctly": 85,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    "load": {
+      "tp": 136,
+      "fp": 2,
+      "fn": 5,
+      "targets": 141,
+      "detected_correctly": 136,
+      "precision": 0.9855072463768116,
+      "recall": 0.9645390070921985,
+      "f1": 0.974910394265233
+    },
+    "transformer": {
+      "tp": 32,
+      "fp": 0,
+      "fn": 0,
+      "targets": 32,
+      "detected_correctly": 32,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    }
+  }
+}
