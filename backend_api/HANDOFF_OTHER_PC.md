@@ -83,11 +83,12 @@ test labels, or coordinates at inference.
 
 - Windows PowerShell, Python 3.12, Ultralytics/YOLO, OpenCV, PyTorch and
   scikit-learn must be installed on the new PC.
-- The large active `best.pt` checkpoint is intentionally not committed to Git.
-  Copy it through OneDrive or another private transfer before running Train:
+- The active `best.pt` checkpoint required by the current evaluator is included
+  in this repository at
   `runs/detect/backend_api/auto_tune_runs/finetune_12_clean20_aug640/weights/best.pt`.
-- Keep generated `runs/`, `*.pt`, caches and diagnostic images out of Git.
-  They can be regenerated and otherwise make synchronization slow.
+  No extra model transfer is needed after cloning this revision.
+- Other generated runs, experimental checkpoints, caches and diagnostic images
+  remain out of Git because they can be regenerated and make synchronization slow.
 
 ## Train command
 
