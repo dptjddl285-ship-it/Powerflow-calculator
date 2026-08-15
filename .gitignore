@@ -75,3 +75,6 @@ hybrid_api_verification/
 cv_load_comparison/
 괴물박스_비교결과/
 *.log
+
+# Autonomous feedback-loop logs and regenerated review artifacts
+feedback_artifacts/

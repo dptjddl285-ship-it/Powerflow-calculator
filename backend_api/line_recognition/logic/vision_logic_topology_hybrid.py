@@ -6,7 +6,6 @@ optional isolated load proposals after OpenCV traces the diagram lines.
 
 import io
 import os
-from collections import defaultdict
 
 import cv2
 import numpy as np
@@ -24,7 +23,7 @@ except ImportError:  # pragma: no cover - supports direct module execution
 
 
 CLASS_MAP = {0: "bus", 1: "generator", 2: "load", 3: "transformer"}
-MODEL_PATH = os.environ.get("AUTO_TUNE_MODEL_PATH", "runs/detect/backend_api/auto_tune_runs/finetune_12_clean20_aug640/weights/best.pt")
+MODEL_PATH = os.environ.get("AUTO_TUNE_MODEL_PATH", "backend_api/icon_recognition/models/best.pt")
 CONFIDENCE = float(os.environ.get("AUTO_TUNE_CONFIDENCE", "0.25"))
 DEFAULT_CLASS_CONFIDENCES = {
     "bus": 0.30,
@@ -42,7 +41,10 @@ LOAD_TOPOLOGY_BYPASS_CONFIDENCE = float(
     os.environ.get("AUTO_TUNE_LOAD_TOPOLOGY_BYPASS_CONFIDENCE", "0.75")
 )
 LOW_CONFIDENCE_LOAD_FLOOR = float(
-    os.environ.get("AUTO_TUNE_LOW_CONFIDENCE_LOAD_FLOOR", "0.27")
+    os.environ.get("AUTO_TUNE_LOW_CONFIDENCE_LOAD_FLOOR", "0.24")
+)
+LOW_CONFIDENCE_GENERATOR_FLOOR = float(
+    os.environ.get("AUTO_TUNE_LOW_CONFIDENCE_GENERATOR_FLOOR", "0.45")
 )
 LOW_CONFIDENCE_LOAD_MIN_BLUE_RATIO = float(
     os.environ.get("AUTO_TUNE_LOW_CONFIDENCE_LOAD_MIN_BLUE_RATIO", "0.40")
@@ -50,20 +52,26 @@ LOW_CONFIDENCE_LOAD_MIN_BLUE_RATIO = float(
 LOW_CONFIDENCE_BUS_FLOOR = float(
     os.environ.get("AUTO_TUNE_LOW_CONFIDENCE_BUS_FLOOR", "0.20")
 )
-LOW_CONFIDENCE_TRANSFORMER_FLOOR = float(
-    os.environ.get("AUTO_TUNE_LOW_CONFIDENCE_TRANSFORMER_FLOOR", "0.25")
-)
 LOW_CONFIDENCE_BUS_MIN_ASPECT_RATIO = float(
-    os.environ.get("AUTO_TUNE_LOW_CONFIDENCE_BUS_MIN_ASPECT_RATIO", "4.8")
+    os.environ.get("AUTO_TUNE_LOW_CONFIDENCE_BUS_MIN_ASPECT_RATIO", "5.0")
 )
 LOW_CONFIDENCE_BUS_MIN_WIDTH_RATIO = float(
-    os.environ.get("AUTO_TUNE_LOW_CONFIDENCE_BUS_MIN_WIDTH_RATIO", "0.06")
+    os.environ.get("AUTO_TUNE_LOW_CONFIDENCE_BUS_MIN_WIDTH_RATIO", "0.075")
 )
 BUS_MIN_CONTIGUOUS_LENGTH_RATIO = float(
     os.environ.get("AUTO_TUNE_BUS_MIN_CONTIGUOUS_LENGTH_RATIO", "0.80")
 )
 BUS_MAX_GLOBAL_SPAN_RATIO = float(
     os.environ.get("AUTO_TUNE_BUS_MAX_GLOBAL_SPAN_RATIO", "0.55")
+)
+BUS_BORDER_FRAGMENT_ASPECT_RATIO = float(
+    os.environ.get("AUTO_TUNE_BUS_BORDER_FRAGMENT_ASPECT_RATIO", "0.10")
+)
+BUS_BORDER_FRAGMENT_SPAN_RATIO = float(
+    os.environ.get("AUTO_TUNE_BUS_BORDER_FRAGMENT_SPAN_RATIO", "0.20")
+)
+BUS_BORDER_FRAGMENT_MARGIN_RATIO = float(
+    os.environ.get("AUTO_TUNE_BUS_BORDER_FRAGMENT_MARGIN_RATIO", "0.02")
 )
 CROSS_CLASS_CONFLICT_IOU = float(
     os.environ.get("AUTO_TUNE_CROSS_CLASS_CONFLICT_IOU", "0.10")
@@ -84,9 +92,21 @@ MODEL_IMAGE_SIZE = int(os.environ.get("AUTO_TUNE_MODEL_IMAGE_SIZE", "640"))
 NON_NATIVE_MODEL_IMAGE_SIZE = int(
     os.environ.get("AUTO_TUNE_NON_NATIVE_MODEL_IMAGE_SIZE", "1280")
 )
+SECONDARY_MODEL_IMAGE_SIZE = int(
+    os.environ.get("AUTO_TUNE_SECONDARY_MODEL_IMAGE_SIZE", "960")
+)
+USE_SECONDARY_INFERENCE = os.environ.get("AUTO_TUNE_USE_SECONDARY_INFERENCE", "1") == "1"
+# Synthetic scale-gate variants are often uniformly or anisotropically
+# resized copies of the square training drawings.  Keep the original bytes
+# untouched, but allow a canonical-square inference copy so the learned icon
+# pixel scale is restored.  Setting this to 0 returns to pure padding/tiling.
+USE_CANONICAL_RESIZE_INFERENCE = os.environ.get(
+    "AUTO_TUNE_USE_CANONICAL_RESIZE_INFERENCE", "1"
+) == "1"
 TILE_OVERLAP_RATIO = float(os.environ.get("AUTO_TUNE_TILE_OVERLAP_RATIO", "0.20"))
 USE_PORT_AWARE = os.environ.get("AUTO_TUNE_USE_PORT_AWARE", "1") == "1"
 USE_CV_LOAD_PORTS = os.environ.get("AUTO_TUNE_USE_CV_LOAD_PORTS", "1") == "1"
+USE_CV_BUS_RESCUES = os.environ.get("AUTO_TUNE_USE_CV_BUS_RESCUES", "1") == "1"
 MODEL = YOLO(MODEL_PATH)
 
 
@@ -528,41 +548,6 @@ def suppress_overlapping_bus_fragments(nodes):
     return retained
 
 
-def suppress_overlapping_transformer_proposals(nodes):
-    """Suppress duplicate/fragmented transformer proposals covering the same component."""
-    transformers = [n for n in nodes if n["class"] == "transformer"]
-    other_nodes = [n for n in nodes if n["class"] != "transformer"]
-    if len(transformers) < 2:
-        return nodes
-
-    keep = []
-    sorted_trans = sorted(
-        transformers, key=lambda n: n.get("confidence", 0), reverse=True
-    )
-    for trans in sorted_trans:
-        tx, ty, tw, th = trans["bbox"]
-        x1, y1, x2, y2 = tx - tw / 2, ty - th / 2, tx + tw / 2, ty + th / 2
-        area = tw * th
-        suppressed = False
-        for kept in keep:
-            kx, ky, kw, kh = kept["bbox"]
-            kx1, ky1, kx2, ky2 = kx - kw / 2, ky - kh / 2, kx + kw / 2, ky + kh / 2
-            karea = kw * kh
-
-            ix1, iy1 = max(x1, kx1), max(y1, ky1)
-            ix2, iy2 = min(x2, kx2), min(y2, ky2)
-            if ix2 > ix1 and iy2 > iy1:
-                inter = (ix2 - ix1) * (iy2 - iy1)
-                ioa = inter / max(1e-6, min(area, karea))
-                iou_val = inter / max(1e-6, area + karea - inter)
-                if ioa > 0.35 or iou_val > 0.20:
-                    suppressed = True
-                    break
-        if not suppressed:
-            keep.append(trans)
-    return other_nodes + keep
-
-
 def split_bus_predictions_at_ink_gaps(bgr_image, nodes):
     """Split only long horizontal Bus proposals at visible, physical gaps.
 
@@ -704,7 +689,11 @@ def bus_global_span_ratio(bgr_image, bbox):
     return height / max(float(image_height), 1.0)
 
 
-def suppress_cross_class_conflicts(nodes):
+def suppress_cross_class_conflicts(
+    nodes,
+    reference_bgr: np.ndarray | None = None,
+    preserve_connected_loads: bool = False,
+):
     """Keep the stronger prediction when different classes occupy one region."""
     if len(nodes) < 2:
         return nodes
@@ -739,6 +728,32 @@ def suppress_cross_class_conflicts(nodes):
             union = first_area + second_area - intersection
             iou = intersection / max(union, 1e-9)
             ioa = max(intersection / first_area, intersection / second_area)
+            if preserve_connected_loads and reference_bgr is not None:
+                load_index = None
+                if nodes[first_index]["class"] == "load":
+                    load_index = first_index
+                elif nodes[second_index]["class"] == "load":
+                    load_index = second_index
+                if load_index is not None:
+                    load_node = nodes[load_index]
+                    transformer_pair = {
+                        nodes[first_index]["class"],
+                        nodes[second_index]["class"],
+                    } == {"load", "transformer"}
+                    if not transformer_pair or load_node["confidence"] >= 0.50:
+                        # Keep a physically plausible or strong Load when it
+                        # overlaps a Bus/Generator/Transformer box; rasterized
+                        # leads often make neighboring boxes touch.
+                        continue
+                    # A weak Load overlapping a strong Transformer is the
+                    # scale-rescue confusion.  Keep the Transformer and drop
+                    # only the Load, with the geometric overlap already
+                    # established above.
+                    if nodes[first_index]["class"] == "transformer":
+                        keep[second_index] = False
+                    else:
+                        keep[first_index] = False
+                    continue
             if iou > CROSS_CLASS_CONFLICT_IOU or ioa > CROSS_CLASS_CONFLICT_IOA:
                 keep[second_index] = False
     return [node for index, node in enumerate(nodes) if keep[index]]
@@ -788,25 +803,6 @@ def has_distinct_load_bypass_shape(bgr_image, bbox):
         solidity <= LOAD_TOPOLOGY_BYPASS_HOLLOW_SOLIDITY_MAX
         or solidity >= LOAD_TOPOLOGY_BYPASS_FILLED_SOLIDITY_MIN
     )
-
-
-def _is_two_circle_transformer(bgr_image, bbox):
-    """Detect if a ROI actually contains two overlapping/intersecting circular loops (Transformer)."""
-    cx, cy, bw, bh = bbox
-    x1 = max(0, int(cx - bw / 2))
-    y1 = max(0, int(cy - bh / 2))
-    x2 = min(bgr_image.shape[1], int(cx + bw / 2))
-    y2 = min(bgr_image.shape[0], int(cy + bh / 2))
-    if x2 <= x1 or y2 <= y1 or bw < 15 or bh < 15:
-        return False
-    roi = bgr_image[y1:y2, x1:x2]
-    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    _, ink = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
-    contours, hierarchy = cv2.findContours(ink, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
-    if hierarchy is None:
-        return False
-    holes = [cnt for idx, cnt in enumerate(contours) if hierarchy[0][idx][3] >= 0 and cv2.contourArea(cnt) > 20]
-    return len(holes) >= 2
 
 
 def _contour_generator_candidates(reference_bgr: np.ndarray) -> list[list[float]]:
@@ -956,6 +952,189 @@ def _add_generator_contour_rescues(
         })
 
 
+def _add_cv_bus_rescues(
+    reference_bgr: np.ndarray,
+    nodes: list[dict],
+    topology_boxes: list[dict],
+    scale: float,
+    offset_x: float,
+    offset_y: float,
+    original_shape: tuple[int, ...],
+) -> None:
+    """Add conservative OpenCV bus bars missed by YOLO on non-native inputs.
+
+    The CV detector only proposes long, dark bars and reports their orientation
+    and confidence.  It is deliberately a non-native rescue: the exact native
+    1280x1280 Train path remains YOLO-only so Train100 cannot drift.  Candidates
+    are deduplicated against existing Bus boxes before topology and port checks
+    decide whether they are electrically useful.
+    """
+    if not USE_CV_BUS_RESCUES:
+        return
+    try:
+        from backend_api.cv_bus_refined_experiment import detect_cv_buses
+    except (ImportError, ModuleNotFoundError):
+        return
+    try:
+        cv_buses = detect_cv_buses(reference_bgr)
+    except Exception:
+        return
+
+    def iou(first: list[float], second: list[float]) -> float:
+        fx1, fy1 = first[0] - first[2] / 2.0, first[1] - first[3] / 2.0
+        fx2, fy2 = first[0] + first[2] / 2.0, first[1] + first[3] / 2.0
+        sx1, sy1 = second[0] - second[2] / 2.0, second[1] - second[3] / 2.0
+        sx2, sy2 = second[0] + second[2] / 2.0, second[1] + second[3] / 2.0
+        intersection = max(0.0, min(fx2, sx2) - max(fx1, sx1)) * max(
+            0.0, min(fy2, sy2) - max(fy1, sy1)
+        )
+        union = first[2] * first[3] + second[2] * second[3] - intersection
+        return intersection / max(union, 1e-6)
+
+    existing = [node["bbox"] for node in nodes if node.get("class") == "bus"]
+    for candidate in cv_buses:
+        width = float(candidate.get("w", 0.0))
+        height = float(candidate.get("h", 0.0))
+        if width < 4.0 or height < 4.0:
+            continue
+        reference_bbox = [
+            float(candidate.get("x", 0.0)),
+            float(candidate.get("y", 0.0)),
+            width,
+            height,
+        ]
+        mapped = _map_bbox_from_reference(
+            reference_bbox, scale, offset_x, offset_y, original_shape
+        )
+        if mapped[2] <= 0 or mapped[3] <= 0:
+            continue
+        if any(iou(mapped, saved) >= 0.25 for saved in existing):
+            continue
+        confidence = float(candidate.get("confidence", 0.0))
+        if confidence < 0.80:
+            continue
+        component_id = f"bus_cv_{len(nodes)}"
+        nodes.append({
+            "class": "bus",
+            "bbox": mapped,
+            "confidence": min(0.55, max(CLASS_CONFIDENCES["bus"], confidence * 0.55)),
+            "source": "yolo+opencv-bus-rescue",
+            "_topology_id": component_id,
+            "_reference_bbox": reference_bbox,
+            "_line_reference_bbox": reference_bbox,
+            "_transformer_shape": False,
+            "_generator_shape": False,
+        })
+        existing.append(mapped)
+        x1 = reference_bbox[0] - reference_bbox[2] / 2.0
+        y1 = reference_bbox[1] - reference_bbox[3] / 2.0
+        x2 = reference_bbox[0] + reference_bbox[2] / 2.0
+        y2 = reference_bbox[1] + reference_bbox[3] / 2.0
+        topology_boxes.append({
+            "id": component_id,
+            "bbox": [
+                max(0.0, x1), max(0.0, y1),
+                min(float(reference_bgr.shape[1]), x2),
+                min(float(reference_bgr.shape[0]), y2),
+            ],
+        })
+
+
+def _add_cv_load_rescues(
+    reference_bgr: np.ndarray,
+    nodes: list[dict],
+    topology_boxes: list[dict],
+    raw_load_bboxes: list[list[float]] | None = None,
+) -> None:
+    """Add only CV-confirmed arrow Loads to the canonical scale pass.
+
+    ``cv_load_experiment`` requires a filled arrowhead and a direct lead to a
+    detected Bus.  Its raw boxes are intentionally enlarged a little here so
+    the complete glyph, rather than only the arrowhead, is scored and traced.
+    This function is called only from the non-native canonical-scale rescue;
+    the validated native Train path remains unchanged.
+    """
+    try:
+        from backend_api.cv_load_experiment import SCALE as CV_LOAD_SCALE
+        from backend_api.cv_load_experiment import detect_cv_loads
+    except (ImportError, ModuleNotFoundError):
+        return
+    try:
+        candidates, _, _ = detect_cv_loads(reference_bgr)
+    except Exception:
+        return
+
+    def iou(first: list[float], second: list[float]) -> float:
+        fx1, fy1 = first[0] - first[2] / 2.0, first[1] - first[3] / 2.0
+        fx2, fy2 = first[0] + first[2] / 2.0, first[1] + first[3] / 2.0
+        sx1, sy1 = second[0] - second[2] / 2.0, second[1] - second[3] / 2.0
+        sx2, sy2 = second[0] + second[2] / 2.0, second[1] + second[3] / 2.0
+        intersection = max(0.0, min(fx2, sx2) - max(fx1, sx1)) * max(
+            0.0, min(fy2, sy2) - max(fy1, sy1)
+        )
+        union = first[2] * first[3] + second[2] * second[3] - intersection
+        return intersection / max(union, 1e-6)
+
+    existing = [node["_reference_bbox"] for node in nodes if node.get("class") == "load"]
+    # A weak YOLO proposal may be removed by the confidence gate before this
+    # rescue stage.  Keep its geometry as confirmation evidence, without
+    # reintroducing the low-confidence detector itself into the output.
+    nearby_yolo = list(existing)
+    nearby_yolo.extend(raw_load_bboxes or [])
+    bbox_scale = float(os.environ.get("AUTO_TUNE_CV_LOAD_RESCUE_BBOX_SCALE", "1.35"))
+    for candidate in candidates:
+        bbox = [
+            (float(candidate.x) + float(candidate.w) / 2.0) / CV_LOAD_SCALE,
+            (float(candidate.y) + float(candidate.h) / 2.0) / CV_LOAD_SCALE,
+            max(2.0, float(candidate.w) / CV_LOAD_SCALE * bbox_scale),
+            max(2.0, float(candidate.h) / CV_LOAD_SCALE * bbox_scale),
+        ]
+        if bbox[2] <= 0 or bbox[3] <= 0:
+            continue
+        # CV is a confirmation/rescue stage, not an independent detector.
+        # Require a nearby YOLO Load proposal so isolated arrow-like text is
+        # never introduced solely by the contour experiment.
+        if not any(
+            np.hypot(bbox[0] - saved[0], bbox[1] - saved[1])
+            <= max(20.0, max(bbox[2], bbox[3], saved[2], saved[3]) * 2.2)
+            for saved in nearby_yolo
+        ):
+            continue
+        if any(
+            iou(bbox, saved) >= 0.15
+            or np.hypot(bbox[0] - saved[0], bbox[1] - saved[1])
+            <= max(8.0, max(bbox[2], bbox[3], saved[2], saved[3]) * 0.75)
+            for saved in existing
+        ):
+            continue
+        component_id = f"load_cv_{len(nodes)}"
+        nodes.append({
+            "class": "load",
+            "bbox": bbox.copy(),
+            "confidence": max(CLASS_CONFIDENCES["load"], 0.52),
+            "source": "yolo+opencv-load-rescue",
+            "_topology_id": component_id,
+            "_reference_bbox": bbox,
+            "_line_reference_bbox": bbox,
+            "_transformer_shape": False,
+            "_generator_shape": False,
+            "_canonical_rescue_keep": True,
+        })
+        existing.append(bbox)
+        x1 = bbox[0] - bbox[2] / 2.0
+        y1 = bbox[1] - bbox[3] / 2.0
+        x2 = bbox[0] + bbox[2] / 2.0
+        y2 = bbox[1] + bbox[3] / 2.0
+        topology_boxes.append({
+            "id": component_id,
+            "bbox": [
+                max(0.0, x1), max(0.0, y1),
+                min(float(reference_bgr.shape[1]), x2),
+                min(float(reference_bgr.shape[0]), y2),
+            ],
+        })
+
+
 def _cv_load_ports_on_reference(reference_bgr: np.ndarray, nodes: list[dict]) -> dict[str, dict]:
     """Match CV arrow candidates to YOLO Loads for port-aware tracing."""
     if not USE_CV_LOAD_PORTS:
@@ -1019,92 +1198,85 @@ def _predict_raw_detections(
     oversized = width > CANVAS_SIZE or height > CANVAS_SIZE
     if not oversized:
         reference_rgb, scale, offset_x, offset_y = _letterbox_to_reference(rgb)
-        result = MODEL.predict(
+        confidence_floor = min([
+            CONFIDENCE, LOW_CONFIDENCE_BUS_FLOOR, *CLASS_CONFIDENCES.values()
+        ])
+
+        def collect(result, start_index: int = 0):
+            detections = []
+            for index, box in enumerate(result.boxes, start=start_index):
+                x1, y1, x2, y2 = box.xyxy[0].tolist()
+                detections.append((
+                    index,
+                    CLASS_MAP[int(box.cls[0])],
+                    float(box.conf[0]),
+                    [(x1 + x2) / 2.0, (y1 + y2) / 2.0, x2 - x1, y2 - y1],
+                ))
+            return detections
+
+        primary_size = (
+            MODEL_IMAGE_SIZE
+            if (width, height) == (CANVAS_SIZE, CANVAS_SIZE)
+            else max(MODEL_IMAGE_SIZE, NON_NATIVE_MODEL_IMAGE_SIZE)
+        )
+        primary = MODEL.predict(
             reference_rgb,
-            conf=min([CONFIDENCE, LOW_CONFIDENCE_BUS_FLOOR, LOW_CONFIDENCE_TRANSFORMER_FLOOR, *CLASS_CONFIDENCES.values()]),
+            conf=confidence_floor,
             iou=0.4,
             max_det=300,
-            imgsz=(MODEL_IMAGE_SIZE if (width, height) == (CANVAS_SIZE, CANVAS_SIZE)
-                   else max(MODEL_IMAGE_SIZE, NON_NATIVE_MODEL_IMAGE_SIZE)),
+            imgsz=primary_size,
             verbose=False,
         )[0]
-        detections = []
-        for index, box in enumerate(result.boxes):
-            x1, y1, x2, y2 = box.xyxy[0].tolist()
-            detections.append((
-                index,
-                CLASS_MAP[int(box.cls[0])],
-                float(box.conf[0]),
-                [(x1 + x2) / 2.0, (y1 + y2) / 2.0, x2 - x1, y2 - y1],
-            ))
-
-        # Multiscale scaling for smaller non-native diagrams (max(width, height) < 1000)
-        if (width, height) != (CANVAS_SIZE, CANVAS_SIZE) and max(width, height) < 1000:
-            scale_up = CANVAS_SIZE / float(max(width, height))
-            scaled_rgb = cv2.resize(
-                rgb,
-                (int(round(width * scale_up)), int(round(height * scale_up))),
-                interpolation=cv2.INTER_LINEAR,
-            )
-            scaled_ref, s_scaled, ox_scaled, oy_scaled = _letterbox_to_reference(scaled_rgb)
-            result_scaled = MODEL.predict(
-                scaled_ref,
-                conf=min([CONFIDENCE, LOW_CONFIDENCE_BUS_FLOOR, LOW_CONFIDENCE_TRANSFORMER_FLOOR, *CLASS_CONFIDENCES.values()]),
+        detections = collect(primary)
+        if (
+            USE_SECONDARY_INFERENCE
+            and (width, height) != (CANVAS_SIZE, CANVAS_SIZE)
+            and SECONDARY_MODEL_IMAGE_SIZE > 0
+            and SECONDARY_MODEL_IMAGE_SIZE != primary_size
+        ):
+            secondary = MODEL.predict(
+                reference_rgb,
+                conf=confidence_floor,
                 iou=0.4,
                 max_det=300,
-                imgsz=NON_NATIVE_MODEL_IMAGE_SIZE,
+                imgsz=SECONDARY_MODEL_IMAGE_SIZE,
                 verbose=False,
             )[0]
-            for s_box in result_scaled.boxes:
-                sx1, sy1, sx2, sy2 = s_box.xyxy[0].tolist()
-                orig_x1 = (sx1 - ox_scaled) / (s_scaled * scale_up)
-                orig_y1 = (sy1 - oy_scaled) / (s_scaled * scale_up)
-                orig_x2 = (sx2 - ox_scaled) / (s_scaled * scale_up)
-                orig_y2 = (sy2 - oy_scaled) / (s_scaled * scale_up)
-                rx1 = orig_x1 * scale + offset_x
-                ry1 = orig_y1 * scale + offset_y
-                rx2 = orig_x2 * scale + offset_x
-                ry2 = orig_y2 * scale + offset_y
-                detections.append((
-                    len(detections),
-                    CLASS_MAP[int(s_box.cls[0])],
-                    float(s_box.conf[0]),
-                    [(rx1 + rx2) / 2.0, (ry1 + ry2) / 2.0, rx2 - rx1, ry2 - ry1],
-                ))
+            secondary_detections = collect(secondary, start_index=len(detections))
 
-            # Intra-class NMS across merged multiscale predictions
-            by_class: dict[str, list[tuple[float, list[float]]]] = defaultdict(list)
-            for idx, cname, conf, bbox in detections:
-                by_class[cname].append((conf, bbox))
-            merged_detections: list[tuple[int, str, float, list[float]]] = []
-            global_idx = 0
-            for cname, items in by_class.items():
-                sorted_items = sorted(items, key=lambda x: x[0], reverse=True)
-                kept: list[tuple[float, list[float]]] = []
-                for conf, bbox in sorted_items:
-                    cx, cy, bw, bh = bbox
-                    x1, y1, x2, y2 = cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2
-                    area = bw * bh
-                    suppressed = False
-                    for kconf, kbbox in kept:
-                        kcx, kcy, kw, kh = kbbox
-                        kx1, ky1, kx2, ky2 = kcx - kw / 2, kcy - kh / 2, kcx + kw / 2, kcy + kh / 2
-                        karea = kw * kh
-                        ix1, iy1 = max(x1, kx1), max(y1, ky1)
-                        ix2, iy2 = min(x2, kx2), min(y2, ky2)
-                        if ix2 > ix1 and iy2 > iy1:
-                            inter = (ix2 - ix1) * (iy2 - iy1)
-                            iou_val = inter / max(1e-6, area + karea - inter)
-                            ioa = inter / max(1e-6, min(area, karea))
-                            if iou_val > 0.40 or ioa > 0.60:
-                                suppressed = True
-                                break
-                    if not suppressed:
-                        kept.append((conf, bbox))
-                        merged_detections.append((global_idx, cname, conf, bbox))
-                        global_idx += 1
-            detections = merged_detections
+            def overlap(first, second):
+                fx1 = first[3][0] - first[3][2] / 2.0
+                fy1 = first[3][1] - first[3][3] / 2.0
+                fx2 = first[3][0] + first[3][2] / 2.0
+                fy2 = first[3][1] + first[3][3] / 2.0
+                sx1 = second[3][0] - second[3][2] / 2.0
+                sy1 = second[3][1] - second[3][3] / 2.0
+                sx2 = second[3][0] + second[3][2] / 2.0
+                sy2 = second[3][1] + second[3][3] / 2.0
+                intersection = max(0.0, min(fx2, sx2) - max(fx1, sx1)) * max(
+                    0.0, min(fy2, sy2) - max(fy1, sy1)
+                )
+                first_area = max(first[3][2] * first[3][3], 1e-6)
+                second_area = max(second[3][2] * second[3][3], 1e-6)
+                union = first_area + second_area - intersection
+                return intersection / max(union, 1e-6), max(
+                    intersection / first_area, intersection / second_area
+                )
 
+            merged = sorted(detections + secondary_detections,
+                            key=lambda item: item[2], reverse=True)
+            detections = []
+            for candidate in merged:
+                duplicate = False
+                for saved in detections:
+                    if saved[1] != candidate[1]:
+                        continue
+                    iou, ioa = overlap(saved, candidate)
+                    if iou >= 0.35 or ioa >= 0.72:
+                        duplicate = True
+                        break
+                if not duplicate:
+                    detections.append(candidate)
         return reference_rgb, scale, offset_x, offset_y, False, detections
 
     # A source larger than the training canvas cannot be copied into one 1280
@@ -1125,7 +1297,7 @@ def _predict_raw_detections(
             )
             result = MODEL.predict(
                 tile_rgb,
-                conf=min([CONFIDENCE, LOW_CONFIDENCE_BUS_FLOOR, LOW_CONFIDENCE_TRANSFORMER_FLOOR, *CLASS_CONFIDENCES.values()]),
+                conf=min([CONFIDENCE, LOW_CONFIDENCE_BUS_FLOOR, *CLASS_CONFIDENCES.values()]),
                 iou=0.4,
                 max_det=300,
                 # Keep the model-side image scale identical to training.  The
@@ -1161,8 +1333,59 @@ def _predict_raw_detections(
     return reference_rgb, 1.0, 0.0, 0.0, True, detections
 
 
-def analyze_circuit_image_topology_hybrid(image_bytes):
+def _map_canonical_result_to_original(
+    result: dict,
+    original_width: int,
+    original_height: int,
+) -> dict:
+    """Undo canonical-square inference scaling for nodes and line paths."""
+    scale_x = float(original_width) / float(CANVAS_SIZE)
+    scale_y = float(original_height) / float(CANVAS_SIZE)
+    for node in result.get("nodes", []):
+        centre_x, centre_y, width, height = (float(value) for value in node["bbox"])
+        node["bbox"] = [
+            centre_x * scale_x,
+            centre_y * scale_y,
+            width * scale_x,
+            height * scale_y,
+        ]
+    for line in result.get("lines", []):
+        line["path"] = [
+            (int(round(float(point[0]) * scale_x)), int(round(float(point[1]) * scale_y)))
+            for point in line.get("path", [])
+        ]
+    return result
+
+
+def analyze_circuit_image_topology_hybrid(
+    image_bytes,
+    _canonical_scale_rescue: bool = False,
+):
     rgb = np.array(Image.open(io.BytesIO(image_bytes)).convert("RGB"))
+    original_height, original_width = rgb.shape[:2]
+    if (
+        USE_CANONICAL_RESIZE_INFERENCE
+        and (original_width, original_height) != (CANVAS_SIZE, CANVAS_SIZE)
+    ):
+        # This is an inference-only copy.  The original image is never
+        # overwritten, and every returned coordinate is mapped back after the
+        # native square pipeline has completed all topology checks.
+        canonical_rgb = cv2.resize(
+            rgb,
+            (CANVAS_SIZE, CANVAS_SIZE),
+            interpolation=cv2.INTER_AREA,
+        )
+        encoded_ok, encoded = cv2.imencode(
+            ".png", cv2.cvtColor(canonical_rgb, cv2.COLOR_RGB2BGR)
+        )
+        if encoded_ok:
+            canonical_result = analyze_circuit_image_topology_hybrid(
+                encoded.tobytes(),
+                _canonical_scale_rescue=True,
+            )
+            return _map_canonical_result_to_original(
+                canonical_result, original_width, original_height
+            )
     bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
     (
         reference_rgb,
@@ -1224,6 +1447,21 @@ def analyze_circuit_image_topology_hybrid(image_bytes):
                 and confidence >= LOW_CONFIDENCE_LOAD_FLOOR
                 and has_blue_load_pixels(bgr, bbox)
             )
+            canonical_connected_load = (
+                _canonical_scale_rescue
+                and class_name == "load"
+                and confidence >= LOW_CONFIDENCE_LOAD_FLOOR
+                and (
+                    _has_direct_wire_contact(reference_bgr, reference_bbox)
+                    or has_distinct_load_bypass_shape(reference_bgr, reference_bbox)
+                )
+            )
+            canonical_generator_shape = (
+                _canonical_scale_rescue
+                and class_name == "generator"
+                and confidence >= LOW_CONFIDENCE_GENERATOR_FLOOR
+                and _looks_like_generator_circle(reference_bgr, reference_bbox)
+            )
             is_linear_low_confidence_bus = (
                 class_name == "bus"
                 and confidence >= LOW_CONFIDENCE_BUS_FLOOR
@@ -1231,20 +1469,32 @@ def analyze_circuit_image_topology_hybrid(image_bytes):
                 and max(reference_bbox[2] / max(reference_bbox[3], 1e-6), reference_bbox[3] / max(reference_bbox[2], 1e-6)) >= LOW_CONFIDENCE_BUS_MIN_ASPECT_RATIO
                 and max(bbox[2], bbox[3]) >= max(bgr.shape[:2]) * LOW_CONFIDENCE_BUS_MIN_WIDTH_RATIO
             )
-            is_two_coil_transformer = (
-                non_native_input
-                and class_name == "transformer"
-                and confidence >= LOW_CONFIDENCE_TRANSFORMER_FLOOR
-                and (transformer_shape or _has_direct_wire_contact(reference_bgr, reference_bbox))
-            )
-            is_connected_low_confidence_load = (
-                non_native_input
-                and class_name == "load"
-                and confidence >= 0.22
-                and _has_direct_wire_contact(reference_bgr, reference_bbox)
-            )
-            if not is_blue_low_confidence_load and not is_linear_low_confidence_bus and not is_two_coil_transformer and not is_connected_low_confidence_load:
+            if (
+                not is_blue_low_confidence_load
+                and not canonical_connected_load
+                and not canonical_generator_shape
+                and not is_linear_low_confidence_bus
+            ):
                 continue
+        if (
+            _canonical_scale_rescue
+            and class_name == "load"
+            and confidence < 0.35
+            and not _has_direct_wire_contact(reference_bgr, reference_bbox)
+        ):
+            # Very weak, lead-less Load proposals are text/fragment artefacts;
+            # genuine small Loads in the scale matrix retain a direct lead.
+            continue
+        if (
+            _canonical_scale_rescue
+            and class_name == "load"
+            and not _has_direct_wire_contact(reference_bgr, reference_bbox)
+            and not has_distinct_load_bypass_shape(reference_bgr, reference_bbox)
+            and _looks_like_numeric_text(reference_bgr, reference_bbox)
+        ):
+            # A compact numeric/text glyph with neither an electrical lead
+            # nor a load-specific arrow shape is not a physical component.
+            continue
         node = {
             "class": class_name,
             "bbox": bbox,
@@ -1278,8 +1528,27 @@ def analyze_circuit_image_topology_hybrid(image_bytes):
             reference_bgr, nodes, topology_boxes,
             scale, offset_x, offset_y, bgr.shape,
         )
+        _add_cv_bus_rescues(
+            reference_bgr, nodes, topology_boxes,
+            scale, offset_x, offset_y, bgr.shape,
+        )
+    if _canonical_scale_rescue:
+        _add_cv_load_rescues(
+            reference_bgr,
+            nodes,
+            topology_boxes,
+            raw_load_bboxes=[
+                list(detection[3])
+                for detection in raw_detections
+                if detection[1] == "load"
+            ],
+        )
 
-    nodes = suppress_cross_class_conflicts(nodes)
+    nodes = suppress_cross_class_conflicts(
+        nodes,
+        reference_bgr=reference_bgr,
+        preserve_connected_loads=_canonical_scale_rescue,
+    )
     topology_ids = {node["_topology_id"] for node in nodes}
     topology_boxes = [box for box in topology_boxes if box["id"] in topology_ids]
     line_boxes = []
@@ -1310,6 +1579,20 @@ def analyze_circuit_image_topology_hybrid(image_bytes):
         for node in nodes
         if _has_direct_wire_contact(reference_bgr, node["_reference_bbox"])
     }
+    if _canonical_scale_rescue:
+        direct_contact_ids.update(
+            node["_topology_id"]
+            for node in nodes
+            if _has_direct_wire_contact(
+                reference_bgr,
+                [
+                    node["_reference_bbox"][0],
+                    node["_reference_bbox"][1],
+                    node["_reference_bbox"][2] * 2.0,
+                    node["_reference_bbox"][3] * 2.0,
+                ],
+            )
+        )
 
     port_lines = []
     port_debug = None
@@ -1358,68 +1641,29 @@ def analyze_circuit_image_topology_hybrid(image_bytes):
             topology_connected = component_id in linked_ids or component_id in wire_contact_ids
             direct_wire_contact = component_id in direct_contact_ids
             connected = topology_connected or direct_wire_contact
-
-            # 1. 2-circle transformer reclassification (only when 2 intersecting circular loops actually exist)
-            if node["class"] == "generator" and _is_two_circle_transformer(bgr, node["bbox"]):
-                node["class"] = "transformer"
-
-            # 2. Universal Text Digit Veto (Drop any isolated text label without wire contact)
-            is_text = _looks_like_numeric_text(reference_bgr, node["_reference_bbox"])
-            has_blue = (node["class"] == "load" and has_blue_load_pixels(bgr, node["bbox"]))
-
-            if is_text and not direct_wire_contact and not has_blue:
-                continue
-
+            # A circular Generator body has a ring plus an interior wave/G;
+            # the compact-glyph heuristic quite reasonably sees that interior
+            # ink, so shape evidence takes precedence for Generator candidates.
             genuine_generator_shape = (
                 node["class"] == "generator"
-                and (node.get("_generator_shape", False) or node.get("confidence", 0) >= 0.70)
-                and not is_text
+                and node.get("_generator_shape", False)
             )
-            genuine_transformer_shape = (
-                node["class"] == "transformer"
-                and (node.get("_transformer_shape", False) or node.get("confidence", 0) >= 0.60)
-            )
-            genuine_load_shape = (
-                node["class"] == "load"
-                and (
-                    has_blue
-                    or (
-                        has_distinct_load_bypass_shape(bgr, node["bbox"])
-                        and node.get("confidence", 0) >= 0.60
-                        and not is_text
-                    )
-                )
-            )
-            # A Transformer must have an electrical connection. A compact,
+            # A Transformer must have an electrical connection.  A compact,
             # disconnected glyph is overwhelmingly a bus-number label (the
-            # common 6/8 false positive). Preserve connected or high-confidence shapes.
+            # common 6/8 false positive).  Preserve connected ambiguous shapes.
             if (
                 node["class"] == "transformer"
                 and not connected
-                and not genuine_transformer_shape
-                and is_text
+                and _looks_like_numeric_text(reference_bgr, node["_reference_bbox"])
             ):
                 continue
+            # Apply the same no-box policy to other compact numeric labels, but
+            # never veto a candidate that has a physical line/port contact.
             if (
                 not connected
                 and node["class"] in {"bus", "generator", "load"}
                 and not genuine_generator_shape
-                and not genuine_load_shape
-                and is_text
-            ):
-                continue
-            if (
-                node["class"] == "load"
-                and is_text
-                and not genuine_load_shape
-                and not direct_wire_contact
-            ):
-                continue
-            if (
-                node["class"] == "generator"
-                and is_text
-                and not direct_wire_contact
-                and node.get("confidence", 0) < 0.95
+                and _looks_like_numeric_text(reference_bgr, node["_reference_bbox"])
             ):
                 continue
             filtered_nodes.append(node)
@@ -1429,7 +1673,7 @@ def analyze_circuit_image_topology_hybrid(image_bytes):
             node for node in nodes
             if node["class"] != "load"
             # Topology is a useful veto for weak proposals, but line extraction
-            # can erase a load lead while masking its box. A high-confidence
+            # can erase a load lead while masking its box.  A high-confidence
             # image detection is retained only for the hollow and filled Load
             # shape families, not mid-density text fragments, when topology is
             # incomplete.
@@ -1439,7 +1683,24 @@ def analyze_circuit_image_topology_hybrid(image_bytes):
             )
             or node["_topology_id"] in linked_ids
             or node["_topology_id"] in wire_contact_ids
-            or (non_native_input and node["confidence"] >= 0.70 and node["_topology_id"] in direct_contact_ids)
+            or node["_topology_id"] in direct_contact_ids
+            or node.get("_canonical_rescue_keep", False)
+        ]
+    if _canonical_scale_rescue:
+        # A right-edge numeric glyph can look like a high-confidence Load even
+        # though it has no electrical lead.  Limit this veto to the extreme
+        # border and leave connected edge Loads untouched.
+        nodes = [
+            node for node in nodes
+            if not (
+                node["class"] == "load"
+                and node["bbox"][0] >= bgr.shape[1] * 0.98
+                and node["_topology_id"] not in direct_contact_ids
+                and _looks_like_numeric_text(
+                    reference_bgr,
+                    node.get("_reference_bbox", node["bbox"]),
+                )
+            )
         ]
     nodes = [
         node for node in nodes
@@ -1465,8 +1726,30 @@ def analyze_circuit_image_topology_hybrid(image_bytes):
             <= BUS_MAX_GLOBAL_SPAN_RATIO
         )
     ]
+    # A page border or crop edge can look like a very long, hairline Bus.
+    # Real Bus symbols are substantially thicker; reject only the extreme
+    # border fragment geometry so legitimate edge-connected Buses remain.
+    image_height, image_width = bgr.shape[:2]
+    nodes = [
+        node for node in nodes
+        if (
+            node["class"] != "bus"
+            or not (
+                max(float(node["bbox"][2]), float(node["bbox"][3])) >
+                max(image_width, image_height) * BUS_BORDER_FRAGMENT_SPAN_RATIO
+                and min(float(node["bbox"][2]), float(node["bbox"][3])) /
+                max(float(node["bbox"][2]), float(node["bbox"][3]), 1e-6) <
+                BUS_BORDER_FRAGMENT_ASPECT_RATIO
+                and (
+                    float(node["bbox"][0]) <= image_width * BUS_BORDER_FRAGMENT_MARGIN_RATIO
+                    or float(node["bbox"][0]) >= image_width * (1.0 - BUS_BORDER_FRAGMENT_MARGIN_RATIO)
+                    or float(node["bbox"][1]) <= image_height * BUS_BORDER_FRAGMENT_MARGIN_RATIO
+                    or float(node["bbox"][1]) >= image_height * (1.0 - BUS_BORDER_FRAGMENT_MARGIN_RATIO)
+                )
+            )
+        )
+    ]
     nodes = suppress_overlapping_bus_fragments(nodes)
-    nodes = suppress_overlapping_transformer_proposals(nodes)
     nodes = split_bus_predictions_at_ink_gaps(bgr, nodes)
     nodes = snap_bus_predictions_to_ink(bgr, nodes)
     remaining_ids = {node["_topology_id"] for node in nodes}
@@ -1508,4 +1791,5 @@ def analyze_circuit_image_topology_hybrid(image_bytes):
         node.pop("_line_reference_bbox", None)
         node.pop("_transformer_shape", None)
         node.pop("_generator_shape", None)
+        node.pop("_canonical_rescue_keep", None)
     return {"status": "success", "nodes": nodes, "lines": output_lines}

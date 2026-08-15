@@ -66,12 +66,14 @@ def parse_yolo_labels(label_path, img_width, img_height):
     return boxes
 
 def main():
-    base_dir = r"C:\Users\hpo20\OneDrive\바탕 화면\Project List\전력계통대회\backend_api"
-    img_dir = os.path.join(base_dir, "icon_recognition/datasets/auto_tune_train_images")
-    lbl_dir = os.path.join(base_dir, "icon_recognition/datasets/auto_tune_train_labels")
+    curr_dir = os.path.dirname(os.path.abspath(__file__))
+    line_rec_dir = os.path.abspath(os.path.join(curr_dir, ".."))
+    
+    img_dir = os.path.join(line_rec_dir, "datasets", "auto_tune_train_images")
+    lbl_dir = os.path.join(line_rec_dir, "datasets", "auto_tune_train_labels")
     
     # 결과를 시각화하여 저장할 새 폴더
-    out_dir = os.path.join(base_dir, "auto_tune_topology_review")
+    out_dir = os.path.join(line_rec_dir, "topology_review_results")
     os.makedirs(out_dir, exist_ok=True)
     
     image_paths = glob.glob(os.path.join(img_dir, "*.jpg")) + glob.glob(os.path.join(img_dir, "*.png"))
@@ -79,7 +81,7 @@ def main():
     all_results = {}
     print(f"Total {len(image_paths)} images found. Processing...")
     
-    for img_path in image_paths:
+    for img_path in sorted(image_paths):
         filename = os.path.basename(img_path)
         name, _ = os.path.splitext(filename)
         lbl_path = os.path.join(lbl_dir, name + ".txt")
@@ -92,22 +94,30 @@ def main():
         boxes = parse_yolo_labels(lbl_path, w, h)
         
         # 1. line_topology.py를 사용해 연결선(Topology) 추출
-        connections, debug_info = extract_line_topology(img, boxes, dilation_iters=3)
+        connections, debug_info = extract_line_topology(img, boxes, dilation_iters=10)
         
         # 2. 결과 JSON에 저장할 데이터 정리
+        valid_lines_info = {}
+        if debug_info and 'valid_lines' in debug_info:
+            for lname, ldata in debug_info['valid_lines'].items():
+                valid_lines_info[lname] = ldata['connected_boxes']
+                
         all_results[filename] = {
+            "boxes_count": len(boxes),
+            "lines_count": len(valid_lines_info),
             "boxes": boxes,
-            "connections": connections
+            "connections": [list(conn) for conn in connections],
+            "lines_detail": valid_lines_info
         }
         
         # 3. 시각화 (원본 이미지 + YOLO 박스 + 예측된 연결선)
         vis_img = visualize_topology(img, boxes, connections, debug_info)
         out_path = os.path.join(out_dir, filename)
         imwrite_korean(out_path, vis_img)
-        print(f"Processed: {filename} (Boxes: {len(boxes)}, Connections: {len(connections)})")
+        print(f"Processed: {filename} (Boxes: {len(boxes)}, Lines: {len(valid_lines_info)}, Connections: {len(connections)})")
         
     # JSON 파일로도 저장 (이후 정답지로 활용/수정 가능)
-    json_path = os.path.join(out_dir, "topology_initial_results.json")
+    json_path = os.path.join(out_dir, "topology_results.json")
     with open(json_path, 'w', encoding='utf-8') as f:
         json.dump(all_results, f, indent=4, ensure_ascii=False)
         
