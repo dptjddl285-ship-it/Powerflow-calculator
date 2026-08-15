@@ -14,7 +14,10 @@ import csv
 import cv2
 import numpy as np
 
-import cv_bus_refined_experiment as bus_cv
+try:
+    from . import cv_bus_refined_experiment as bus_cv
+except ImportError:  # direct execution with backend_api on sys.path
+    import cv_bus_refined_experiment as bus_cv
 
 
 ROOT = Path(__file__).resolve().parent.parent

@@ -1,16 +1,71 @@
-# Python
+# ==========================================
+# Python & Bytecode
+# ==========================================
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Local models and generated experiments: transfer the active checkpoint
-# privately when moving computers; do not push large artifacts to GitHub.
-*.pt
-*.joblib
-runs/
+# ==========================================
+# Virtual Environments & IDE
+# ==========================================
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ==========================================
+# Flutter & Dart (Frontend App)
+# ==========================================
+frontend_app/.dart_tool/
+frontend_app/.flutter-plugins
+frontend_app/.flutter-plugins-dependencies
+frontend_app/.packages
+frontend_app/.pub-cache/
+frontend_app/.pub/
+frontend_app/build/
+frontend_app/ios/Flutter/.last_build_id
+frontend_app/android/app/debug
+frontend_app/android/app/profile
+frontend_app/android/app/release
+
+# ==========================================
+# AI Models & Weight Checkpoints
+# ==========================================
 *.cache
+*.joblib
 backend_api/icon_recognition/models/load_crop_cnn*.pt
 
-# 재생성 가능한 진단/산출물
+# Exclude massive training iterations, keep key weights
+runs/detect/runs/
+!runs/detect/backend_api/auto_tune_runs/finetune_12_clean20_aug640/weights/best.pt
+!backend_api/icon_recognition/models/best.pt
+
+# ==========================================
+# Temporary Diagnosis & Output Dumps
+# ==========================================
 backend_api/temp_data/
 cv_bus_comparison/
 cv_bus_refined_comparison/
@@ -19,6 +74,4 @@ cv_generator_hybrid_comparison/
 hybrid_api_verification/
 cv_load_comparison/
 괴물박스_비교결과/
-
-# 학습용 원본 이미지(라벨은 Roboflow에 있음)
-학습 IEEE/
+*.log
