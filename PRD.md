@@ -2,7 +2,7 @@
 
 > **프로젝트 명**: Powerflow Simulator (VisionFlow)  
 > **부제**: Edge AI 기반 전력계통 단선도(SLD) 자동 인식 및 조류계산(Power Flow) 통합 시뮬레이션 시스템  
-> **버전**: v1.2.0  
+> **버전**: v1.3.0  
 > **작성일자**: 2026-08-15  
 
 ---
@@ -147,3 +147,63 @@
 | **Phase 4** | FastAPI 백엔드 엔드포인트 연동 | `main_server.py` API 구축 완료 (IEEE 케이스 로드/렌더링 API 포함) |
 | **Phase 5** | Flutter 프론트엔드 UI & 인터랙티브 캔버스 | `frontend_app` 캔버스 에디터 및 통신 모듈 |
 | **Phase 6** | 종합 테스트, 대규모 계통 확장 및 인수인계 완료 | 배포 빌드, IEEE/공공데이터 가이드, 인수인계서 및 실증 시연 완료 |
+
+---
+
+## 7. 현재 구현 상태 및 검증 게이트 (2026-08-15)
+
+이 절은 PRD의 요구사항을 현재 코드와 실제 실행 결과에 연결하는 최신 상태 기록이다.
+문서 작성 시점의 추측값이 아니라, 기준 모델과 현재 추론 파이프라인을 직접 실행해
+확인한 결과만 기록한다.
+
+### 7.1 현재 비전 파이프라인
+
+- **분석기**: `backend_api.line_recognition.logic.vision_logic_topology_hybrid`
+- **체크포인트**: `runs/detect/backend_api/auto_tune_runs/finetune_12_clean20_aug640/weights/best.pt`
+- **검출/복원 흐름**: YOLO 심볼 검출 → 1280 canonical scale-preserving 추론 → 원본 좌표 복원 → 숫자·텍스트 veto → CV Bus/Load 보강 → Port-aware 및 기존 선 토폴로지 병합
+- **전기적 규칙**: Bus의 굵기·연속성, Generator 원형/리드, Transformer 2코일 형상, Load 화살표·리드 연결을 후처리에서 확인한다.
+- **스케일 처리**: 원본 이미지를 왜곡하지 않고 canonical 캔버스에서 추론한 뒤 bounding box와 선 좌표를 원본 좌표계로 되돌린다.
+
+### 7.2 검증 결과
+
+| 게이트 | 결과 | 세부 |
+| :--- | :---: | :--- |
+| Native Train | **100.0%** | 20장, TP 496 / FP 0 / FN 0 |
+| Bus | **100.0%** | TP 237 / FP 0 / FN 0 |
+| Generator | **100.0%** | TP 85 / FP 0 / FN 0 |
+| Load | **100.0%** | TP 142 / FP 0 / FN 0 |
+| Transformer | **100.0%** | TP 32 / FP 0 / FN 0 |
+| Scale Matrix 640×640 | **100.0%** | 19장, TP 416 / FP 0 / FN 0 |
+| Scale Matrix 912×900 | **100.0%** | 19장, TP 416 / FP 0 / FN 0 |
+| Scale Matrix 1280×720 | **100.0%** | 19장, TP 416 / FP 0 / FN 0 |
+| Scale Matrix 1600×900 | **100.0%** | 19장, TP 416 / FP 0 / FN 0 |
+| Scale Matrix 900×1400 | **100.0%** | 19장, TP 416 / FP 0 / FN 0 |
+
+Scale Matrix는 검증 정책상 `test_image35`를 제외한 19장 조합으로 실행한다.
+세부 결과는 `feedback_artifacts/scale_matrix_current.json`에 저장한다.
+
+### 7.3 현재 대기 상태와 다음 순서
+
+1. `new pictures` 20장의 원본·박스·좌우 비교본을 사람 검토용으로 유지한다.
+2. 사용자가 오검출·미검출 위치를 전달하면, 그 현상을 일반화하는 전략 한 가지만 수정한다.
+3. 수정 후 Native Train 100%와 5종 Scale Matrix 100%를 다시 확인한다.
+4. 두 게이트를 통과한 동일 코드 상태에서만 Official Test를 **1회** 실행한다.
+
+현재는 새 그림 시각 검토를 기다리는 상태이며, 새 그림을 학습 데이터로 편입하지 않는다.
+Official Test를 동일 코드 상태에서 반복 실행하지 않으며, 원본 데이터와 체크포인트를
+삭제하거나 덮어쓰지 않는다.
+
+### 7.4 재현 명령
+
+```powershell
+$env:AUTO_TUNE_MODEL_PATH='runs/detect/backend_api/auto_tune_runs/finetune_12_clean20_aug640/weights/best.pt'
+$env:AUTO_TUNE_USE_PORT_AWARE='1'
+$env:AUTO_TUNE_USE_CV_LOAD_PORTS='1'
+$env:AUTO_TUNE_USE_SECONDARY_INFERENCE='1'
+$env:AUTO_TUNE_USE_CV_BUS_RESCUES='1'
+$env:AUTO_TUNE_USE_CANONICAL_RESIZE_INFERENCE='1'
+python -m backend_api.validation_tests.auto_tune_evaluator `
+  --split train `
+  --module backend_api.line_recognition.logic.vision_logic_topology_hybrid `
+  --iou 0.4
+```
