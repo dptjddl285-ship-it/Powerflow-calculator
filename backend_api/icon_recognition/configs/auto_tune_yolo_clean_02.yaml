@@ -1,0 +1,8 @@
+path: backend_api
+train: icon_recognition/datasets/auto_tune_yolo_clean_02/train/images
+val: icon_recognition/datasets/auto_tune_yolo_clean_02/train/images
+names:
+  0: bus
+  1: generator
+  2: load
+  3: transformer

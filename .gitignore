@@ -2,6 +2,14 @@
 __pycache__/
 *.pyc
 
+# Local models and generated experiments: transfer the active checkpoint
+# privately when moving computers; do not push large artifacts to GitHub.
+*.pt
+*.joblib
+runs/
+*.cache
+backend_api/icon_recognition/models/load_crop_cnn*.pt
+
 # 재생성 가능한 진단/산출물
 backend_api/temp_data/
 cv_bus_comparison/

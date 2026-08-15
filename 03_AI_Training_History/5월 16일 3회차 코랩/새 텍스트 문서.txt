@@ -1,0 +1,28 @@
+    Epoch    GPU_mem   box_loss   cls_loss   dfl_loss  Instances       Size
+    238/300      7.23G     0.5613     0.5056     0.9589        309       1280: 100% ━━━━━━━━━━━━ 9/9 2.7it/s 3.3s
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 100% ━━━━━━━━━━━━ 1/1 4.4it/s 0.2s
+                   all          8        200      0.499      0.449      0.359      0.228
+EarlyStopping: Training stopped early as no improvement observed in last 100 epochs. Best results observed at epoch 138, best model saved as best.pt.
+To update EarlyStopping(patience=100) pass a new patience value, i.e. `patience=300` or use `patience=0` to disable EarlyStopping.
+
+238 epochs completed in 0.307 hours.
+Optimizer stripped from /content/runs/detect/train-2/weights/last.pt, 5.7MB
+Optimizer stripped from /content/runs/detect/train-2/weights/best.pt, 5.7MB
+
+Validating /content/runs/detect/train-2/weights/best.pt...
+Ultralytics 8.4.51 🚀 Python-3.12.13 torch-2.10.0+cu128 CUDA:0 (Tesla T4, 14913MiB)
+YOLO11n summary (fused): 101 layers, 2,582,932 parameters, 0 gradients, 6.3 GFLOPs
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 100% ━━━━━━━━━━━━ 1/1 7.0it/s 0.1s
+                   all          8        200      0.455      0.535      0.409      0.255
+                   bus          8         88      0.349      0.493      0.349      0.185
+             generator          8         29      0.614      0.828       0.66      0.535
+                  load          8         66      0.406      0.576      0.358      0.175
+           transformer          5         17      0.451      0.242      0.269      0.126
+Speed: 0.7ms preprocess, 8.8ms inference, 0.0ms loss, 2.5ms postprocess per image
+Results saved to /content/runs/detect/train-2
+ultralytics.utils.metrics.DetMetrics object with attributes:
+
+-------------------------------------- 결국 점수는 좀더 좋아졌으나 테스트 사진을 통해 박스를 잘치는지 테스트해보니 완전 엉망이다.
+------------------------------------- 그래서 결국 박스를 타이트하게 치는건유지 + 사진을 10장씩 추가했을때 점수가 올라가는지 확인해봐야할듯하다
+
+--------------------------------------추가로 yolo11n -> yolo11s 사용

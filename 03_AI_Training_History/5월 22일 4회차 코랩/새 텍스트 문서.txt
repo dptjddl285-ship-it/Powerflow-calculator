@@ -1,0 +1,62 @@
+from ultralytics import YOLO
+
+# 1. 's(스몰)' 대신 'm(미디엄)' 모델 투입! (더 깊고 복잡한 패턴을 파악하는 뇌)
+model = YOLO('yolo11m.pt')
+
+# 2. 영혼까지 끌어모은 최후의 밸런스 세팅
+model.train(
+    data=f"{dataset.location}/data.yaml",
+    epochs=300,
+    patience=100,
+    imgsz=1280,
+    batch=4,        # [핵심] 뇌가 커졌으므로 메모리 초과(OOM) 방지를 위해 batch를 4로 줄임
+    device=0,
+    optimizer='auto',
+    plots=True,
+
+    # 🎨 사용자님 요청 반영: '섬세한' 훈련 다양성(Augmentation) 추가
+    mosaic=0.2,     # 괴물 박스 방지를 위해 1.0은 안 되지만, 0.2(20%)로 약하게 켜서 문맥을 보게 함
+    degrees=10.0,   # [요청 반영] 삐뚤어진 사진에 적응하도록 +-10도 회전 허용!
+    scale=0.2,      # 크기 변화 20% 허용 (너무 크면 또 괴물 박스 나오니 조심)
+    fliplr=0.5,     # 좌우 반전은 기호의 의미를 훼손하지 않으므로 50% 확률로 팍팍 추가!
+    hsv_v=0.2       # 조명(밝기) 변화 허용
+)
+
+
+
+------------------------------------------------------------------------------
+
+
+    Epoch    GPU_mem   box_loss   cls_loss   dfl_loss  Instances       Size
+    275/300      8.52G      0.906     0.6753      1.095          4       1280: 100% ━━━━━━━━━━━━ 18/18 1.7it/s 10.6s
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 100% ━━━━━━━━━━━━ 1/1 2.3it/s 0.4s
+                   all          8        200      0.421      0.388      0.298      0.195
+
+      Epoch    GPU_mem   box_loss   cls_loss   dfl_loss  Instances       Size
+    276/300      8.55G     0.8866     0.6538      1.083          4       1280: 100% ━━━━━━━━━━━━ 18/18 1.7it/s 10.6s
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 100% ━━━━━━━━━━━━ 1/1 2.3it/s 0.4s
+                   all          8        200      0.431      0.392      0.307      0.201
+
+      Epoch    GPU_mem   box_loss   cls_loss   dfl_loss  Instances       Size
+    277/300      8.62G     0.9218     0.6595      1.096          4       1280: 100% ━━━━━━━━━━━━ 18/18 1.7it/s 10.5s
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 100% ━━━━━━━━━━━━ 1/1 2.3it/s 0.4s
+                   all          8        200      0.433      0.422      0.314      0.211
+EarlyStopping: Training stopped early as no improvement observed in last 100 epochs. Best results observed at epoch 177, best model saved as best.pt.
+To update EarlyStopping(patience=100) pass a new patience value, i.e. `patience=300` or use `patience=0` to disable EarlyStopping.
+
+277 epochs completed in 0.951 hours.
+Optimizer stripped from /content/runs/detect/train/weights/last.pt, 40.7MB
+Optimizer stripped from /content/runs/detect/train/weights/best.pt, 40.7MB
+
+Validating /content/runs/detect/train/weights/best.pt...
+Ultralytics 8.4.52 🚀 Python-3.12.13 torch-2.10.0+cu128 CUDA:0 (Tesla T4, 14913MiB)
+YOLO11m summary (fused): 126 layers, 20,033,116 parameters, 0 gradients, 67.7 GFLOPs
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 100% ━━━━━━━━━━━━ 1/1 2.0it/s 0.5s
+                   all          8        200      0.364      0.398      0.363      0.222
+                   bus          8         88      0.373      0.405      0.322      0.169
+             generator          8         29      0.652      0.793      0.683      0.531
+                  load          8         66       0.43      0.394      0.291      0.127
+           transformer          5         17          0          0      0.155     0.0592
+Speed: 0.9ms preprocess, 47.1ms inference, 0.0ms loss, 1.5ms postprocess per image
+
+--------------m으로 바꿨으나 오히려 점수는 하락 아마 변압기점수가 낮은탓

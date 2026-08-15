@@ -1,0 +1,28 @@
+    Epoch    GPU_mem   box_loss   cls_loss   dfl_loss  Instances       Size
+     84/300      6.38G      1.096      1.106      1.208        323       1280: 100% ━━━━━━━━━━━━ 9/9 2.8it/s 3.2s
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 100% ━━━━━━━━━━━━ 1/1 4.1it/s 0.2s
+                   all          8        200      0.394      0.345      0.311      0.184
+
+      Epoch    GPU_mem   box_loss   cls_loss   dfl_loss  Instances       Size
+     85/300      6.38G      1.159      1.144      1.247        312       1280: 100% ━━━━━━━━━━━━ 9/9 2.4it/s 3.7s
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 100% ━━━━━━━━━━━━ 1/1 2.8it/s 0.4s
+                   all          8        200        0.4      0.334      0.324        0.2
+EarlyStopping: Training stopped early as no improvement observed in last 50 epochs. Best results observed at epoch 35, best model saved as best.pt.
+To update EarlyStopping(patience=50) pass a new patience value, i.e. `patience=300` or use `patience=0` to disable EarlyStopping.
+
+85 epochs completed in 0.124 hours.
+Optimizer stripped from /content/runs/detect/train/weights/last.pt, 5.6MB
+Optimizer stripped from /content/runs/detect/train/weights/best.pt, 5.6MB
+
+Validating /content/runs/detect/train/weights/best.pt...
+Ultralytics 8.4.51 🚀 Python-3.12.13 torch-2.10.0+cu128 CUDA:0 (Tesla T4, 14913MiB)
+YOLO11n summary (fused): 101 layers, 2,582,932 parameters, 0 gradients, 6.3 GFLOPs
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 100% ━━━━━━━━━━━━ 1/1 4.2it/s 0.2s
+                   all          8        200      0.369      0.419      0.333        0.2
+                   bus          8         88      0.264      0.341      0.198     0.0832
+             generator          8         29      0.587      0.828       0.72      0.503
+                  load          8         66      0.257      0.273      0.249      0.101
+           transformer          5         17      0.367      0.235      0.164      0.113
+Speed: 0.9ms preprocess, 13.0ms inference, 0.0ms loss, 11.0ms postprocess per image
+Results saved to /content/runs/detect/train
+ultralytics.utils.metrics.DetMetrics object with attributes:

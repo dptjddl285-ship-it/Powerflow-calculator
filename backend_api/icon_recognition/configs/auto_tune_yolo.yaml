@@ -1,0 +1,8 @@
+path: backend_api
+train: auto_tune_yolo/train/images
+val: auto_tune_yolo/train/images
+names:
+  0: bus
+  1: generator
+  2: load
+  3: transformer
