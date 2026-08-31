@@ -13,7 +13,7 @@ MODELS = {
 }
 
 # 다양한 이미지 선택
-PICKS = ["IEEE24bus.jpg", "14bus.jpg", "24bus.jpg", "36bus.jpg", "5bus.jpg",
+PICKS = ["IEEE24bus.jpg", "14bus.jpg", "24bus.jpg", "39bus.jpg", "5bus.jpg",
          "2026-7-01-1.jpg", "2026-6-23-1.jpg", "circuit.jpg", "1_Original.jpg", "1234.jpg"]
 
 def run(model, img_path, imgsz, conf=0.4, iou=0.45):
