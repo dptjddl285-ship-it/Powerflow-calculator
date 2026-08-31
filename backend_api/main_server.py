@@ -5,10 +5,11 @@ from ultralytics import YOLO
 import pandas as pd
 import io
 import os
+from pathlib import Path
 
 try:
     from core.power_logic import construct_y_bus
-    from core.vision_logic import analyze_circuit_image
+    from core.adaptive_vision_pipeline import analyze_circuit_image_adaptive
 except ImportError as e:
     print(f"❌ 에러: 파일을 찾을 수 없습니다. {e}")
 
@@ -23,7 +24,16 @@ async def startup_event():
     try:
         # 2026_07_30_coslr.pt: cos_lr + 런타임 증강 켜서 재학습한 최신 모델.
         # 24bus/IEEE24bus 변압기까지 잡힘(이전 aug모델은 0개). vision_logic imgsz=960과 세트.
-        yolo_model = YOLO(r"C:\Users\dptjd\Downloads\PowerLens\backend_api\models\2026_07_30_coslr.pt")
+        # The local checkpoint remains the safe default.  A friend/all-class
+        # checkpoint can be selected for the same hybrid pipeline without
+        # changing code: POWERLENS_YOLO_MODEL=<path-to-best.pt>.
+        default_model_path = (
+            Path(__file__).resolve().parent
+            / "models"
+            / "2026_07_30_coslr.pt"
+        )
+        model_path = os.environ.get("POWERLENS_YOLO_MODEL", str(default_model_path))
+        yolo_model = YOLO(model_path)
         print(" ✅ AI 모델(YOLO) 로딩 완료!")
     except Exception as e:
         print(f" ❌ 모델 로딩 실패: {e}")
@@ -36,13 +46,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "ok",
+        "model_loaded": yolo_model is not None,
+    }
+
 # [API 1] 사진 분석 
 @app.post("/analyze_image")
 async def process_image(file: UploadFile = File(...)):
     print("\n📸 [사진 수신] 분석 요청이 들어왔습니다.")
     try:
         image_bytes = await file.read()
-        result_data = analyze_circuit_image(image_bytes, yolo_model)
+        result_data = analyze_circuit_image_adaptive(image_bytes, yolo_model)
         return {"status": "success", "data": result_data}
     except Exception as e:
         return {"status": "error", "message": str(e)}

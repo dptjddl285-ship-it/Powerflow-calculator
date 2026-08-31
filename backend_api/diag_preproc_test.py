@@ -11,7 +11,7 @@ IMG_DIR = os.path.join(BASE, "학습 IEEE")
 OUT = os.path.join(BASE, "backend_api", "temp_data", "diag_preproc")
 os.makedirs(OUT, exist_ok=True)
 
-PICKS = ["IEEE24bus.jpg", "14bus.jpg", "24bus.jpg", "36bus.jpg", "5bus.jpg",
+PICKS = ["IEEE24bus.jpg", "14bus.jpg", "24bus.jpg", "39bus.jpg", "5bus.jpg",
          "2026-7-01-1.jpg", "2026-6-23-1.jpg", "circuit.jpg", "1_Original.jpg", "1234.jpg"]
 
 model = YOLO(MODEL)

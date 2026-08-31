@@ -7,7 +7,7 @@ IMG_DIR = os.path.join(BASE, "학습 IEEE")
 OUT = os.path.join(BASE, "괴물박스_비교결과")
 os.makedirs(OUT, exist_ok=True)
 model = YOLO(os.path.join(BASE, "backend_api", "models", "2026_07_01_03.pt"))
-PICKS = ["IEEE24bus.jpg", "14bus.jpg", "24bus.jpg", "circuit.jpg", "1_Original.jpg", "1234.jpg", "36bus.jpg"]
+PICKS = ["IEEE24bus.jpg", "14bus.jpg", "24bus.jpg", "circuit.jpg", "1_Original.jpg", "1234.jpg", "39bus.jpg"]
 
 def is_monster(w, h, ww, hh, name):
     wr = w/ww; hr = h/hh; area = wr*hr

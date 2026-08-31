@@ -67,7 +67,7 @@ def count_by_class(dets):
     cnt = Counter(NAMES[c] for _,_,c in dets)
     return {k:cnt.get(k,0) for k in ['bus','generator','load','transformer']}
 
-PICKS = ["IEEE24bus.jpg","14bus.jpg","24bus.jpg","36bus.jpg","circuit.jpg","1_Original.jpg","1234.jpg"]
+PICKS = ["IEEE24bus.jpg","14bus.jpg","24bus.jpg","39bus.jpg","circuit.jpg","1_Original.jpg","1234.jpg"]
 print(f"{'이미지':18} {'방식':8} {'bus':>4} {'gen':>4} {'load':>5} {'trans':>5} {'합계':>4}")
 print("-"*60)
 for f in PICKS:
