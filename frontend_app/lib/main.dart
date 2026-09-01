@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'dart:math' as math;
 import 'dart:convert'; 
 import 'package:http/http.dart' as http; 
+import 'screens/review_page.dart'; 
 
 // 절대 끊기지 않는 무한 캔버스의 크기 (10만 픽셀)
 const double CANVAS_SIZE = 100000.0;
@@ -348,6 +349,86 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     });
   }
 
+  void _applyVerifiedSldToCanvas(Map<String, dynamic> sldData) {
+    if (sldData['status'] != 'VERIFIED') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("검증되지 않은(Draft) 데이터는 Canvas에 적용할 수 없습니다."), backgroundColor: Colors.red),
+      );
+      return;
+    }
+
+    _saveState();
+    setState(() {
+      elements.clear();
+      _resetCamera();
+
+      const double offsetMargin = 150.0;
+      final rawNodes = sldData['nodes'] as List? ?? [];
+      final rawLines = sldData['lines'] as List? ?? [];
+
+      for (var node in rawNodes) {
+        String id = node['id']?.toString() ?? '';
+        String aiClass = (node['class']?.toString() ?? 'bus').toLowerCase();
+        var rawBbox = node['bbox'] as List? ?? [0, 0, 10, 10];
+        double cx = (rawBbox[0] as num).toDouble() + CANVAS_CENTER + offsetMargin;
+        double cy = (rawBbox[1] as num).toDouble() + CANVAS_CENTER + offsetMargin;
+        double w = (rawBbox[2] as num).toDouble();
+        double h = (rawBbox[3] as num).toDouble();
+
+        Tool type = Tool.bus;
+        if (aiClass.contains('gen')) type = Tool.generator;
+        else if (aiClass.contains('load')) type = Tool.load;
+        else if (aiClass.contains('trans')) type = Tool.transformer;
+        else if (aiClass.contains('bus')) type = Tool.bus;
+
+        if (type == Tool.bus) {
+          if (w > h) { h = 10.0; }
+          else { w = 10.0; }
+        } else {
+          double size = math.max(w, h).clamp(30.0, 50.0);
+          w = size; h = size;
+        }
+
+        elements.add(DrawingElement(id: id, type: type, position: Offset(cx, cy), width: w, height: h));
+      }
+
+      for (var line in rawLines) {
+        String lineId = line['line_id']?.toString() ?? line['id']?.toString() ?? '';
+        List<dynamic> rawPath = line['path'] as List? ?? [];
+        List<dynamic> connected = line['connected_to'] as List? ?? [];
+
+        if (rawPath.length >= 2) {
+          Offset startPos = Offset((rawPath.first[0] as num).toDouble() + CANVAS_CENTER + offsetMargin, (rawPath.first[1] as num).toDouble() + CANVAS_CENTER + offsetMargin);
+          Offset endPos = Offset((rawPath.last[0] as num).toDouble() + CANVAS_CENTER + offsetMargin, (rawPath.last[1] as num).toDouble() + CANVAS_CENTER + offsetMargin);
+
+          Offset midPos = rawPath.length > 2
+              ? Offset((rawPath[(rawPath.length / 2).floor()][0] as num).toDouble() + CANVAS_CENTER + offsetMargin, (rawPath[(rawPath.length / 2).floor()][1] as num).toDouble() + CANVAS_CENTER + offsetMargin)
+              : Offset((startPos.dx + endPos.dx) / 2, (startPos.dy + endPos.dy) / 2);
+
+          List<Offset> parsedPath = [];
+          for (var pt in rawPath) {
+            parsedPath.add(Offset((pt[0] as num).toDouble() + CANVAS_CENTER + offsetMargin, (pt[1] as num).toDouble() + CANVAS_CENTER + offsetMargin));
+          }
+
+          elements.add(DrawingElement(
+            id: lineId,
+            type: Tool.line,
+            position: startPos,
+            midPosition: midPos,
+            endPosition: endPos,
+            aiPath: parsedPath,
+            startElementId: connected.isNotEmpty ? connected[0].toString() : null,
+            endElementId: connected.length > 1 ? connected[1].toString() : null,
+          ));
+        }
+      }
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("✓ 최종 검증된(Verified SLD) 단선도가 캔버스에 배치되었습니다!"), backgroundColor: Colors.green),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -356,6 +437,28 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         title: const Text("Power Designer Pro", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         backgroundColor: Colors.blueGrey[900],
         actions: [
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => ObjectReviewPage(
+                    onProceedToCanvas: (verifiedSldData) {
+                      _applyVerifiedSldToCanvas(verifiedSldData);
+                      Navigator.pop(context);
+                    },
+                  ),
+                ),
+              );
+            },
+            icon: const Icon(Icons.rate_review, color: Colors.white, size: 18),
+            label: const Text("🔍 AI 도면 검수 (SLD Review)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.purple.shade700,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            ),
+          ),
+          const SizedBox(width: 8),
           IconButton(icon: const Icon(Icons.undo, color: Colors.white), onPressed: historyStack.isNotEmpty ? _undo : null),
           IconButton(icon: const Icon(Icons.redo, color: Colors.white), onPressed: redoStack.isNotEmpty ? _redo : null),
           Padding(

@@ -2645,6 +2645,8 @@ def analyze_circuit_image(image_bytes, model, load_mask_mode="box"):
             "bbox": [float(value) for value in bbox],
             "confidence": float(confidence),
             "source": source,
+            "review_status": "DETECTED",
+            "review_reasons": [],
         })
         component_classes[comp_id] = class_name
         component_metadata[comp_id] = dict(metadata or {})
@@ -3140,6 +3142,38 @@ def analyze_circuit_image(image_bytes, model, load_mask_mode="box"):
     if os.environ.get("POWERLENS_SKIP_TOPOLOGY", "0") == "1":
         return {"nodes": predictions, "lines": []}
 
+    topology_data, debug_info = _trace_circuit_topology(
+        img,
+        components,
+        component_classes,
+        component_metadata=component_metadata,
+        load_candidates_by_component=load_candidates_by_component,
+        load_mask_mode=load_mask_mode,
+    )
+
+    result = {
+        "nodes": predictions,
+        "lines": topology_data,
+    }
+    result.update(debug_info)
+    return result
+
+
+def _trace_circuit_topology(
+    img,
+    components,
+    component_classes,
+    component_metadata=None,
+    load_candidates_by_component=None,
+    load_mask_mode="box",
+):
+    """Trace electrical skeleton connections between resolved SLD components."""
+    if component_metadata is None:
+        component_metadata = {}
+    if load_candidates_by_component is None:
+        load_candidates_by_component = {}
+
+    h_img, w_img = img.shape[:2]
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     # Thin anti-aliased conductors can be lighter than symbol outlines. The
     # previous global/adaptive AND retained only pixels accepted by both
@@ -3148,6 +3182,7 @@ def analyze_circuit_image(image_bytes, model, load_mask_mode="box"):
     # non-conductor ink.
     binary = _topology_hysteresis_binary(gray)
     topology_binary_initial_pixels = int(np.count_nonzero(binary))
+
     # Labels are not electrical conductors. Remove isolated number-like
     # components before object masking and skeletonization so the topology
     # walker cannot route a real wire through a bus number.
@@ -3219,20 +3254,21 @@ def analyze_circuit_image(image_bytes, model, load_mask_mode="box"):
         np.count_nonzero(binary) - np.count_nonzero(binary_before_gap_bridge)
     )
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2,2))
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
     binary_closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-    
+
     skeleton = skeletonize_binary(binary_closed)
 
     endpoints = set()
-    for y in range(1, h_img-1):
-        for x in range(1, w_img-1):
+    for y in range(1, h_img - 1):
+        for x in range(1, w_img - 1):
             if skeleton[y, x] == 255:
                 n_count = 0
                 for dy in [-1, 0, 1]:
                     for dx in [-1, 0, 1]:
-                        if dx == 0 and dy == 0: continue
-                        if skeleton[y+dy, x+dx] == 255:
+                        if dx == 0 and dy == 0:
+                            continue
+                        if skeleton[y + dy, x + dx] == 255:
                             n_count += 1
                 if n_count == 1:
                     endpoints.add((x, y))
@@ -3242,8 +3278,8 @@ def analyze_circuit_image(image_bytes, model, load_mask_mode="box"):
             component_id,
             component_classes[component_id],
             components[component_id],
-            load_candidate=component_metadata[component_id].get("load_candidate"),
-            transformer_info=component_metadata[component_id].get("transformer"),
+            load_candidate=component_metadata.get(component_id, {}).get("load_candidate"),
+            transformer_info=component_metadata.get(component_id, {}).get("transformer"),
         )
         for component_id in components
     }
@@ -3263,7 +3299,7 @@ def analyze_circuit_image(image_bytes, model, load_mask_mode="box"):
     )
 
     # The CV load detector has already proven a cardinal lead reaches a
-    # specific bus.  Keep that validated relation when masking the load box
+    # specific bus. Keep that validated relation when masking the load box
     # erased the final skeleton endpoint; do not use a generic nearest-bus
     # fallback here.
     line_candidates = _add_validated_load_bus_fallbacks(
@@ -3274,7 +3310,7 @@ def analyze_circuit_image(image_bytes, model, load_mask_mode="box"):
         topology_thin_width=topology_thin_width,
     )
 
-    # A load or generator has one physical shaft/terminal in these SLDs.  A
+    # A load or generator has one physical shaft/terminal in these SLDs. A
     # transformer is intentionally excluded: its opposite ports are kept
     # separately, and a drawing may expose only one of them.
     line_candidates = _keep_single_port_components(
@@ -3293,11 +3329,7 @@ def analyze_circuit_image(image_bytes, model, load_mask_mode="box"):
             "trace_method": candidate.get("trace_method", "skeleton"),
         })
 
-    # 최종 결과를 딕셔너리로 묶어서 리턴 (서버가 이를 JSON으로 플러터에 넘김)
-    result = {
-        "nodes": predictions,
-        "lines": topology_data
-    }
+    debug_info = {}
     if os.environ.get("POWERLENS_TOPOLOGY_DEBUG", "0") == "1":
         endpoint_class_counts = {}
         for component_id in endpoint_to_comp.values():
@@ -3321,7 +3353,7 @@ def analyze_circuit_image(image_bytes, model, load_mask_mode="box"):
             label = int(terminal_labels[y, x])
             if label > 0:
                 terminals_per_component[label] = terminals_per_component.get(label, 0) + 1
-        result["topology_debug"] = {
+        debug_info["topology_debug"] = {
             "binary_initial_pixels": topology_binary_initial_pixels,
             "binary_after_text_pixels": topology_binary_after_text_pixels,
             "binary_after_objects_pixels": topology_binary_after_objects_pixels,
@@ -3345,8 +3377,62 @@ def analyze_circuit_image(image_bytes, model, load_mask_mode="box"):
                 for candidate in line_candidates
             )),
         }
-        result["_topology_masks"] = {
+        debug_info["_topology_masks"] = {
             "binary_closed": binary_closed,
             "skeleton": skeleton,
         }
+
+    return topology_data, debug_info
+
+
+def detect_sld_objects(image_bytes, model, load_mask_mode="box"):
+    """Detect SLD components/symbols without running connection topology tracing."""
+    old_val = os.environ.get("POWERLENS_SKIP_TOPOLOGY")
+    os.environ["POWERLENS_SKIP_TOPOLOGY"] = "1"
+    try:
+        return analyze_circuit_image(image_bytes, model, load_mask_mode=load_mask_mode)
+    finally:
+        if old_val is None:
+            os.environ.pop("POWERLENS_SKIP_TOPOLOGY", None)
+        else:
+            os.environ["POWERLENS_SKIP_TOPOLOGY"] = old_val
+
+
+def detect_sld_connections(image_bytes, confirmed_nodes, load_mask_mode="box"):
+    """Trace electrical line connections using externally confirmed SLD nodes."""
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("Could not decode circuit image for connection detection")
+
+    components = {}
+    component_classes = {}
+    component_metadata = {}
+    load_candidates_by_component = {}
+
+    for node in confirmed_nodes:
+        comp_id = str(node.get("id"))
+        class_name = str(node.get("class") or node.get("class_name") or "bus")
+        bbox = node.get("bbox", [0.0, 0.0, 10.0, 10.0])
+        _set_component_box(components, comp_id, bbox, img.shape)
+        component_classes[comp_id] = class_name
+        metadata = dict(node.get("metadata") or {})
+        component_metadata[comp_id] = metadata
+        if "load_candidate" in metadata:
+            load_candidates_by_component[comp_id] = metadata["load_candidate"]
+
+    topology_data, debug_info = _trace_circuit_topology(
+        img,
+        components,
+        component_classes,
+        component_metadata=component_metadata,
+        load_candidates_by_component=load_candidates_by_component,
+        load_mask_mode=load_mask_mode,
+    )
+
+    result = {
+        "nodes": confirmed_nodes,
+        "lines": topology_data,
+    }
+    result.update(debug_info)
     return result
