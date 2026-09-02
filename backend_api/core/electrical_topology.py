@@ -375,7 +375,13 @@ def _crossing_lane_graph(
                 float(second_centre_y - first_centre_y),
             ))
             centre_distance = float(np.linalg.norm(centre_vector))
-            if not 8.0 <= centre_distance <= 32.0:
+            # A shallow one-pixel X is commonly represented by two degree-3
+            # islands only 5--7 pixels apart after the 5x5 junction dilation.
+            # Requiring an 8-pixel separation skips the two halves of that
+            # crossing; each half may then pair with the next nearby crossing
+            # and swap lanes.  The strict internal-arm and two-collinear-lane
+            # checks below are the safety gate, so accept the local pair first.
+            if not 3.0 <= centre_distance <= 32.0:
                 continue
             centre_vector /= centre_distance
 
@@ -715,6 +721,7 @@ def trace_electrical_connections(
     endpoint_to_component: dict[tuple[int, int], str],
     endpoint_to_port: dict[tuple[int, int], dict[str, Any]],
     component_classes: dict[str, str],
+    requested_pair: set[str] | frozenset[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Enumerate and select conductor paths with electrical port capacities.
 
@@ -773,7 +780,17 @@ def trace_electrical_connections(
                     component_classes.get(target_component, ""),
                 }
                 length = _path_length(path)
-                minimum_length = 3.0 if classes.intersection({"load", "generator"}) else 12.0
+                # Device symbols can sit immediately beside a bus.  Once the
+                # object boxes are masked, only a few source-skeleton pixels
+                # may remain even though both direction-compatible ports are
+                # valid.  Transformers need the same short physical-lead
+                # allowance as loads/generators; this still requires an
+                # existing connected skeleton path and never draws a bridge.
+                minimum_length = (
+                    3.0
+                    if classes.intersection({"load", "generator", "transformer"})
+                    else 12.0
+                )
                 if length < minimum_length:
                     continue
                 source_port = endpoint_to_port.get(start, {})
@@ -844,6 +861,18 @@ def trace_electrical_connections(
         ),
         reverse=True,
     )
+    if requested_pair is not None:
+        wanted = frozenset(str(component_id) for component_id in requested_pair)
+        ordered = [
+            candidate
+            for candidate in ordered
+            if frozenset(candidate["connected_to"]) == wanted
+        ]
+        # A user-selected retry may bypass competition with an unrelated
+        # route that consumed the same endpoint. It must still be a normal
+        # direction-compatible candidate on the source skeleton.
+        return ordered[:1]
+
     for candidate in ordered:
         first_endpoint = candidate["source_endpoint"]
         second_endpoint = candidate["target_endpoint"]

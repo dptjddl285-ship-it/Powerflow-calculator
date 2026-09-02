@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -23,6 +24,7 @@ from core.vision_logic import (  # noqa: E402
     _remove_numeric_text_components,
     _restore_inline_load_conductor,
     _secondary_bus_family_indices,
+    _yolo_transformer_port_metadata,
 )
 from cv_load_experiment import (  # noqa: E402
     LoadCandidate,
@@ -308,6 +310,25 @@ class SymbolConflictFilterTest(unittest.TestCase):
             _secondary_bus_family_indices(records, primary_thickness=2.17),
             {0, 1, 2, 4},
         )
+
+    def test_yolo_transformer_recovers_unique_bus_backed_orientation(self) -> None:
+        image = np.full((120, 120, 3), 255, dtype=np.uint8)
+
+        with patch(
+            "core.vision_logic._circle_pair_has_two_bus_ports",
+            side_effect=lambda _image, transformer, _buses: (
+                transformer["orientation"] == "vertical"
+            ),
+        ):
+            metadata = _yolo_transformer_port_metadata(
+                image,
+                [60.0, 60.0, 48.0, 24.0],
+                [[45, 10, 75, 20], [45, 100, 75, 110]],
+            )
+
+        self.assertIsNotNone(metadata)
+        self.assertEqual(metadata["orientation"], "vertical")
+        self.assertTrue(metadata["electrical_two_port"])
 
     def test_load_is_a_one_sided_electrical_terminal(self) -> None:
         binary = np.zeros((100, 100), dtype=np.uint8)

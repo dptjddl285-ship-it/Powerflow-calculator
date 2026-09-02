@@ -408,6 +408,16 @@ def validate_graph(
         if node.get("id") is not None
     }
     degree = {node_id: 0 for node_id in classes}
+    nodes_by_id = {
+        str(node.get("id")): node
+        for node in node_list
+        if node.get("id") is not None
+    }
+    transformer_sides: dict[str, set[str]] = {
+        node_id: set()
+        for node_id, class_name in classes.items()
+        if class_name == "transformer"
+    }
     issues: list[GraphIssue] = []
     seen_pairs: set[tuple[str, str]] = set()
 
@@ -432,6 +442,47 @@ def validate_graph(
         degree[first] += 1
         degree[second] += 1
 
+        path = line.get("path")
+        for endpoint_index, component_id, port_key in (
+            (0, first, "source_port"),
+            (-1, second, "target_port"),
+        ):
+            if classes.get(component_id) != "transformer":
+                continue
+            side = str(line.get(port_key, "")).lower()
+            if side not in {"top", "bottom", "left", "right"}:
+                node = nodes_by_id.get(component_id, {})
+                bbox = node.get("bbox")
+                if (
+                    isinstance(path, (list, tuple))
+                    and path
+                    and isinstance(bbox, (list, tuple))
+                    and len(bbox) == 4
+                    and isinstance(path[endpoint_index], (list, tuple))
+                    and len(path[endpoint_index]) >= 2
+                ):
+                    cx, cy, box_width, box_height = (
+                        float(value) for value in bbox
+                    )
+                    px, py = (
+                        float(path[endpoint_index][0]),
+                        float(path[endpoint_index][1]),
+                    )
+                    metadata = node.get("metadata") or {}
+                    transformer = metadata.get("transformer") or {}
+                    orientation = str(transformer.get("orientation", ""))
+                    if orientation not in {"vertical", "horizontal"}:
+                        orientation = (
+                            "vertical" if box_height >= box_width else "horizontal"
+                        )
+                    side = (
+                        ("top" if py < cy else "bottom")
+                        if orientation == "vertical"
+                        else ("left" if px < cx else "right")
+                    )
+            if side in {"top", "bottom", "left", "right"}:
+                transformer_sides[component_id].add(side)
+
         endpoint_classes = {classes[first], classes[second]}
         if endpoint_classes <= {"load", "generator"}:
             issues.append(GraphIssue("error", "invalid_device_pair", "Load/generator devices must connect through a bus", pair))
@@ -445,13 +496,44 @@ def validate_graph(
                 f"{class_name} must have exactly one electrical connection; found {node_degree}",
                 (node_id,),
             ))
-        elif class_name == "transformer" and node_degree not in {1, 2}:
-            issues.append(GraphIssue(
-                "warning",
-                "invalid_transformer_degree",
-                f"Transformer should expose one or two visible ports; found {node_degree}",
-                (node_id,),
-            ))
+        # A transformer may have multiple conductors on either electrical
+        # side, so total degree alone is insufficient.  Require evidence for
+        # both opposite sides while allowing 2+2 (degree 4) arrangements.
+        elif class_name == "transformer":
+            node = nodes_by_id.get(node_id, {})
+            metadata = node.get("metadata") or {}
+            transformer = metadata.get("transformer") or {}
+            orientation = str(transformer.get("orientation", ""))
+            if orientation not in {"vertical", "horizontal"}:
+                bbox = node.get("bbox")
+                if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                    orientation = (
+                        "vertical"
+                        if float(bbox[3]) >= float(bbox[2])
+                        else "horizontal"
+                    )
+            expected_sides = (
+                {"left", "right"}
+                if orientation == "horizontal"
+                else {"top", "bottom"}
+            )
+            connected_sides = transformer_sides.get(node_id, set())
+            if node_degree == 0:
+                issues.append(GraphIssue(
+                    "warning",
+                    "invalid_transformer_degree",
+                    "변압기에 추적된 전기 연결이 없습니다.",
+                    (node_id,),
+                ))
+            elif node_degree == 1 or not expected_sides.issubset(connected_sides):
+                side_text = ", ".join(sorted(connected_sides)) or "확인 불가"
+                issues.append(GraphIssue(
+                    "error",
+                    "invalid_transformer_degree",
+                    "변압기의 양측 전기 포트가 모두 연결되어야 합니다; "
+                    f"현재 연결 측: {side_text}",
+                    (node_id,),
+                ))
         elif class_name == "bus" and node_degree == 0:
             issues.append(GraphIssue(
                 "warning",
@@ -525,4 +607,3 @@ def build_runtime_report(
         "graph_issues": [issue.to_dict() for issue in issues],
         "retry_plan": retry_plan,
     }
-

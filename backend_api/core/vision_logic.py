@@ -1446,6 +1446,38 @@ def _circle_pair_has_two_bus_ports(image, transformer, bus_boxes):
     return reaches_bus(first_roi) and reaches_bus(second_roi)
 
 
+def _yolo_transformer_port_metadata(image, bbox, bus_boxes):
+    """Recover electrical orientation for a locally confirmed YOLO winding.
+
+    A YOLO+local-CV transformer does not carry the orientation metadata emitted
+    by ``detect_cv_transformers``. Falling back to the box aspect ratio is
+    wrong for wide wave windings: their electrical terminals are above and
+    below the symbol. Reuse the existing bus-reach check in both orientations
+    and keep an orientation only when one opposite-side pair is proven.
+    """
+    x_center, y_center, width, height = (float(value) for value in bbox)
+    base = {
+        "x": x_center,
+        "y": y_center,
+        "w": width,
+        "h": height,
+        "style": "circle_pair",
+    }
+    supported = []
+    for orientation in ("vertical", "horizontal"):
+        candidate = {**base, "orientation": orientation}
+        if _circle_pair_has_two_bus_ports(image, candidate, bus_boxes):
+            supported.append(orientation)
+    if len(supported) != 1:
+        return None
+    return {
+        **base,
+        "orientation": supported[0],
+        "electrical_two_port": True,
+        "orientation_source": "opposite_ports_reach_cv_bus_network",
+    }
+
+
 def _circle_pair_has_hollow_interior(image, transformer):
     """Reject filled bus bars that Hough circles mistake for two windings."""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -2576,7 +2608,13 @@ def _has_compact_transformer_ring_pair(
     return False
 
 
-def analyze_circuit_image(image_bytes, model, load_mask_mode="box"):
+def analyze_circuit_image(
+    image_bytes,
+    model,
+    load_mask_mode="box",
+    *,
+    skip_topology=False,
+):
     # 1. 바이트를 OpenCV 이미지로 변환 (파일 저장 불필요)
     nparr = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -2639,13 +2677,34 @@ def analyze_circuit_image(image_bytes, model, load_mask_mode="box"):
 
     def add_node(class_name, bbox, confidence, source, metadata=None):
         comp_id = f"{class_name}_{len(predictions)}"
-        predictions.append({
+        prediction = {
             "id": comp_id,
             "class": class_name,
             "bbox": [float(value) for value in bbox],
             "confidence": float(confidence),
             "source": source,
-        })
+        }
+        # The staged Review API runs object detection and line tracing in two
+        # separate requests. Preserve the electrically meaningful transformer
+        # orientation across that boundary. Wide wave windings still connect
+        # vertically, so reconstructing ports from bbox aspect ratio is wrong.
+        transformer = (metadata or {}).get("transformer")
+        if class_name == "transformer" and isinstance(transformer, dict):
+            serializable_transformer = {
+                key: transformer[key]
+                for key in (
+                    "style",
+                    "orientation",
+                    "electrical_two_port",
+                    "orientation_source",
+                )
+                if key in transformer
+            }
+            if serializable_transformer:
+                prediction["metadata"] = {
+                    "transformer": serializable_transformer,
+                }
+        predictions.append(prediction)
         component_classes[comp_id] = class_name
         component_metadata[comp_id] = dict(metadata or {})
         _set_component_box(components, comp_id, bbox, img.shape)
@@ -2987,12 +3046,24 @@ def analyze_circuit_image(image_bytes, model, load_mask_mode="box"):
                         )
                     )
                 ):
+                    transformer_metadata = _yolo_transformer_port_metadata(
+                        img,
+                        bbox,
+                        load_bus_boxes,
+                    )
                     add_node(
                         "transformer",
                         bbox,
                         confidence,
                         "yolo_transformer_cv_pair",
-                        {"yolo_bbox": bbox},
+                        {
+                            "yolo_bbox": bbox,
+                            **(
+                                {"transformer": transformer_metadata}
+                                if transformer_metadata is not None
+                                else {}
+                            ),
+                        },
                     )
                     predictions[-1]["yolo_support"] = confidence
                 continue
@@ -3137,8 +3208,35 @@ def analyze_circuit_image(image_bytes, model, load_mask_mode="box"):
 
     # Object-only evaluation and editor previews can skip the expensive graph
     # walk while keeping exactly the same node candidates and CV metadata.
-    if os.environ.get("POWERLENS_SKIP_TOPOLOGY", "0") == "1":
+    if skip_topology or os.environ.get("POWERLENS_SKIP_TOPOLOGY", "0") == "1":
         return {"nodes": predictions, "lines": []}
+
+    topology_data, debug_info = _trace_circuit_topology(
+        img,
+        components,
+        component_classes,
+        component_metadata=component_metadata,
+        load_candidates_by_component=load_candidates_by_component,
+        load_mask_mode=load_mask_mode,
+    )
+    result = {"nodes": predictions, "lines": topology_data}
+    result.update(debug_info)
+    return result
+
+
+def _trace_circuit_topology(
+    img,
+    components,
+    component_classes,
+    component_metadata=None,
+    load_candidates_by_component=None,
+    load_mask_mode="box",
+    requested_pair=None,
+):
+    """Run the existing pixel topology tracer for an approved object set."""
+    component_metadata = component_metadata or {}
+    load_candidates_by_component = load_candidates_by_component or {}
+    h_img, w_img = img.shape[:2]
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     # Thin anti-aliased conductors can be lighter than symbol outlines. The
@@ -3242,8 +3340,8 @@ def analyze_circuit_image(image_bytes, model, load_mask_mode="box"):
             component_id,
             component_classes[component_id],
             components[component_id],
-            load_candidate=component_metadata[component_id].get("load_candidate"),
-            transformer_info=component_metadata[component_id].get("transformer"),
+            load_candidate=component_metadata.get(component_id, {}).get("load_candidate"),
+            transformer_info=component_metadata.get(component_id, {}).get("transformer"),
         )
         for component_id in components
     }
@@ -3260,6 +3358,7 @@ def analyze_circuit_image(image_bytes, model, load_mask_mode="box"):
         endpoint_to_comp,
         endpoint_to_port,
         component_classes,
+        requested_pair=requested_pair,
     )
 
     # The CV load detector has already proven a cardinal lead reaches a
@@ -3293,11 +3392,7 @@ def analyze_circuit_image(image_bytes, model, load_mask_mode="box"):
             "trace_method": candidate.get("trace_method", "skeleton"),
         })
 
-    # 최종 결과를 딕셔너리로 묶어서 리턴 (서버가 이를 JSON으로 플러터에 넘김)
-    result = {
-        "nodes": predictions,
-        "lines": topology_data
-    }
+    debug_info = {}
     if os.environ.get("POWERLENS_TOPOLOGY_DEBUG", "0") == "1":
         endpoint_class_counts = {}
         for component_id in endpoint_to_comp.values():
@@ -3321,7 +3416,7 @@ def analyze_circuit_image(image_bytes, model, load_mask_mode="box"):
             label = int(terminal_labels[y, x])
             if label > 0:
                 terminals_per_component[label] = terminals_per_component.get(label, 0) + 1
-        result["topology_debug"] = {
+        debug_info["topology_debug"] = {
             "binary_initial_pixels": topology_binary_initial_pixels,
             "binary_after_text_pixels": topology_binary_after_text_pixels,
             "binary_after_objects_pixels": topology_binary_after_objects_pixels,
@@ -3345,8 +3440,59 @@ def analyze_circuit_image(image_bytes, model, load_mask_mode="box"):
                 for candidate in line_candidates
             )),
         }
-        result["_topology_masks"] = {
+        debug_info["_topology_masks"] = {
             "binary_closed": binary_closed,
             "skeleton": skeleton,
         }
+    return topology_data, debug_info
+
+
+def detect_sld_objects(image_bytes, model, load_mask_mode="box"):
+    """Detect symbols without retaining the topology result."""
+    return analyze_circuit_image(
+        image_bytes,
+        model,
+        load_mask_mode=load_mask_mode,
+        skip_topology=True,
+    )
+
+
+def detect_sld_connections(
+    image_bytes,
+    confirmed_nodes,
+    load_mask_mode="box",
+    requested_pair=None,
+):
+    """Trace real source pixels again using the human-approved object boxes."""
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("Could not decode circuit image for connection detection")
+
+    components = {}
+    component_classes = {}
+    component_metadata = {}
+    load_candidates_by_component = {}
+    for node in confirmed_nodes:
+        component_id = str(node.get("id"))
+        class_name = str(node.get("class") or node.get("class_name") or "bus")
+        bbox = node.get("bbox", [0.0, 0.0, 10.0, 10.0])
+        _set_component_box(components, component_id, bbox, img.shape)
+        component_classes[component_id] = class_name
+        metadata = dict(node.get("metadata") or {})
+        component_metadata[component_id] = metadata
+        if "load_candidate" in metadata:
+            load_candidates_by_component[component_id] = metadata["load_candidate"]
+
+    topology_data, debug_info = _trace_circuit_topology(
+        img,
+        components,
+        component_classes,
+        component_metadata=component_metadata,
+        load_candidates_by_component=load_candidates_by_component,
+        load_mask_mode=load_mask_mode,
+        requested_pair=requested_pair,
+    )
+    result = {"nodes": confirmed_nodes, "lines": topology_data}
+    result.update(debug_info)
     return result

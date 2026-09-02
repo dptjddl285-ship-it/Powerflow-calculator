@@ -7,14 +7,36 @@ import io
 import os
 from pathlib import Path
 
+import core.env_loader
+
 try:
+    from agent_tools.vision_tools import configure_review_tools
     from core.power_logic import construct_y_bus
     from core.adaptive_vision_pipeline import analyze_circuit_image_adaptive
+    from review.api import router as review_router
+    from review.staged_api import (
+        configure_staged_review_model,
+        router as staged_review_router,
+    )
+    from review.store import review_store
+    from review.vision_adapter import build_graph_document
 except ImportError as e:
     print(f"❌ 에러: 파일을 찾을 수 없습니다. {e}")
 
 app = FastAPI()
+app.include_router(review_router)
+app.include_router(staged_review_router)
 yolo_model = None
+configure_staged_review_model(lambda: yolo_model)
+
+
+def _run_review_vision(image_bytes: bytes):
+    if yolo_model is None:
+        raise RuntimeError("Vision model is not loaded")
+    return analyze_circuit_image_adaptive(image_bytes, yolo_model)
+
+
+configure_review_tools(_run_review_vision)
 
 @app.on_event("startup")
 async def startup_event():
@@ -60,6 +82,20 @@ async def process_image(file: UploadFile = File(...)):
     try:
         image_bytes = await file.read()
         result_data = analyze_circuit_image_adaptive(image_bytes, yolo_model)
+        # Keep the legacy nodes/lines response for the current Flutter canvas,
+        # and attach the versioned review contract for the new Agent workflow.
+        graph_document = build_graph_document(
+            result_data,
+            image_bytes=image_bytes,
+            filename=file.filename,
+        )
+        review_store.put(graph_document, overwrite=True)
+        review_store.put_analysis_asset(
+            graph_document.document_id,
+            image_bytes=image_bytes,
+            vision_result=result_data,
+        )
+        result_data["graph_document"] = graph_document.model_dump(mode="json")
         return {"status": "success", "data": result_data}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -89,7 +125,6 @@ async def upload_excel(file: UploadFile = File(...)):
         
         print(f"✅ 엑셀 업로드 및 파싱 성공! 발전기({len(generators)}개), 선로({len(lines)}개) 데이터 전송.")
         return {"status": "success", "data": excel_data}
-        
     except Exception as e:
         print(f"❌ 엑셀 처리 중 에러 발생: {e}")
         return {"status": "error", "message": str(e)}
@@ -101,3 +136,8 @@ async def run_simulation(request: Request):
     elements = data.get("elements", [])
     print(f"\n⚡ [조류계산 요청] {len(elements)}개의 부품 데이터를 받았습니다.")
     return {"status": "success", "message": "조류 계산 성공!"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="127.0.0.1", port=8000)

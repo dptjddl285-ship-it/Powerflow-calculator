@@ -8,7 +8,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Power Designer Pro'), findsOneWidget);
-    expect(find.text('도면 사진 분석'), findsOneWidget);
+    expect(find.text('AI 도면 검수실'), findsOneWidget);
     expect(find.text('조류계산 (파이썬 전송)'), findsOneWidget);
   });
 }

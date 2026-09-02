@@ -146,6 +146,91 @@ class PipelinePolicyTest(unittest.TestCase):
         self.assertIn("invalid_terminal_degree", codes)
         self.assertIn("isolated_bus", codes)
 
+    def test_transformer_allows_multiple_connections_on_both_sides(self) -> None:
+        nodes = [{"id": "transformer_1", "class": "transformer"}]
+        nodes.extend(
+            {"id": f"bus_{index}", "class": "bus"}
+            for index in range(1, 5)
+        )
+        lines = [
+            {
+                "connected_to": ["transformer_1", f"bus_{index}"],
+                "source_port": "top" if index <= 2 else "bottom",
+                "target_port": "boundary",
+            }
+            for index in range(1, 5)
+        ]
+
+        issues = validate_graph(nodes, lines)
+
+        transformer_issues = [
+            issue for issue in issues
+            if issue.code == "invalid_transformer_degree"
+        ]
+        self.assertEqual(transformer_issues, [])
+
+    def test_transformer_without_any_connection_still_requires_review(self) -> None:
+        issues = validate_graph(
+            [{"id": "transformer_1", "class": "transformer"}],
+            [],
+        )
+
+        codes = {issue.code for issue in issues}
+        self.assertIn("invalid_transformer_degree", codes)
+
+    def test_transformer_with_only_one_connected_side_requires_review(self) -> None:
+        issues = validate_graph(
+            [
+                {
+                    "id": "transformer_1",
+                    "class": "transformer",
+                    "bbox": [100, 100, 30, 60],
+                    "metadata": {"transformer": {"orientation": "vertical"}},
+                },
+                {"id": "bus_1", "class": "bus"},
+            ],
+            [{
+                "connected_to": ["transformer_1", "bus_1"],
+                "source_port": "top",
+                "target_port": "boundary",
+                "path": [[100, 70], [100, 40]],
+            }],
+        )
+
+        transformer_issues = [
+            issue for issue in issues
+            if issue.code == "invalid_transformer_degree"
+        ]
+        self.assertEqual(len(transformer_issues), 1)
+        self.assertEqual(transformer_issues[0].severity, "error")
+
+    def test_transformer_multiple_connections_on_only_one_side_is_invalid(self) -> None:
+        nodes = [
+            {
+                "id": "transformer_1",
+                "class": "transformer",
+                "bbox": [100, 100, 30, 60],
+                "metadata": {"transformer": {"orientation": "vertical"}},
+            },
+            {"id": "bus_1", "class": "bus"},
+            {"id": "bus_2", "class": "bus"},
+        ]
+        lines = [
+            {
+                "connected_to": ["transformer_1", f"bus_{index}"],
+                "source_port": "top",
+                "target_port": "boundary",
+                "path": [[100, 70], [80 + index * 20, 40]],
+            }
+            for index in (1, 2)
+        ]
+
+        issues = validate_graph(nodes, lines)
+
+        self.assertTrue(any(
+            issue.code == "invalid_transformer_degree" for issue in issues
+        ))
+
     def test_adaptive_resize_restores_original_coordinates(self) -> None:
         result = _rescale_result(
             {

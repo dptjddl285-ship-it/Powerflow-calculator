@@ -18,10 +18,18 @@ import numpy as np
 
 try:
     from .pipeline_policy import build_runtime_report, inspect_image
-    from .vision_logic import analyze_circuit_image
+    from .vision_logic import (
+        analyze_circuit_image,
+        detect_sld_connections,
+        detect_sld_objects,
+    )
 except ImportError:  # Direct backend_api execution.
     from core.pipeline_policy import build_runtime_report, inspect_image
-    from core.vision_logic import analyze_circuit_image
+    from core.vision_logic import (
+        analyze_circuit_image,
+        detect_sld_connections,
+        detect_sld_objects,
+    )
 
 
 ADAPTIVE_RESIZE_ENABLED = os.environ.get(
@@ -114,8 +122,89 @@ def analyze_circuit_image_adaptive(
     return result
 
 
+def detect_sld_objects_adaptive(
+    image_bytes: bytes,
+    model: Any,
+    load_mask_mode: str = "box",
+) -> dict[str, Any]:
+    """Run the current adaptive object detector without line tracing."""
+    buffer = np.frombuffer(image_bytes, np.uint8)
+    original = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+    if original is None:
+        raise ValueError("Could not decode circuit image for object detection")
+    profile = inspect_image(original)
+    processing_scale = profile.recommended_scale if ADAPTIVE_RESIZE_ENABLED else 1.0
+    if abs(processing_scale - 1.0) < 0.01:
+        result = detect_sld_objects(image_bytes, model, load_mask_mode=load_mask_mode)
+        processing_scale = 1.0
+    else:
+        working = _resize_for_scale(original, processing_scale)
+        result = detect_sld_objects(
+            _encode_image(working),
+            model,
+            load_mask_mode=load_mask_mode,
+        )
+        result = _rescale_result(result, processing_scale)
+    for node in result.get("nodes", []):
+        node.setdefault("review_status", "DETECTED")
+        node.setdefault("review_reasons", [])
+    result["pipeline"] = build_runtime_report(
+        profile,
+        result.get("nodes", []),
+        [],
+        processing_scale,
+    )
+    return result
+
+
+def detect_sld_connections_adaptive(
+    image_bytes: bytes,
+    confirmed_nodes: list[dict[str, Any]],
+    load_mask_mode: str = "box",
+    requested_pair: set[str] | frozenset[str] | None = None,
+) -> dict[str, Any]:
+    """Run the current adaptive pixel tracer against approved object boxes."""
+    buffer = np.frombuffer(image_bytes, np.uint8)
+    original = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+    if original is None:
+        raise ValueError("Could not decode circuit image for connection detection")
+    profile = inspect_image(original)
+    processing_scale = profile.recommended_scale if ADAPTIVE_RESIZE_ENABLED else 1.0
+    if abs(processing_scale - 1.0) < 0.01:
+        result = detect_sld_connections(
+            image_bytes,
+            confirmed_nodes,
+            load_mask_mode=load_mask_mode,
+            requested_pair=requested_pair,
+        )
+        processing_scale = 1.0
+    else:
+        working = _resize_for_scale(original, processing_scale)
+        scaled_nodes = copy.deepcopy(confirmed_nodes)
+        for node in scaled_nodes:
+            bbox = node.get("bbox")
+            if isinstance(bbox, (list, tuple)) and len(bbox) == 4:
+                node["bbox"] = [float(value) * processing_scale for value in bbox]
+        traced = detect_sld_connections(
+            _encode_image(working),
+            scaled_nodes,
+            load_mask_mode=load_mask_mode,
+            requested_pair=requested_pair,
+        )
+        result = _rescale_result(traced, processing_scale)
+        result["nodes"] = confirmed_nodes
+    result["pipeline"] = build_runtime_report(
+        profile,
+        result.get("nodes", confirmed_nodes),
+        result.get("lines", []),
+        processing_scale,
+    )
+    return result
+
+
 __all__ = [
     "analyze_circuit_image_adaptive",
+    "detect_sld_objects_adaptive",
+    "detect_sld_connections_adaptive",
     "_rescale_result",
 ]
-
