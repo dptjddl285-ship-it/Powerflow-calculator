@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'dart:math' as math;
 import 'dart:convert'; 
+import 'dart:typed_data';
 import 'package:http/http.dart' as http; 
+import 'package:image_picker/image_picker.dart';
 
 import 'screens/review_page.dart';
 
