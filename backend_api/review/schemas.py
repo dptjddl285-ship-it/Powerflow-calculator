@@ -57,6 +57,11 @@ try:
         review_stage: str = "CONNECTION_REVIEW"
         pipeline: Dict[str, Any] = Field(default_factory=dict)
 
+    class LinkBusNumbersRequest(BaseModel):
+        document_id: str
+        working_nodes: List[Dict[str, Any]]
+        working_lines: List[Dict[str, Any]] = Field(default_factory=list)
+
     class AgentReviewNodeRequest(BaseModel):
         document_id: str
         node: Dict[str, Any]

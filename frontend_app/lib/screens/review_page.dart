@@ -1,11 +1,16 @@
+import 'dart:io';
+import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
+import 'package:file_picker/file_picker.dart';
+import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter/material.dart';
 import '../models/review_models.dart';
 import '../services/review_api_service.dart';
 import '../widgets/review_overlay.dart';
 
-enum ReviewPhase { objectReview, connectionReview, verifiedFinal }
+enum ReviewPhase { objectReview, connectionReview, busMappingReview, verifiedFinal }
 
 enum RightPanelTab { detailReview, agentActivity, agentChat }
 
@@ -50,6 +55,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   int _nodePage = 0;
   static const int _linePageSize = 16;
   int _linePage = 0;
+
+  // Bus Number Mapping Review (Phase 3)
+  String _busFilterStatus = 'ALL'; // ALL, UNCERTAIN, VERIFIED
+  int _busPage = 0;
+  static const int _busPageSize = 12;
+  final TextEditingController _busNumberEditController = TextEditingController();
+  Map<String, dynamic>? _importedExcelData;
 
   // Loading & Modes
   bool _isLoading = false;
@@ -114,6 +126,75 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       blockers.add('사용 가능한 객체가 없음');
     }
     return blockers;
+  }
+
+  // Statistics (Bus Number Mapping)
+  List<ReviewNodeItem> get _busNodes => _workingNodes
+      .where((n) => n.className.toLowerCase() == 'bus' && n.reviewStatus != 'REJECTED')
+      .toList();
+  List<int> get _duplicateBusNumbers {
+    final counts = <int, int>{};
+    for (final b in _busNodes) {
+      if (b.busNumber != null) {
+        counts[b.busNumber!] = (counts[b.busNumber!] ?? 0) + 1;
+      }
+    }
+    return counts.entries.where((e) => e.value > 1).map((e) => e.key).toList();
+  }
+
+  int get _busUncertainCount {
+    final dups = _duplicateBusNumbers;
+    return _busNodes
+        .where((n) => n.busNumberStatus != 'VERIFIED' || n.busNumber == null || dups.contains(n.busNumber))
+        .length;
+  }
+
+  int get _busVerifiedCount {
+    final dups = _duplicateBusNumbers;
+    return _busNodes
+        .where((n) => n.busNumberStatus == 'VERIFIED' && n.busNumber != null && !dups.contains(n.busNumber))
+        .length;
+  }
+
+  bool get _canVerifyBusGate =>
+      _busUncertainCount == 0 &&
+      _busNodes.isNotEmpty &&
+      _duplicateBusNumbers.isEmpty;
+
+  List<String> get _busGateBlockers {
+    final blockers = <String>[];
+    final dups = _duplicateBusNumbers;
+    if (dups.isNotEmpty) {
+      blockers.add('중복된 모선 번호(${dups.map((n) => "#$n").join(", ")})가 존재합니다. 각각 고유한 번호로 수정해 주세요.');
+    }
+    final missingCount = _busNodes.where((n) => n.busNumber == null).length;
+    if (missingCount > 0) {
+      blockers.add('미지정 모선 $missingCount개 번호 입력 필요');
+    }
+    if (_busNodes.isEmpty) {
+      blockers.add('도면에 유효한 모선(Bus)이 없음');
+    }
+    return blockers;
+  }
+
+  List<ReviewNodeItem> get _filteredAndSortedBusNodes {
+    final dups = _duplicateBusNumbers;
+    List<ReviewNodeItem> list = List.from(_busNodes);
+    if (_busFilterStatus == 'UNCERTAIN') {
+      list = list.where((n) => n.busNumberStatus != 'VERIFIED' || n.busNumber == null || dups.contains(n.busNumber)).toList();
+    } else if (_busFilterStatus == 'VERIFIED') {
+      list = list.where((n) => n.busNumberStatus == 'VERIFIED' && n.busNumber != null && !dups.contains(n.busNumber)).toList();
+    }
+    list.sort((a, b) {
+      final aIsUncertain = a.busNumberStatus != 'VERIFIED' || a.busNumber == null || dups.contains(a.busNumber);
+      final bIsUncertain = b.busNumberStatus != 'VERIFIED' || b.busNumber == null || dups.contains(b.busNumber);
+      if (aIsUncertain && !bIsUncertain) return -1;
+      if (!aIsUncertain && bIsUncertain) return 1;
+      final na = a.busNumber ?? 9999;
+      final nb = b.busNumber ?? 9999;
+      return na.compareTo(nb);
+    });
+    return list;
   }
 
   // Filtered & Sorted Working Nodes
@@ -663,11 +744,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         if (_isObjectVerified) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text("✓ 객체 검수 Gate 통과! 결선 단계로 진행할 수 있습니다."),
+              content: Text("✓ 객체 검수 Gate 통과! 모선 번호 매핑 단계로 진행합니다."),
               backgroundColor: Colors.green,
             ),
           );
-          await _proceedToConnectionReview();
+          _proceedToBusMappingReview();
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -955,6 +1036,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     }
 
     final data = _verifiedSld!.toJson();
+    if (_importedExcelData != null) {
+      data['excel_data'] = _importedExcelData;
+    }
     widget.onProceedToCanvas?.call(data);
     if (Navigator.canPop(context)) {
       Navigator.pop(context, data);
@@ -1104,10 +1188,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               const SizedBox(width: 6),
               Text(
                 _currentPhase == ReviewPhase.objectReview
-                    ? "PowerLens AI 도면 검수 · 객체"
+                    ? "PowerLens AI 도면 검수 · ① 객체 검수"
+                    : _currentPhase == ReviewPhase.busMappingReview
+                    ? "PowerLens AI 도면 검수 · ② 모선 번호 매핑"
                     : _currentPhase == ReviewPhase.connectionReview
-                    ? "PowerLens AI 도면 검수 · 결선"
-                    : "PowerLens AI 도면 검수 · 최종 확인",
+                    ? "PowerLens AI 도면 검수 · ③ 선로 결선 검수"
+                    : "PowerLens AI 도면 검수 · ④ 최종 확인 & 엑셀",
                 style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
               ),
             ],
@@ -1125,17 +1211,38 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           ),
           const Icon(Icons.arrow_right, color: Colors.grey, size: 14),
           _buildPhaseBadge(
-            "② 결선 검수",
-            _currentPhase == ReviewPhase.connectionReview,
-            _isFinalVerified,
+            "② 모선 매핑",
+            _currentPhase == ReviewPhase.busMappingReview,
+            _canVerifyBusGate,
           ),
           const Icon(Icons.arrow_right, color: Colors.grey, size: 14),
           _buildPhaseBadge(
-            "③ 회로도 검증",
+            "③ 결선 검수",
+            _currentPhase == ReviewPhase.connectionReview,
+            _workingLines.isNotEmpty && _lineAmbiguousCount == 0,
+          ),
+          const Icon(Icons.arrow_right, color: Colors.grey, size: 14),
+          _buildPhaseBadge(
+            "④ 최종 & 엑셀",
             _currentPhase == ReviewPhase.verifiedFinal,
             _isFinalVerified,
           ),
-          const SizedBox(width: 10),
+          const SizedBox(width: 8),
+          ElevatedButton.icon(
+            onPressed: _importExcelInReview,
+            icon: const Icon(Icons.table_chart, size: 14, color: Colors.greenAccent),
+            label: Text(
+              _importedExcelData != null ? "엑셀 적용됨 (#${_importedExcelData!['slack_bus_number']})" : "엑셀 불러오기",
+              style: const TextStyle(fontSize: 11, color: Colors.white),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.teal[800],
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              visualDensity: VisualDensity.compact,
+            ),
+          ),
+          const SizedBox(width: 6),
           ElevatedButton.icon(
             onPressed: _pickAndUploadImage,
             icon: const Icon(Icons.file_upload, size: 15),
@@ -1749,9 +1856,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                 ),
                                 originalWidth: _document!.image.width,
                                 originalHeight: _document!.image.height,
-                                nodes: isConnectionPhase
-                                    ? _workingNodes
-                                    : _filteredAndSortedWorkingNodes,
+                                nodes: (_currentPhase == ReviewPhase.objectReview)
+                                    ? _filteredAndSortedWorkingNodes
+                                    : _workingNodes,
                                 selectedNode: _selectedNode,
                                 onSelectNode: (node) {
                                   setState(() {
@@ -1777,12 +1884,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                     }
                                   });
                                 },
-                                showNodeLabels: _showCanvasLabels && !isConnectionPhase,
+                                showNodeLabels: _showCanvasLabels,
                                 showLineLabels: _showCanvasLabels,
-                                lines: isConnectionPhase ? _workingLines : const [],
-                                selectedLine: isConnectionPhase
-                                    ? _selectedLine
-                                    : null,
+                                lines: (_currentPhase == ReviewPhase.objectReview)
+                                    ? const []
+                                    : _workingLines,
+                                selectedLine: _selectedLine,
                                 onSelectLine: (line) {
                                   setState(() {
                                     _selectedLine = line;
@@ -1887,7 +1994,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                 padding: const EdgeInsets.all(12),
                                 child: Column(
                                   children: [
-                                    isConnectionPhase
+                                    _currentPhase == ReviewPhase.busMappingReview
+                                        ? _buildBusMappingReviewSidePanel()
+                                        : isConnectionPhase
                                         ? _buildConnectionReviewSidePanel()
                                         : _buildObjectReviewSidePanel(),
                                     const SizedBox(height: 12),
@@ -3746,18 +3855,754 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     );
   }
 
-  // --- Bottom Gate Footer ---
+  // --- Step 6: Bus Number Mapping & Review (Phase 3) ---
 
-  Widget _buildBottomGateFooter() {
-    final isConnectionPhase = _currentPhase == ReviewPhase.connectionReview;
+  bool _isLinkingBusNumbers = false;
+
+  Future<void> _triggerAiBusLinking() async {
+    if (_document == null) return;
+    setState(() => _isLinkingBusNumbers = true);
+    try {
+      final res = await _apiService.linkBusNumbers(
+        documentId: _document!.documentId,
+        workingNodes: _workingNodes,
+        workingLines: _workingLines,
+      );
+      if (res['status'] == 'success' && res['nodes'] is List) {
+        final rawNodes = (res['nodes'] as List);
+        setState(() {
+          for (int i = 0; i < rawNodes.length && i < _workingNodes.length; i++) {
+            final raw = rawNodes[i];
+            final node = _workingNodes[i];
+            node.busNumber = (raw['bus_number'] as num?)?.toInt();
+            node.busNumberStatus = raw['bus_number_status']?.toString() ?? 'UNCERTAIN';
+            node.displayLabel = raw['display_name']?.toString() ?? raw['display_label']?.toString() ?? node.displayLabel;
+            node.connectedBusNumber = (raw['connected_bus_number'] as num?)?.toInt();
+            node.connectedBusId = raw['connected_bus_id']?.toString();
+            if (raw['id'] != null) {
+              node.id = raw['id'].toString();
+            }
+          }
+          final buses = _filteredAndSortedBusNodes;
+          _selectedNode = buses.isNotEmpty ? buses.first : null;
+          if (_selectedNode != null && _selectedNode!.busNumber != null) {
+            _busNumberEditController.text = _selectedNode!.busNumber.toString();
+          } else {
+            _busNumberEditController.clear();
+          }
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("✓ AI가 추가/수정된 모선을 포함한 모든 모선 번호를 도면에서 판독했습니다!"),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("모선 번호 AI 판독 중 알림: $e"), backgroundColor: Colors.orange),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLinkingBusNumbers = false);
+    }
+  }
+
+  void _proceedToBusMappingReview() {
+    setState(() {
+      _currentPhase = ReviewPhase.busMappingReview;
+      _selectedLine = null;
+      _busFilterStatus = 'ALL';
+      _busPage = 0;
+      final buses = _filteredAndSortedBusNodes;
+      _selectedNode = buses.isNotEmpty ? buses.first : null;
+      if (_selectedNode != null && _selectedNode!.busNumber != null) {
+        _busNumberEditController.text = _selectedNode!.busNumber.toString();
+      } else {
+        _busNumberEditController.clear();
+      }
+    });
+
+    // Automatically run AI vision grounding on all working buses (including human-added ones)
+    _triggerAiBusLinking();
+  }
+
+  void _propagateBusNumber(ReviewNodeItem busNode, int newBusNo, {bool isDuplicate = false}) {
+    setState(() {
+      final oldBusId = busNode.id;
+      final existingWithSameId = _workingNodes.where((n) => n.id == "bus_$newBusNo" && n != busNode);
+      final newBusId = existingWithSameId.isNotEmpty
+          ? "bus_${newBusNo}_${busNode.displayNumber ?? (busNode.hashCode.abs() % 1000)}"
+          : "bus_$newBusNo";
+
+      busNode.id = newBusId;
+      busNode.busNumber = newBusNo;
+      busNode.busNumberStatus = isDuplicate ? 'UNCERTAIN' : 'VERIFIED';
+      busNode.displayLabel = isDuplicate ? "Bus $newBusNo (중복)" : "Bus $newBusNo";
+
+      // 1. Update line connections referencing the old bus ID
+      for (final line in _workingLines) {
+        for (int i = 0; i < line.connectedTo.length; i++) {
+          if (line.connectedTo[i] == oldBusId) {
+            line.connectedTo[i] = newBusId;
+          }
+        }
+      }
+
+      // 2. Propagate to all connected generators and loads via workingLines
+      for (final line in _workingLines) {
+        if (line.connectedTo.contains(newBusId)) {
+          final otherId = line.connectedTo.first == newBusId
+              ? (line.connectedTo.length > 1 ? line.connectedTo[1] : null)
+              : line.connectedTo.first;
+          if (otherId != null) {
+            final otherNode = _workingNodes.firstWhere(
+              (n) => n.id == otherId,
+              orElse: () => busNode,
+            );
+            if (otherNode.id != busNode.id) {
+              final cls = otherNode.className.toLowerCase();
+              final oldOtherId = otherNode.id;
+              if (cls.contains('gen')) {
+                final newGenId = "gen_$newBusNo";
+                otherNode.id = newGenId;
+                otherNode.busNumber = newBusNo;
+                otherNode.connectedBusNumber = newBusNo;
+                otherNode.connectedBusId = newBusId;
+                otherNode.displayLabel = "G_$newBusNo";
+
+                for (final l in _workingLines) {
+                  for (int i = 0; i < l.connectedTo.length; i++) {
+                    if (l.connectedTo[i] == oldOtherId) l.connectedTo[i] = newGenId;
+                  }
+                }
+              } else if (cls.contains('load')) {
+                final newLoadId = "load_$newBusNo";
+                otherNode.id = newLoadId;
+                otherNode.busNumber = newBusNo;
+                otherNode.connectedBusNumber = newBusNo;
+                otherNode.connectedBusId = newBusId;
+                otherNode.displayLabel = "Load_$newBusNo";
+
+                for (final l in _workingLines) {
+                  for (int i = 0; i < l.connectedTo.length; i++) {
+                    if (l.connectedTo[i] == oldOtherId) l.connectedTo[i] = newLoadId;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+
+  Widget _buildBusMappingReviewSidePanel() {
+    final buses = _filteredAndSortedBusNodes;
+    final totalPages = math.max(1, (buses.length / _busPageSize).ceil());
+    final currentPage = _busPage.clamp(0, totalPages - 1);
+    final pageBuses = buses.skip(currentPage * _busPageSize).take(_busPageSize).toList();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // 1. Header with Stats & Filter Badges
+        _buildBusMappingQueueHeader(),
+        const SizedBox(height: 12),
+
+        // 2. Selected Bus Detail Editor
+        if (_selectedNode != null && _selectedNode!.className.toLowerCase() == 'bus')
+          _buildSelectedBusMappingCard(_selectedNode!)
+        else
+          _buildNoSelectionPrompt("모선(Bus)"),
+
+        const SizedBox(height: 14),
+        const Divider(color: Colors.white24, height: 1),
+        const SizedBox(height: 10),
+
+        // 3. Bus Queue List
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              "모선 목록 (${buses.length}개) · ${currentPage + 1}/$totalPages 페이지",
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            if (totalPages > 1)
+              Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.chevron_left, size: 18, color: Colors.white70),
+                    onPressed: currentPage > 0
+                        ? () => setState(() => _busPage--)
+                        : null,
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.chevron_right, size: 18, color: Colors.white70),
+                    onPressed: currentPage < totalPages - 1
+                        ? () => setState(() => _busPage++)
+                        : null,
+                  ),
+                ],
+              ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        ...pageBuses.map((bus) => _buildBusMappingListItem(bus)),
+      ],
+    );
+  }
+
+  Widget _buildBusMappingQueueHeader() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.numbers, color: Colors.amberAccent, size: 18),
+                SizedBox(width: 6),
+                Text(
+                  "모선 번호 & 기기 매핑",
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+            Row(
+              children: [
+                OutlinedButton.icon(
+                  onPressed: _isLinkingBusNumbers ? null : _triggerAiBusLinking,
+                  icon: _isLinkingBusNumbers
+                      ? const SizedBox(
+                          width: 10,
+                          height: 10,
+                          child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.amberAccent),
+                        )
+                      : const Icon(Icons.refresh, size: 12, color: Colors.amberAccent),
+                  label: Text(
+                    _isLinkingBusNumbers ? "판독 중..." : "AI 번호 판독",
+                    style: const TextStyle(fontSize: 10, color: Colors.amberAccent),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Colors.amberAccent, width: 0.8),
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      final counts = <int, int>{};
+                      for (var b in _busNodes) {
+                        if (b.busNumber != null) {
+                          counts[b.busNumber!] = (counts[b.busNumber!] ?? 0) + 1;
+                        }
+                      }
+                      int approvedCount = 0;
+                      int skippedDups = 0;
+                      for (var b in _busNodes) {
+                        if (b.busNumber != null) {
+                          if ((counts[b.busNumber!] ?? 0) == 1) {
+                            b.busNumberStatus = 'VERIFIED';
+                            _propagateBusNumber(b, b.busNumber!);
+                            approvedCount++;
+                          } else {
+                            b.busNumberStatus = 'UNCERTAIN';
+                            skippedDups++;
+                          }
+                        }
+                      }
+                      if (skippedDups > 0) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text("중복 번호($skippedDups개)는 일괄 승인에서 제외되었습니다. 각각 고유 번호로 지정해 주세요."),
+                            backgroundColor: Colors.orange,
+                          ),
+                        );
+                      } else {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text("✓ 고유한 모선 번호가 모두 승인되었습니다."),
+                            backgroundColor: Colors.green,
+                          ),
+                        );
+                      }
+                    });
+                  },
+                  icon: const Icon(Icons.done_all, size: 12),
+                  label: const Text("전체 승인", style: TextStyle(fontSize: 10)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blueAccent[700],
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            _buildBusFilterBadge("전체", _busNodes.length, Colors.blueGrey, 'ALL'),
+            const SizedBox(width: 6),
+            _buildBusFilterBadge("검토 필요", _busUncertainCount, Colors.orangeAccent, 'UNCERTAIN'),
+            const SizedBox(width: 6),
+            _buildBusFilterBadge("승인 완료", _busVerifiedCount, Colors.greenAccent, 'VERIFIED'),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBusFilterBadge(String label, int count, Color color, String filterKey) {
+    final isSelected = _busFilterStatus == filterKey;
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _busFilterStatus = filterKey;
+          _busPage = 0;
+          final matches = _filteredAndSortedBusNodes;
+          _selectedNode = matches.isNotEmpty ? matches.first : null;
+          if (_selectedNode != null && _selectedNode!.busNumber != null) {
+            _busNumberEditController.text = _selectedNode!.busNumber.toString();
+          } else {
+            _busNumberEditController.clear();
+          }
+        });
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: isSelected ? color.withValues(alpha: 0.3) : const Color(0xFF252538),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: isSelected ? color : Colors.white12,
+            width: isSelected ? 1.5 : 1.0,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? Colors.white : Colors.white70,
+                fontSize: 11,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+              ),
+            ),
+            const SizedBox(width: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.3),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                count.toString(),
+                style: TextStyle(
+                  color: color,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSelectedBusMappingCard(ReviewNodeItem busNode) {
+    final isVerified = busNode.busNumberStatus == 'VERIFIED';
+    final connectedGens = <ReviewNodeItem>[];
+    final connectedLoads = <ReviewNodeItem>[];
+
+    for (final line in _workingLines) {
+      if (line.connectedTo.contains(busNode.id)) {
+        final otherId = line.connectedTo.first == busNode.id
+            ? (line.connectedTo.length > 1 ? line.connectedTo[1] : null)
+            : line.connectedTo.first;
+        if (otherId != null) {
+          final other = _workingNodes.firstWhere((n) => n.id == otherId, orElse: () => busNode);
+          if (other.id != busNode.id) {
+            if (other.className.toLowerCase().contains('gen')) connectedGens.add(other);
+            if (other.className.toLowerCase().contains('load')) connectedLoads.add(other);
+          }
+        }
+      }
+    }
 
     return Container(
       padding: const EdgeInsets.all(12),
-      color: const Color(0xFF181825),
+      decoration: BoxDecoration(
+        color: const Color(0xFF252538),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: isVerified ? Colors.greenAccent.withValues(alpha: 0.6) : Colors.orangeAccent,
+          width: 1.5,
+        ),
+      ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (!isConnectionPhase) ...[
-            // Human Completeness Confirmation Checkbox
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.blueAccent.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      busNode.id,
+                      style: const TextStyle(color: Colors.blueAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    busNode.busNumber != null ? "Bus #${busNode.busNumber}" : "Bus (미지정)",
+                    style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: isVerified ? Colors.green.withValues(alpha: 0.2) : Colors.orange.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  isVerified ? "✓ 검증 완료" : "⚠️ 확인 필요",
+                  style: TextStyle(
+                    color: isVerified ? Colors.greenAccent : Colors.orangeAccent,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+
+          // Bus Number Input & Apply
+          Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: SizedBox(
+                  height: 36,
+                  child: TextField(
+                    controller: _busNumberEditController,
+                    keyboardType: TextInputType.number,
+                    style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                    decoration: InputDecoration(
+                      labelText: "모선 번호 지정 (Bus Number)",
+                      labelStyle: const TextStyle(color: Colors.white60, fontSize: 10),
+                      filled: true,
+                      fillColor: const Color(0xFF181825),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 2,
+                child: ElevatedButton(
+                  onPressed: () {
+                    final num = int.tryParse(_busNumberEditController.text.trim());
+                    if (num != null && num > 0) {
+                      final conflictBuses = _busNodes.where((b) => b != busNode && b.busNumber == num).toList();
+                      if (conflictBuses.isNotEmpty) {
+                        for (final cb in conflictBuses) {
+                          cb.busNumberStatus = 'UNCERTAIN';
+                          cb.displayLabel = "Bus $num (중복)";
+                          if (!cb.busNumberReasons.contains('DUPLICATE_BUS_NUMBER_$num')) {
+                            cb.busNumberReasons.add('DUPLICATE_BUS_NUMBER_$num');
+                          }
+                        }
+                        busNode.busNumberStatus = 'UNCERTAIN';
+                        if (!busNode.busNumberReasons.contains('DUPLICATE_BUS_NUMBER_$num')) {
+                          busNode.busNumberReasons.add('DUPLICATE_BUS_NUMBER_$num');
+                        }
+                        _propagateBusNumber(busNode, num, isDuplicate: true);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text("⚠️ 중복 감지: #$num번이 이미 다른 모선(${conflictBuses.map((b) => b.id).join(', ')})에 할당되어 있습니다! 중복된 모선들이 모두 [검토 필요] 탭으로 이동되었습니다."),
+                            backgroundColor: Colors.orange[800],
+                            duration: const Duration(seconds: 4),
+                          ),
+                        );
+                      } else {
+                        // Clear any old duplicate reason on this bus
+                        busNode.busNumberReasons.removeWhere((r) => r.startsWith('DUPLICATE_BUS_NUMBER_'));
+                        _propagateBusNumber(busNode, num, isDuplicate: false);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text("✓ Bus $num 설정 및 연결 기기(발전기/부하) 자동 갱신 완료!"),
+                            backgroundColor: Colors.green,
+                          ),
+                        );
+                      }
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text("올바른 양의 정수 번호를 입력해 주세요."), backgroundColor: Colors.red),
+                      );
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.amber[700],
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                  ),
+                  child: const Text("적용 및 동기화", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+
+          // Connected Devices Summary
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1E1E2E),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text("⚡ 연결된 기기 자동 명명 현황:", style: TextStyle(color: Colors.white70, fontSize: 10.5)),
+                const SizedBox(height: 4),
+                if (connectedGens.isEmpty && connectedLoads.isEmpty)
+                  const Text("• 직결된 발전기/부하 없음 (단독 모선)", style: TextStyle(color: Colors.grey, fontSize: 10))
+                else ...[
+                  if (connectedGens.isNotEmpty)
+                    Text(
+                      "• 발전기: ${connectedGens.map((g) => g.effectiveDisplayLabel).join(', ')}",
+                      style: const TextStyle(color: Colors.greenAccent, fontSize: 10.5, fontWeight: FontWeight.bold),
+                    ),
+                  if (connectedLoads.isNotEmpty)
+                    Text(
+                      "• 부하: ${connectedLoads.map((l) => l.effectiveDisplayLabel).join(', ')}",
+                      style: const TextStyle(color: Colors.cyanAccent, fontSize: 10.5, fontWeight: FontWeight.bold),
+                    ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBusMappingListItem(ReviewNodeItem busNode) {
+    final isSelected = _selectedNode?.id == busNode.id;
+    final isDuplicate = busNode.busNumber != null && _duplicateBusNumbers.contains(busNode.busNumber);
+    final isVerified = busNode.busNumberStatus == 'VERIFIED' && busNode.busNumber != null && !isDuplicate;
+
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _selectedNode = busNode;
+          if (busNode.busNumber != null) {
+            _busNumberEditController.text = busNode.busNumber.toString();
+          } else {
+            _busNumberEditController.clear();
+          }
+        });
+      },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? Colors.amber.withValues(alpha: 0.15)
+              : const Color(0xFF252538),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: isSelected
+                ? Colors.amberAccent
+                : (isDuplicate
+                    ? Colors.redAccent.withValues(alpha: 0.8)
+                    : (isVerified ? Colors.green.withValues(alpha: 0.3) : Colors.orangeAccent.withValues(alpha: 0.5))),
+            width: isSelected || isDuplicate ? 1.5 : 1.0,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  isDuplicate
+                      ? Icons.warning_amber_rounded
+                      : (isVerified ? Icons.check_circle : Icons.help_outline),
+                  color: isDuplicate
+                      ? Colors.redAccent
+                      : (isVerified ? Colors.greenAccent : Colors.orangeAccent),
+                  size: 16,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  busNode.busNumber != null ? "Bus #${busNode.busNumber}" : "Bus ? (미인식)",
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  "(${busNode.id})",
+                  style: const TextStyle(color: Colors.grey, fontSize: 10),
+                ),
+              ],
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+              decoration: BoxDecoration(
+                color: isDuplicate
+                    ? Colors.redAccent.withValues(alpha: 0.25)
+                    : (isVerified ? Colors.green.withValues(alpha: 0.2) : Colors.orange.withValues(alpha: 0.2)),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                isDuplicate ? "중복 번호" : (isVerified ? "승인됨" : "검토필요"),
+                style: TextStyle(
+                  color: isDuplicate
+                      ? Colors.redAccent
+                      : (isVerified ? Colors.greenAccent : Colors.orangeAccent),
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // --- Excel Importer Method ---
+
+  Future<void> _loadDefaultExcelInReview() async {
+    setState(() {
+      _isLoading = true;
+      _loadingMessage = "📊 기본 ac_case25 계통 데이터를 분석 및 매칭하는 중...";
+    });
+    try {
+      final data = await _apiService.loadDefaultExcelCase();
+      if (!mounted) return;
+      setState(() {
+        _importedExcelData = data;
+        _isLoading = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            "✅ ac_case25 데이터 매칭 성공!\n• 슬랙 모선: #${_importedExcelData!['slack_bus_number']}\n• 모선: ${_importedExcelData!['total_buses']}개, 발전기: ${_importedExcelData!['total_generators']}개, 선로: ${_importedExcelData!['total_branches']}개",
+          ),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("기본 엑셀 불러오기 실패: $e"), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _importExcelInReview() async {
+    try {
+      FilePickerResult? result = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['xlsx', 'xls', 'csv'],
+        withData: true,
+      );
+      if (result == null || result.files.isEmpty) return;
+
+      PlatformFile file = result.files.first;
+      Uint8List? bytes = file.bytes;
+      if (bytes == null && file.path != null) {
+        try {
+          bytes = await File(file.path!).readAsBytes();
+        } catch (_) {}
+      }
+      if (bytes == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("파일 데이터를 읽을 수 없습니다."), backgroundColor: Colors.red),
+          );
+        }
+        return;
+      }
+
+      setState(() {
+        _isLoading = true;
+        _loadingMessage = "📊 엑셀 계통 데이터를 분석 및 매칭하는 중...";
+      });
+
+      final data = await _apiService.uploadExcelCase(bytes, file.name);
+      if (!mounted) return;
+      setState(() {
+        _importedExcelData = data;
+        _isLoading = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            "✅ 엑셀 데이터 매칭 성공!\n• 슬랙 모선: #${_importedExcelData!['slack_bus_number']}\n• 모선: ${_importedExcelData!['total_buses']}개, 발전기: ${_importedExcelData!['total_generators']}개, 선로: ${_importedExcelData!['total_branches']}개",
+          ),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("엑셀 처리 실패: $e"), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  // --- Bottom Gate Footer ---
+
+  Widget _buildBottomGateFooter() {
+    if (_currentPhase == ReviewPhase.objectReview) {
+      // Step 1: Object Review
+      return Container(
+        padding: const EdgeInsets.all(12),
+        color: const Color(0xFF181825),
+        child: Column(
+          children: [
             CheckboxListTile(
               value: _humanCompletenessConfirmed,
               onChanged: (val) =>
@@ -3818,9 +4663,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 if (_isObjectVerified) ...[
                   const SizedBox(width: 8),
                   ElevatedButton.icon(
-                    onPressed: _proceedToConnectionReview,
+                    onPressed: _proceedToBusMappingReview,
                     icon: const Icon(Icons.arrow_forward, size: 16),
-                    label: const Text("다음: 결선 인식 ➔"),
+                    label: const Text("다음: 모선 번호 매핑 ➔"),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.green,
                       foregroundColor: Colors.white,
@@ -3830,16 +4675,44 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 ],
               ],
             ),
-          ] else ...[
+          ],
+        ),
+      );
+    } else if (_currentPhase == ReviewPhase.busMappingReview) {
+      // Step 2: Bus Mapping Review -> Go to Step 3: Connection Review
+      return Container(
+        padding: const EdgeInsets.all(12),
+        color: const Color(0xFF181825),
+        child: Column(
+          children: [
+            if (_busGateBlockers.isNotEmpty)
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withValues(alpha: 0.12),
+                  border: Border.all(color: Colors.orangeAccent),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  '선로 결선 단계로 가려면:\n• ${_busGateBlockers.join('\n• ')}',
+                  style: const TextStyle(
+                    color: Colors.orangeAccent,
+                    fontSize: 10,
+                    height: 1.35,
+                  ),
+                ),
+              ),
             Row(
               children: [
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: _canVerifyFinalGate ? _verifyFinalGate : null,
-                    icon: const Icon(Icons.verified, size: 16),
-                    label: const Text("최종 회로도 검증"),
+                    onPressed: _canVerifyBusGate ? _proceedToConnectionReview : null,
+                    icon: const Icon(Icons.arrow_forward, size: 16),
+                    label: const Text("모선 번호 승인 ➔ 다음: 선로 결선 인식 및 검수"),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
+                      backgroundColor: Colors.indigoAccent,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 12),
                     ),
@@ -3848,75 +4721,244 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               ],
             ),
           ],
-        ],
-      ),
-    );
-  }
-
-  // --- Verified Final View ---
-
-  Widget _buildVerifiedFinalView() {
-    final sld = _verifiedSld!;
-    return Center(
-      child: Container(
-        width: 600,
-        padding: const EdgeInsets.all(24),
-        decoration: BoxDecoration(
-          color: const Color(0xFF252538),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: Colors.greenAccent.withValues(alpha: 0.5),
-            width: 2,
-          ),
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+      );
+    } else if (_currentPhase == ReviewPhase.connectionReview) {
+      // Step 3: Connection Review -> Go to Step 4: Final Verification & Excel
+      return Container(
+        padding: const EdgeInsets.all(12),
+        color: const Color(0xFF181825),
+        child: Row(
           children: [
-            const Icon(
-              Icons.verified_user,
-              color: Colors.greenAccent,
-              size: 64,
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              "Verified SLD 생성 완료! 🎉",
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              "문서 ID: ${sld.documentId}  |  상태: ${sld.status}",
-              style: const TextStyle(color: Colors.grey, fontSize: 12),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              "• 확정 객체 수: ${sld.nodes.length}개\n• 검증 결선 수: ${sld.lines.length}개",
-              style: const TextStyle(
-                color: Colors.white70,
-                fontSize: 13,
-                height: 1.5,
-              ),
-            ),
-            const SizedBox(height: 24),
-            ElevatedButton.icon(
-              onPressed: _handoffToFlutterCanvas,
-              icon: const Icon(Icons.open_in_new),
-              label: const Text("편집 화면으로 이동"),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 14,
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: _verifyFinalGate,
+                icon: const Icon(Icons.verified, size: 16),
+                label: const Text("결선 검수 완료 ➔ 다음: 최종 확인 & 엑셀"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
               ),
             ),
           ],
         ),
+      );
+    }
+    return const SizedBox.shrink();
+  }
+
+  // --- Step 4: Verified Final View & Excel Integration ---
+
+  Widget _buildVerifiedFinalView() {
+    final sld = _verifiedSld!;
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+        child: Container(
+          width: 680,
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: const Color(0xFF252538),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: Colors.greenAccent.withValues(alpha: 0.5),
+              width: 2,
+            ),
+            boxShadow: const [
+              BoxShadow(
+                color: Colors.black45,
+                blurRadius: 10,
+                offset: Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.verified_user,
+                color: Colors.greenAccent,
+                size: 56,
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                "Verified SLD 회로도 검증 완료! 🎉",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                "문서 ID: ${sld.documentId}  |  상태: ${sld.status}",
+                style: const TextStyle(color: Colors.grey, fontSize: 12),
+              ),
+              const SizedBox(height: 14),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E1E2E),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    _buildFinalSummaryItem("확정 모선", "${_busNodes.length}개", Colors.blueAccent),
+                    _buildFinalSummaryItem("확정 결선", "${sld.lines.length}개", Colors.orangeAccent),
+                    _buildFinalSummaryItem(
+                      "발전기/부하",
+                      "${_workingNodes.where((n) => n.className.contains('gen') || n.className.contains('load')).length}개",
+                      Colors.cyanAccent,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+
+              // Excel Case Importer Box
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E1E2E),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: _importedExcelData != null ? Colors.greenAccent : Colors.tealAccent.withValues(alpha: 0.4),
+                    width: 1.5,
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(Icons.table_chart, color: Colors.tealAccent, size: 20),
+                            SizedBox(width: 8),
+                            Text(
+                              "계통 엑셀 데이터 (.xlsx) 매칭",
+                              style: TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 4,
+                          children: [
+                            ElevatedButton.icon(
+                              onPressed: _loadDefaultExcelInReview,
+                              icon: const Icon(Icons.bolt, size: 14, color: Colors.amberAccent),
+                              label: const Text(
+                                "⚡ ac_case25 기본값 바로 적용",
+                                style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.amber[900]?.withValues(alpha: 0.7),
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              ),
+                            ),
+                            ElevatedButton.icon(
+                              onPressed: _importExcelInReview,
+                              icon: const Icon(Icons.file_upload, size: 14),
+                              label: Text(
+                                _importedExcelData != null ? "다른 엑셀 다시 불러오기" : "엑셀 파일 선택",
+                                style: const TextStyle(fontSize: 11),
+                              ),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.teal[700],
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    if (_importedExcelData != null) ...[
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: Colors.green.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.4)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Icon(Icons.stars, color: Colors.amberAccent, size: 18),
+                                const SizedBox(width: 6),
+                                Text(
+                                  "⭐️ 슬랙 모선: #${_importedExcelData!['slack_bus_number']} (Swing Bus 자동 지정)",
+                                  style: const TextStyle(color: Colors.amberAccent, fontSize: 12.5, fontWeight: FontWeight.bold),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              "• 발전기 ${_importedExcelData!['total_generators']}개 파라미터 (PG, 목표전압 Vset)\n• 부하 ${_importedExcelData!['total_buses']}개 모선 유효/무효전력 (Pload, Qload)\n• 선로 ${_importedExcelData!['total_branches']}개 임피던스 (R, X, B, Tap) 자동 바인딩 완료!",
+                              style: const TextStyle(color: Colors.white70, fontSize: 11.5, height: 1.4),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ] else ...[
+                      const Text(
+                        "💡 'ac_case25 - 복사본.xlsx' 등의 엑셀 파일을 불러오면 13번 슬랙 모선과 발전기/부하/선로 파라미터가 캔버스에 자동 반영됩니다.",
+                        style: TextStyle(color: Colors.white60, fontSize: 11.5),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 24),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: _handoffToFlutterCanvas,
+                    icon: const Icon(Icons.open_in_new),
+                    label: Text(
+                      _importedExcelData != null ? "엑셀 데이터 적용하여 캔버스로 이동" : "캔버스 편집 화면으로 이동",
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 28,
+                        vertical: 14,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
+    );
+  }
+
+  Widget _buildFinalSummaryItem(String label, String value, Color color) {
+    return Column(
+      children: [
+        Text(label, style: const TextStyle(color: Colors.white60, fontSize: 11)),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: TextStyle(color: color, fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+      ],
     );
   }
 

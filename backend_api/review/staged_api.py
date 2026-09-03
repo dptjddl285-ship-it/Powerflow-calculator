@@ -14,6 +14,11 @@ from core.adaptive_vision_pipeline import (
     detect_sld_connections_adaptive,
     detect_sld_objects_adaptive,
 )
+from core.bus_number_linker import (
+    link_and_validate_bus_numbers,
+    propagate_bus_numbers_to_devices,
+    synchronize_node_and_line_ids,
+)
 from core.pipeline_policy import validate_graph
 from review.session_store import session_store
 from review.schemas import (
@@ -22,6 +27,7 @@ from review.schemas import (
     AgentReviewNodeRequest,
     CheckCompletenessRequest,
     ConnectionReviewRequest,
+    LinkBusNumbersRequest,
     ProactiveSummaryRequest,
     TraceConnectionCandidateRequest,
     ValidateTopologyRequest,
@@ -279,6 +285,10 @@ async def review_detect_connections(request: ConnectionReviewRequest):
         )
         nodes = result_data.get("nodes", request.confirmed_nodes)
         raw_lines = result_data.get("lines", [])
+        
+        # Propagate verified Bus numbers to connected devices (G_xx, Load_xx)
+        nodes = propagate_bus_numbers_to_devices(nodes, raw_lines)
+
         annotated_lines = extract_all_connections_evidence(nodes, raw_lines)
         annotated_lines = generate_line_display_labels(annotated_lines, nodes=nodes)
 
@@ -310,6 +320,39 @@ async def review_detect_connections(request: ConnectionReviewRequest):
                 "confirmed": 0,
             },
             "pipeline": result_data.get("pipeline", {}),
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ==========================================
+# 🔢 [Review API 5.5] AI 모선 번호 시각적 판독 및 기기 매핑 (Step 3 진입 시)
+# ==========================================
+@router.post("/review/link_bus_numbers")
+async def review_link_bus_numbers(request: LinkBusNumbersRequest):
+    print(
+        f"\n🔢 [Review: AI 모선 번호 판독 요청] Document: {request.document_id}, "
+        f"모선 포함 전체 노드 수: {len(request.working_nodes)}, 선로 수: {len(request.working_lines)}"
+    )
+    try:
+        session = session_store.get_session(request.document_id)
+        if session is None:
+            return {
+                "status": "error",
+                "message": f"Document session '{request.document_id}' not found or expired",
+            }
+
+        # 1. Run Gemini Set-of-Mark Bus Number Linking on all working nodes (including human-added buses)
+        updated_nodes, bus_report = link_and_validate_bus_numbers(session.image_bytes, request.working_nodes)
+        
+        # 2. Propagate recognized bus numbers to connected generators (G_xx) and loads (Load_xx)
+        updated_nodes = propagate_bus_numbers_to_devices(updated_nodes, request.working_lines)
+
+        return {
+            "status": "success",
+            "document_id": request.document_id,
+            "nodes": updated_nodes,
+            "bus_number_report": bus_report,
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -507,7 +550,10 @@ async def review_verify_final_gate(request: VerifyFinalGateRequest):
                 "critical_issue_count": len(ambiguous_lines),
             }
 
-        # 3. Deterministic Graph Validation
+        # 3. Synchronize IDs so bus_XX, gen_XX, load_XX match bus numbers 1:1!
+        confirmed_nodes, accepted_lines = synchronize_node_and_line_ids(confirmed_nodes, accepted_lines)
+
+        # 4. Deterministic Graph Validation
         issues = validate_graph(confirmed_nodes, accepted_lines)
         critical_issues = [i for i in issues if i.severity == "error"]
 
@@ -521,7 +567,7 @@ async def review_verify_final_gate(request: VerifyFinalGateRequest):
                 "issues": [i.to_dict() for i in issues],
             }
 
-        # 4. Construct VerifiedSLD Document
+        # 5. Construct VerifiedSLD Document
         verified_nodes = [
             {
                 "id": str(n.get("id")),
@@ -530,9 +576,12 @@ async def review_verify_final_gate(request: VerifyFinalGateRequest):
                 "confidence": float(n.get("confidence", 1.0)),
                 "source": str(n.get("source", "confirmed")),
                 "verification_status": "CONFIRMED",
-                "display_label": n.get("display_label"),
-                "display_number": n.get("display_number"),
-                "suggested_bus_number": n.get("suggested_bus_number"),
+                "display_label": n.get("display_label") or n.get("display_name"),
+                "display_name": n.get("display_name") or n.get("display_label"),
+                "display_number": n.get("bus_number") or n.get("display_number"),
+                "suggested_bus_number": n.get("bus_number") or n.get("suggested_bus_number"),
+                "bus_number": n.get("bus_number"),
+                "connected_bus_number": n.get("connected_bus_number"),
             }
             for n in confirmed_nodes
         ]

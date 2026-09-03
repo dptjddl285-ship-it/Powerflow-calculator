@@ -320,4 +320,67 @@ class ReviewApiService {
     final data = jsonDecode(utf8.decode(response.bodyBytes));
     return Map<String, dynamic>.from(data as Map);
   }
+
+  Future<Map<String, dynamic>> linkBusNumbers({
+    required String documentId,
+    required List<ReviewNodeItem> workingNodes,
+    List<ReviewLineItem> workingLines = const [],
+  }) async {
+    final uri = Uri.parse('$baseUrl/review/link_bus_numbers');
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'document_id': documentId,
+        'working_nodes': workingNodes.map((n) => n.toJson()).toList(),
+        'working_lines': workingLines.map((l) => l.toJson()).toList(),
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('모선 번호 AI 판독 실패: HTTP ${response.statusCode}');
+    }
+
+    return jsonDecode(utf8.decode(response.bodyBytes));
+  }
+
+  Future<Map<String, dynamic>> uploadExcelCase(Uint8List fileBytes, String filename) async {
+    final uri = Uri.parse('$baseUrl/upload_excel');
+    final request = http.MultipartRequest('POST', uri);
+    // Use ascii safe filename to prevent Latin-1 encoding header exceptions on Dart http
+    final safeName = filename.replaceAll(RegExp(r'[^\x00-\x7F]'), '_');
+    request.files.add(
+      http.MultipartFile.fromBytes('file', fileBytes, filename: safeName.isNotEmpty ? safeName : 'case.xlsx'),
+    );
+
+    final streamedResponse = await request.send();
+    final response = await http.Response.fromStream(streamedResponse);
+
+    if (response.statusCode != 200) {
+      throw Exception('엑셀 업로드 요청 실패: HTTP ${response.statusCode} - ${response.body}');
+    }
+
+    final data = jsonDecode(utf8.decode(response.bodyBytes));
+    if (data['status'] != 'success') {
+      throw Exception(data['message'] ?? '엑셀 처리 실패');
+    }
+
+    return data['data'] as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> loadDefaultExcelCase() async {
+    final uri = Uri.parse('$baseUrl/load_default_excel');
+    final response = await http.get(uri);
+
+    if (response.statusCode != 200) {
+      throw Exception('기본 엑셀 요청 실패: HTTP ${response.statusCode}');
+    }
+
+    final data = jsonDecode(utf8.decode(response.bodyBytes));
+    if (data['status'] != 'success') {
+      throw Exception(data['message'] ?? '기본 엑셀 로드 실패');
+    }
+
+    return data['data'] as Map<String, dynamic>;
+  }
 }

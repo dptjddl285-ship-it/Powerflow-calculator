@@ -138,7 +138,7 @@ def build_graph_document(
         source_id = str(raw_node["id"])
         class_name = str(raw_node["class"]).lower()
         source = str(raw_node.get("source", "unknown"))
-        internal_id = _stable_id("node", document_id, f"{class_name}:{source_id}")
+        internal_id = source_id
         node_id_map[source_id] = internal_id
         rescue_kind = _rescue_kind(source)
         decision = decisions.get(source_id, "accepted")
@@ -148,6 +148,27 @@ def build_graph_document(
             review_state = ReviewState.AUTO_RESCUED
         else:
             review_state = ReviewState.ACCEPTED
+
+        # Bus Number field-level mapping (keeps structural review state intact)
+        display_bus_no = raw_node.get("bus_number")
+        if display_bus_no is not None and not isinstance(display_bus_no, int):
+            try:
+                display_bus_no = int(display_bus_no)
+            except Exception:
+                display_bus_no = None
+
+        parameters = dict(raw_node.get("parameters") or {})
+        if "bus_number_status" in raw_node:
+            parameters["bus_number_status"] = raw_node["bus_number_status"]
+        if "bus_number_reasons" in raw_node:
+            parameters["bus_number_reasons"] = raw_node["bus_number_reasons"]
+        if "bus_confidence" in raw_node:
+            parameters["bus_confidence"] = raw_node["bus_confidence"]
+
+        # Only if bus number validation is UNCERTAIN, elevate to NEEDS_REVIEW
+        if raw_node.get("bus_number_status") == "UNCERTAIN" and review_state == ReviewState.ACCEPTED:
+            review_state = ReviewState.NEEDS_REVIEW
+
         confidence = max(0.0, min(1.0, float(raw_node.get("confidence", 0.0))))
         bbox = _bbox(raw_node["bbox"])
         nodes.append(GraphNode(
@@ -159,6 +180,8 @@ def build_graph_document(
             confidence=confidence,
             source=source,
             review_state=review_state,
+            display_bus_no=display_bus_no,
+            parameters=parameters,
         ))
         if review_state == ReviewState.AUTO_RESCUED:
             kind = rescue_kind or str(raw_node.get("rescue_kind") or "policy_rescue")
@@ -203,7 +226,7 @@ def build_graph_document(
             })
             continue
         path = [_point(item) for item in path_raw]
-        edge_id = _stable_id("edge", document_id, source_line_id)
+        edge_id = source_line_id
         source_port_id = _stable_id("port", document_id, f"{source_line_id}:source")
         target_port_id = _stable_id("port", document_id, f"{source_line_id}:target")
         raw_source_port = raw_line.get("source_port")

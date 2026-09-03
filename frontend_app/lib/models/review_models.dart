@@ -18,6 +18,11 @@ class ReviewNodeItem {
   String? displayLabel; // e.g. "BUS 4", "LOAD 2", "GEN 1"
   int? displayNumber; // e.g. 4, 2, 1
   int? suggestedBusNumber; // e.g. 4
+  int? busNumber; // Verified or candidate bus number
+  String? busNumberStatus; // 'VERIFIED', 'UNCERTAIN'
+  List<String> busNumberReasons;
+  int? connectedBusNumber;
+  String? connectedBusId;
   String? numberSource; // 'detected_text' or 'sequence_fallback'
   double labelOffsetDx; // Draggable label offset x
   double labelOffsetDy; // Draggable label offset y
@@ -38,12 +43,32 @@ class ReviewNodeItem {
     this.displayLabel,
     this.displayNumber,
     this.suggestedBusNumber,
+    this.busNumber,
+    this.busNumberStatus,
+    this.busNumberReasons = const [],
+    this.connectedBusNumber,
+    this.connectedBusId,
     this.numberSource,
     this.labelOffsetDx = 0.0,
     this.labelOffsetDy = 0.0,
   });
 
   String get effectiveDisplayLabel {
+    final cls = className.toLowerCase();
+    if (cls == 'bus') {
+      if (busNumber != null) return "Bus $busNumber";
+      if (displayNumber != null) return "Bus $displayNumber";
+      if (displayLabel != null && displayLabel!.isNotEmpty) return displayLabel!;
+      return id.toUpperCase();
+    } else if (cls.contains('gen')) {
+      if (busNumber != null) return "G_$busNumber";
+      if (displayLabel != null && displayLabel!.isNotEmpty) return displayLabel!;
+      return id.toUpperCase();
+    } else if (cls.contains('load')) {
+      if (busNumber != null) return "Load_$busNumber";
+      if (displayLabel != null && displayLabel!.isNotEmpty) return displayLabel!;
+      return id.toUpperCase();
+    }
     if (displayLabel != null && displayLabel!.isNotEmpty) {
       return displayLabel!;
     }
@@ -64,6 +89,17 @@ class ReviewNodeItem {
           .toList();
     }
 
+    var bReasons = <String>[];
+    if (json['bus_number_reasons'] is List) {
+      bReasons = (json['bus_number_reasons'] as List)
+          .map((e) => e.toString())
+          .toList();
+    }
+
+    int? bNum = (json['bus_number'] as num?)?.toInt() ??
+        (json['display_bus_no'] as num?)?.toInt() ??
+        (json['parameters'] is Map ? (json['parameters']['bus_number'] as num?)?.toInt() : null);
+
     return ReviewNodeItem(
       id: json['id']?.toString() ?? '',
       className: json['class']?.toString() ?? 'bus',
@@ -81,9 +117,14 @@ class ReviewNodeItem {
       metadata: json['metadata'] is Map<String, dynamic>
           ? json['metadata']
           : {},
-      displayLabel: json['display_label']?.toString(),
+      displayLabel: json['display_name']?.toString() ?? json['display_label']?.toString(),
       displayNumber: (json['display_number'] as num?)?.toInt(),
       suggestedBusNumber: (json['suggested_bus_number'] as num?)?.toInt(),
+      busNumber: bNum,
+      busNumberStatus: json['bus_number_status']?.toString() ?? (json['parameters'] is Map ? json['parameters']['bus_number_status']?.toString() : null),
+      busNumberReasons: bReasons,
+      connectedBusNumber: (json['connected_bus_number'] as num?)?.toInt(),
+      connectedBusId: json['connected_bus_id']?.toString(),
       numberSource: json['number_source']?.toString(),
       labelOffsetDx: (json['label_offset_dx'] as num?)?.toDouble() ?? 0.0,
       labelOffsetDy: (json['label_offset_dy'] as num?)?.toDouble() ?? 0.0,

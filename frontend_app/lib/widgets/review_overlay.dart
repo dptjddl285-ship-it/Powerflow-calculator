@@ -447,97 +447,113 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                     widget.onSelectNode(node);
                                   }
                                 },
-                                child: Container(
-                                  width: renderW,
-                                  height: renderH,
-                                  decoration: BoxDecoration(
-                                    color: (isSelected ||
-                                            isEndpointOfSelectedLine)
-                                        ? Colors.yellowAccent.withValues(
-                                            alpha: 0.25,
-                                          )
-                                        : classColor.withValues(alpha: 0.08),
-                                    border: Border.all(
+                                  child: Container(
+                                    width: renderW,
+                                    height: renderH,
+                                    decoration: BoxDecoration(
                                       color: isSelected
-                                          ? Colors.yellowAccent
+                                          ? Colors.yellowAccent.withValues(alpha: 0.2 + 0.15 * pulseVal)
                                           : (isEndpointOfSelectedLine
-                                                ? Colors.cyanAccent
-                                                : (isRejected
-                                                    ? Colors.redAccent
-                                                    : classColor)),
-                                      width: isSelected
-                                          ? 1.8
-                                          : (isEndpointOfSelectedLine
-                                                ? 1.8
-                                                : 1.2),
-                                    ),
-                                    borderRadius: BorderRadius.circular(2),
-                                    boxShadow: (isSelected ||
-                                            isEndpointOfSelectedLine)
-                                        ? [
-                                            BoxShadow(
-                                              color: (isSelected
-                                                      ? Colors.yellowAccent
-                                                      : Colors.cyanAccent)
-                                                  .withValues(alpha: 0.4),
-                                              blurRadius: 4,
-                                            ),
-                                          ]
-                                        : null,
-                                  ),
-                                ),
-                              ),
-                            ),
-
-                            // Draggable Label Badge
-                            if (widget.showNodeLabels)
-                              Positioned(
-                                left: labelBaseX,
-                                top: labelBaseY,
-                                child: GestureDetector(
-                                  onTap: () => widget.onSelectNode(node),
-                                  onPanUpdate: (details) {
-                                    widget.onNodeOffsetChanged?.call(
-                                      node.id,
-                                      node.labelOffsetDx + details.delta.dx,
-                                      node.labelOffsetDy + details.delta.dy,
-                                    );
-                                  },
-                                  child: MouseRegion(
-                                    cursor: SystemMouseCursors.move,
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 2.5,
-                                        vertical: 0.5,
-                                      ),
-                                      decoration: BoxDecoration(
+                                              ? Colors.cyanAccent.withValues(alpha: 0.25 + 0.2 * pulseVal)
+                                              : classColor.withValues(alpha: 0.08)),
+                                      border: Border.all(
                                         color: isSelected
                                             ? Colors.yellowAccent
                                             : (isEndpointOfSelectedLine
                                                   ? Colors.cyanAccent
-                                                  : classColor.withValues(
-                                                      alpha: 0.92,
-                                                    )),
-                                        borderRadius: BorderRadius.circular(2),
-                                        border: Border.all(
-                                          color: isSelected
-                                              ? Colors.orangeAccent
-                                              : statusColor,
-                                          width: isSelected ? 1.0 : 0.6,
-                                        ),
+                                                  : (isRejected
+                                                      ? Colors.redAccent
+                                                      : classColor)),
+                                        width: isSelected
+                                            ? (2.0 + 1.2 * pulseVal)
+                                            : (isEndpointOfSelectedLine
+                                                  ? (2.2 + 1.8 * pulseVal)
+                                                  : 1.2),
                                       ),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Icon(
-                                            _getClassIcon(node.className),
-                                            size: 8.0,
-                                            color:
-                                                (isSelected ||
-                                                    isEndpointOfSelectedLine)
-                                                ? Colors.black87
-                                                : Colors.white,
+                                      borderRadius: BorderRadius.circular(2),
+                                      boxShadow: isSelected
+                                          ? [
+                                              BoxShadow(
+                                                color: Colors.yellowAccent.withValues(alpha: 0.5 + 0.4 * pulseVal),
+                                                blurRadius: 6.0 + 6.0 * pulseVal,
+                                                spreadRadius: 1.0 + 1.5 * pulseVal,
+                                              ),
+                                            ]
+                                          : (isEndpointOfSelectedLine
+                                              ? [
+                                                  BoxShadow(
+                                                    color: const Color(0xFF00E5FF).withValues(alpha: 0.6 + 0.35 * pulseVal),
+                                                    blurRadius: 8.0 + 8.0 * pulseVal,
+                                                    spreadRadius: 2.0 + 2.0 * pulseVal,
+                                                  ),
+                                                ]
+                                              : null),
+                                    ),
+                                  ),
+                                ),
+                              ),
+
+                              // Draggable Label Badge
+                              if (widget.showNodeLabels)
+                                Positioned(
+                                  left: labelBaseX,
+                                  top: labelBaseY,
+                                  child: GestureDetector(
+                                    onTap: () => widget.onSelectNode(node),
+                                    onPanUpdate: (details) {
+                                      widget.onNodeOffsetChanged?.call(
+                                        node.id,
+                                        node.labelOffsetDx + details.delta.dx,
+                                        node.labelOffsetDy + details.delta.dy,
+                                      );
+                                    },
+                                    child: MouseRegion(
+                                      cursor: SystemMouseCursors.move,
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 2.5,
+                                          vertical: 0.5,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: isSelected
+                                              ? Colors.yellowAccent
+                                              : (isEndpointOfSelectedLine
+                                                    ? Colors.cyanAccent
+                                                    : classColor.withValues(
+                                                        alpha: 0.92,
+                                                      )),
+                                          borderRadius: BorderRadius.circular(2),
+                                          border: Border.all(
+                                            color: isSelected
+                                                ? Colors.orangeAccent
+                                                : (isEndpointOfSelectedLine
+                                                    ? Colors.white
+                                                    : statusColor),
+                                            width: isSelected
+                                                ? 1.2
+                                                : (isEndpointOfSelectedLine
+                                                    ? (1.2 + 0.8 * pulseVal)
+                                                    : 0.6),
                                           ),
+                                          boxShadow: isEndpointOfSelectedLine
+                                              ? [
+                                                  BoxShadow(
+                                                    color: const Color(0xFF00E5FF).withValues(alpha: 0.6 * pulseVal),
+                                                    blurRadius: 4.0 + 4.0 * pulseVal,
+                                                  ),
+                                                ]
+                                              : null,
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              _getClassIcon(node.className),
+                                              size: 8.0,
+                                              color: (isSelected || isEndpointOfSelectedLine)
+                                                  ? Colors.black87
+                                                  : Colors.white,
+                                            ),
                                           const SizedBox(width: 2.0),
                                           Text(
                                             node.effectiveDisplayLabel,

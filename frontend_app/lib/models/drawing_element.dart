@@ -28,6 +28,7 @@ class DrawingElement {
   double qPu = 0.0;
   double rPu = 0.01;
   double xPu = 0.05;
+  double bPu = 0.0;
 
   DrawingElement({
     required this.id,
@@ -74,7 +75,8 @@ class DrawingElement {
       ..pPu = pPu
       ..qPu = qPu
       ..rPu = rPu
-      ..xPu = xPu;
+      ..xPu = xPu
+      ..bPu = bPu;
   }
 
   Map<String, dynamic> toJson() {
@@ -91,6 +93,7 @@ class DrawingElement {
       'qPu': qPu,
       'rPu': rPu,
       'xPu': xPu,
+      'bPu': bPu,
     };
   }
 }

@@ -1,7 +1,9 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'dart:math' as math;
 import 'dart:convert'; 
 import 'dart:typed_data';
+import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http; 
 import 'package:image_picker/image_picker.dart';
 
@@ -36,7 +38,7 @@ class DrawingElement {
   bool showInfo = false; 
 
   bool isSlack = false; double vPu = 1.0; double thetaDeg = 0.0;
-  double pPu = 0.0; double qPu = 0.0; double rPu = 0.01; double xPu = 0.05;
+  double pPu = 0.0; double qPu = 0.0; double rPu = 0.01; double xPu = 0.05; double bPu = 0.0;
 
   DrawingElement({
     required this.id, required this.type, required this.position,
@@ -56,7 +58,7 @@ class DrawingElement {
     )
     ..showInfo = showInfo 
     ..isSlack = isSlack..vPu = vPu..thetaDeg = thetaDeg
-    ..pPu = pPu..qPu = qPu..rPu = rPu..xPu = xPu;
+    ..pPu = pPu..qPu = qPu..rPu = rPu..xPu = xPu..bPu = bPu;
   }
 
   Map<String, dynamic> toJson() {
@@ -73,6 +75,7 @@ class DrawingElement {
       'qPu': qPu,
       'rPu': rPu,
       'xPu': xPu,
+      'bPu': bPu,
     };
   }
 }
@@ -313,6 +316,223 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     }
   }
 
+  Future<void> _importExcelCase() async {
+    try {
+      FilePickerResult? result = await FilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['xlsx', 'xls', 'csv'],
+        withData: true,
+      );
+      if (result == null || result.files.isEmpty) return;
+
+      PlatformFile file = result.files.first;
+      Uint8List? bytes = file.bytes;
+      if (bytes == null && file.path != null) {
+        try {
+          bytes = await File(file.path!).readAsBytes();
+        } catch (_) {}
+      }
+      if (bytes == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("파일 데이터를 읽을 수 없습니다."), backgroundColor: Colors.red),
+        );
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("📊 엑셀 계통 데이터를 분석하고 있습니다...")),
+      );
+
+      var uri = Uri.parse('http://127.0.0.1:8000/upload_excel');
+      var request = http.MultipartRequest('POST', uri);
+      request.files.add(
+        http.MultipartFile.fromBytes('file', bytes, filename: file.name),
+      );
+
+      var response = await request.send();
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        var responseData = await response.stream.bytesToString();
+        var res = jsonDecode(responseData);
+
+        if (res['status'] == 'success') {
+          var excelData = res['data'];
+          _applyExcelDataToCanvas(excelData);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("엑셀 처리 실패: ${res['message']}"),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("엑셀 업로드 서버 오류 (코드: ${response.statusCode})"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("엑셀 파일 선택/업로드 오류: $e"), backgroundColor: Colors.red),
+      );
+    }
+  }
+
+  void _applyExcelDataToCanvas(Map<String, dynamic> excelData) {
+    _saveState();
+    setState(() {
+      var buses = excelData['buses'] as Map<String, dynamic>? ?? {};
+      var gens = excelData['generators'] as Map<String, dynamic>? ?? {};
+      var branches = excelData['branches'] as Map<String, dynamic>? ?? {};
+      int? slackBus = excelData['slack_bus_number'];
+
+      int updatedBuses = 0;
+      int updatedGens = 0;
+      int updatedLoads = 0;
+      int updatedLines = 0;
+
+      // 1. Map ID to Bus Number
+      Map<String, int> elIdToBusNum = {};
+      for (var el in elements) {
+        if (el.type == Tool.bus) {
+          int? bNum;
+          if (el.label.isNotEmpty) {
+            String digits = el.label.replaceAll(RegExp(r'[^0-9]'), '');
+            if (digits.isNotEmpty) bNum = int.tryParse(digits);
+          }
+          if (bNum == null) {
+            String digits = el.id.split('_').last.replaceAll(RegExp(r'[^0-9]'), '');
+            if (digits.isNotEmpty) bNum = int.tryParse(digits);
+          }
+          if (bNum != null) {
+            elIdToBusNum[el.id] = bNum;
+          }
+        }
+      }
+
+      // 2. Apply parameters to each element
+      for (var el in elements) {
+        if (el.type == Tool.bus) {
+          int? bNum = elIdToBusNum[el.id];
+          if (bNum != null && buses.containsKey(bNum.toString())) {
+            var bInfo = buses[bNum.toString()];
+            el.isSlack = bInfo['is_slack'] == true;
+            el.vPu = (bInfo['vm_pu'] as num?)?.toDouble() ?? 1.0;
+            el.thetaDeg = (bInfo['va_deg'] as num?)?.toDouble() ?? 0.0;
+            el.pPu = (bInfo['pload_pu'] as num?)?.toDouble() ?? 0.0;
+            el.qPu = (bInfo['qload_pu'] as num?)?.toDouble() ?? 0.0;
+            if (el.isSlack) {
+              el.label = "$bNum (Slack)";
+            }
+            updatedBuses++;
+          }
+        } else if (el.type == Tool.generator) {
+          int? bNum;
+          if (el.parentBusId != null && elIdToBusNum.containsKey(el.parentBusId)) {
+            bNum = elIdToBusNum[el.parentBusId];
+          }
+          if (bNum == null && el.parentBusId != null) {
+            String digits = el.parentBusId!.replaceAll(RegExp(r'[^0-9]'), '');
+            if (digits.isNotEmpty) bNum = int.tryParse(digits);
+          }
+          if (bNum == null && el.label.isNotEmpty) {
+            String digits = el.label.replaceAll(RegExp(r'[^0-9]'), '');
+            if (digits.isNotEmpty) bNum = int.tryParse(digits);
+          }
+          if (bNum == null && el.id.isNotEmpty) {
+            String digits = el.id.replaceAll(RegExp(r'[^0-9]'), '');
+            if (digits.isNotEmpty) bNum = int.tryParse(digits);
+          }
+          if (bNum != null && gens.containsKey(bNum.toString())) {
+            var gInfo = gens[bNum.toString()];
+            el.isSlack = gInfo['is_slack'] == true;
+            el.pPu = (gInfo['pg_pu'] as num?)?.toDouble() ?? 0.0;
+            el.qPu = (gInfo['qg_pu'] as num?)?.toDouble() ?? 0.0;
+            el.vPu = (gInfo['voltage_setpoint'] as num?)?.toDouble() ?? 1.0;
+            el.label = "G_$bNum" + (el.isSlack ? " (Slack)" : "");
+            updatedGens++;
+          }
+        } else if (el.type == Tool.load) {
+          int? bNum;
+          if (el.parentBusId != null && elIdToBusNum.containsKey(el.parentBusId)) {
+            bNum = elIdToBusNum[el.parentBusId];
+          }
+          if (bNum == null && el.parentBusId != null) {
+            String digits = el.parentBusId!.replaceAll(RegExp(r'[^0-9]'), '');
+            if (digits.isNotEmpty) bNum = int.tryParse(digits);
+          }
+          if (bNum == null && el.label.isNotEmpty) {
+            String digits = el.label.replaceAll(RegExp(r'[^0-9]'), '');
+            if (digits.isNotEmpty) bNum = int.tryParse(digits);
+          }
+          if (bNum == null && el.id.isNotEmpty) {
+            String digits = el.id.replaceAll(RegExp(r'[^0-9]'), '');
+            if (digits.isNotEmpty) bNum = int.tryParse(digits);
+          }
+          if (bNum != null && buses.containsKey(bNum.toString())) {
+            var bInfo = buses[bNum.toString()];
+            el.pPu = (bInfo['pload_pu'] as num?)?.toDouble() ?? 0.0;
+            el.qPu = (bInfo['qload_pu'] as num?)?.toDouble() ?? 0.0;
+            el.label = "Load_$bNum";
+            updatedLoads++;
+          }
+        } else if (el.type == Tool.line) {
+          int? getBusNum(String? id) {
+            if (id == null) return null;
+            if (elIdToBusNum.containsKey(id)) return elIdToBusNum[id];
+            String digits = id.replaceAll(RegExp(r'[^0-9]'), '');
+            return digits.isNotEmpty ? int.tryParse(digits) : null;
+          }
+          int? fb = getBusNum(el.startElementId);
+          int? tb = getBusNum(el.endElementId);
+          if (fb == null || tb == null) {
+            final match = RegExp(r'(\d+)\s*[-~↔]\s*(\d+)').firstMatch(el.label);
+            if (match != null) {
+              fb = int.tryParse(match.group(1)!);
+              tb = int.tryParse(match.group(2)!);
+            }
+          }
+          if (fb == null || tb == null) {
+            final match = RegExp(r'(\d+)\s*[-~_]\s*(\d+)').firstMatch(el.id);
+            if (match != null) {
+              fb = int.tryParse(match.group(1)!);
+              tb = int.tryParse(match.group(2)!);
+            }
+          }
+          if (fb != null && tb != null) {
+            el.label = "Line $fb-$tb";
+            var brInfo = branches["${fb}_${tb}"] ??
+                         branches["${tb}_${fb}"] ??
+                         branches["($fb, $tb)"] ??
+                         branches["($tb, $fb)"] ??
+                         branches["$fb-$tb"] ??
+                         branches["$tb-$fb"];
+            if (brInfo != null) {
+              el.rPu = (brInfo['r_pu'] as num?)?.toDouble() ?? 0.01;
+              el.xPu = (brInfo['x_pu'] as num?)?.toDouble() ?? 0.05;
+              el.bPu = (brInfo['b_pu'] as num?)?.toDouble() ?? 0.0;
+              updatedLines++;
+            }
+          }
+        }
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            "✅ 엑셀 데이터 매칭 완료!\n• 슬랙 모선: #${slackBus ?? '자동지정'}\n• 모선: $updatedBuses개 | 발전기: $updatedGens개 | 부하: $updatedLoads개 | 선로: $updatedLines개",
+          ),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    });
+  }
+
   void _applyAiDataToCanvas(Map<String, dynamic> aiData) {
     _saveState(); 
     setState(() {
@@ -404,9 +624,16 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       // 3. Parse lines using exact pixel paths
       for (var line in rawLines) {
         String lineId = (line['line_id'] ?? line['id'] ?? '').toString();
+        String lineLabel = (line['display_label'] ?? line['display_name'] ?? '').toString();
         List<dynamic> rawPath = line['path'] ?? [];
         List<dynamic> connectedTo = line['connected_to'] ?? [];
         
+        if (lineLabel.isEmpty && connectedTo.length >= 2) {
+          String ep1 = connectedTo[0].toString().split('_').last;
+          String ep2 = connectedTo[1].toString().split('_').last;
+          lineLabel = "Line $ep1-$ep2";
+        }
+
         if (rawPath.length >= 2) {
           Offset startPos = Offset((rawPath.first[0] as num).toDouble() + shiftX, (rawPath.first[1] as num).toDouble() + shiftY);
           Offset endPos = Offset((rawPath.last[0] as num).toDouble() + shiftX, (rawPath.last[1] as num).toDouble() + shiftY);
@@ -424,6 +651,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
             id: lineId, type: Tool.line, 
             position: startPos, midPosition: midPos, endPosition: endPos,
             aiPath: parsedPath,
+            label: lineLabel.isNotEmpty ? lineLabel : lineId,
             startElementId: connectedTo.isNotEmpty ? connectedTo[0].toString() : null,
             endElementId: connectedTo.length > 1 ? connectedTo[1].toString() : null,
           ));
@@ -455,6 +683,45 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         }
       }
 
+      // 5. Connect every Generator & Load to its parent Bus (via line or spatial proximity)
+      for (var dev in elements.where((e) => e.type == Tool.generator || e.type == Tool.load)) {
+        if (dev.parentBusId == null || dev.parentBusId!.isEmpty) {
+          for (var l in elements.where((e) => e.type == Tool.line)) {
+            if (l.startElementId == dev.id && l.endElementId != null) {
+              var other = elements.where((e) => e.id == l.endElementId).firstOrNull;
+              if (other != null && other.type == Tool.bus) {
+                dev.parentBusId = other.id;
+                break;
+              }
+            } else if (l.endElementId == dev.id && l.startElementId != null) {
+              var other = elements.where((e) => e.id == l.startElementId).firstOrNull;
+              if (other != null && other.type == Tool.bus) {
+                dev.parentBusId = other.id;
+                break;
+              }
+            }
+          }
+        }
+        if (dev.parentBusId == null || dev.parentBusId!.isEmpty) {
+          DrawingElement? nearestBus;
+          double minDist = double.infinity;
+          for (var b in elements.where((e) => e.type == Tool.bus)) {
+            double d = (dev.position - b.position).distance;
+            if (d < minDist) {
+              minDist = d;
+              nearestBus = b;
+            }
+          }
+          if (nearestBus != null && minDist < 350.0) {
+            dev.parentBusId = nearestBus.id;
+          }
+        }
+      }
+
+      if (aiData['excel_data'] != null) {
+        _applyExcelDataToCanvas(aiData['excel_data']);
+      }
+
       _resetCamera();
     });
   }
@@ -469,6 +736,20 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         actions: [
           IconButton(icon: const Icon(Icons.undo, color: Colors.white), onPressed: historyStack.isNotEmpty ? _undo : null),
           IconButton(icon: const Icon(Icons.redo, color: Colors.white), onPressed: redoStack.isNotEmpty ? _redo : null),
+          IconButton(
+            icon: const Icon(Icons.table_view, color: Colors.greenAccent),
+            tooltip: "엑셀 계통 데이터 가져오기 (.xlsx)",
+            onPressed: _importExcelCase,
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 4.0),
+            child: ElevatedButton.icon(
+              onPressed: _importExcelCase,
+              icon: const Icon(Icons.table_chart, color: Colors.white, size: 18),
+              label: const Text("엑셀 데이터 적용", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.teal[700]),
+            ),
+          ),
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 4.0),
             child: ElevatedButton.icon(
@@ -479,7 +760,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
+            padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 8.0),
             child: ElevatedButton.icon(
               onPressed: _sendDataToServer, 
               icon: const Icon(Icons.cloud_upload, color: Colors.white), 
@@ -557,9 +838,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     
     String name = e.label.isNotEmpty ? e.label : e.id;
     String info = "[$name]\n";
-    if (e.type == Tool.generator) info += e.isSlack ? "V:${e.vPu}∠${e.thetaDeg}°" : "P:${e.pPu}\nV:${e.vPu}";
+    if (e.type == Tool.generator) info += e.isSlack ? "V:${e.vPu}∠${e.thetaDeg}° (Slack)\nP:${e.pPu} Q:${e.qPu}" : "P:${e.pPu} Q:${e.qPu}\nV:${e.vPu}";
     else if (e.type == Tool.load) info += "P:${e.pPu}\nQ:${e.qPu}";
-    else if (e.type == Tool.line) info += "${e.rPu}+j${e.xPu}";
+    else if (e.type == Tool.line) info += "${e.rPu}+j${e.xPu}" + (e.bPu != 0 ? "\nB:${e.bPu}" : "");
     else return const SizedBox.shrink();
 
     Offset basePos = (e.type == Tool.line) ? (e.midPosition ?? (e.position + (e.endPosition ?? e.position)) / 2) : e.position;
@@ -837,6 +1118,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     final qCtrl = TextEditingController(text: e.qPu.toString());
     final rCtrl = TextEditingController(text: e.rPu.toString()); 
     final xCtrl = TextEditingController(text: e.xPu.toString());
+    final bCtrl = TextEditingController(text: e.bPu.toString());
     final aCtrl = TextEditingController(text: e.thetaDeg.toString());
     
     bool tempShowInfo = e.showInfo;
@@ -847,7 +1129,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
           return AlertDialog(
-            title: Text("${e.id} 제원 설정"),
+            title: Text(e.label.isNotEmpty ? "${e.label} 제원 설정" : "${e.id} 제원 설정"),
             content: SingleChildScrollView(
               child: Column(mainAxisSize: MainAxisSize.min, children: [
                 SwitchListTile(
@@ -862,19 +1144,28 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                   controller: lCtrl, 
                   decoration: InputDecoration(labelText: e.type == Tool.bus ? "버스 번호" : "라벨 (이름)")
                 ),
-                if (e.type == Tool.generator || e.type == Tool.bus) ...[
-                  if(e.type == Tool.generator) 
-                    SwitchListTile(
-                      title: const Text("슬랙 모선"), 
-                      value: tempIsSlack, 
-                      activeColor: Colors.red,
-                      onChanged: (v) => setDialogState(() => tempIsSlack = v),
+                if (e.type == Tool.generator) ...[
+                  SwitchListTile(
+                    title: const Text("슬랙 모선 (Slack/Swing)"),
+                    subtitle: Text(tempIsSlack ? "기준 모선 (위상 θ=0° 고정)" : "PV 모선 (유효전력 P, 전압 V 지정)"),
+                    value: tempIsSlack,
+                    activeColor: Colors.redAccent,
+                    onChanged: (v) => setDialogState(() => tempIsSlack = v),
+                  ),
+                  TextField(controller: vCtrl, decoration: const InputDecoration(labelText: "목표 전압 V (pu)")),
+                  TextField(
+                    controller: pCtrl,
+                    decoration: InputDecoration(
+                      labelText: tempIsSlack ? "발전 출력 P (pu) [슬랙 분담]" : "발전 출력 P (pu)",
                     ),
+                  ),
+                  TextField(controller: qCtrl, decoration: const InputDecoration(labelText: "무효 전력 Q (pu)")),
+                  if (tempIsSlack)
+                    TextField(controller: aCtrl, decoration: const InputDecoration(labelText: "기준 위상각 θ (deg)")),
+                ],
+                if (e.type == Tool.bus) ...[
                   TextField(controller: vCtrl, decoration: const InputDecoration(labelText: "전압 V (pu)")),
-                  if (tempIsSlack || e.type == Tool.bus) 
-                    TextField(controller: aCtrl, decoration: const InputDecoration(labelText: "위상 θ (deg)")) 
-                  else 
-                    TextField(controller: pCtrl, decoration: const InputDecoration(labelText: "출력 P (pu)")),
+                  TextField(controller: aCtrl, decoration: const InputDecoration(labelText: "위상 θ (deg)")),
                 ],
                 if (e.type == Tool.load) ...[ 
                   TextField(controller: pCtrl, decoration: const InputDecoration(labelText: "부하 P (pu)")), 
@@ -882,11 +1173,13 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                 ],
                 if (e.type == Tool.line) ...[ 
                   TextField(controller: rCtrl, decoration: const InputDecoration(labelText: "저항 R (pu)")), 
-                  TextField(controller: xCtrl, decoration: const InputDecoration(labelText: "리액턴스 X (pu)")) 
+                  TextField(controller: xCtrl, decoration: const InputDecoration(labelText: "리액턴스 X (pu)")), 
+                  TextField(controller: bCtrl, decoration: const InputDecoration(labelText: "서셉턴스 B (pu)")), 
                 ],
                 if (e.type == Tool.transformer) ...[ 
                   TextField(controller: rCtrl, decoration: const InputDecoration(labelText: "저항 R (pu)")), 
-                  TextField(controller: xCtrl, decoration: const InputDecoration(labelText: "리액턴스 X (pu)")) 
+                  TextField(controller: xCtrl, decoration: const InputDecoration(labelText: "리액턴스 X (pu)")), 
+                  TextField(controller: bCtrl, decoration: const InputDecoration(labelText: "서셉턴스 B (pu)")), 
                 ],
               ])
             ),
@@ -901,6 +1194,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                     e.qPu = double.tryParse(qCtrl.text) ?? 0; 
                     e.rPu = double.tryParse(rCtrl.text) ?? 0.01; 
                     e.xPu = double.tryParse(xCtrl.text) ?? 0.05; 
+                    e.bPu = double.tryParse(bCtrl.text) ?? 0.0; 
                     e.thetaDeg = double.tryParse(aCtrl.text) ?? 0; 
                     
                     e.showInfo = tempShowInfo; 

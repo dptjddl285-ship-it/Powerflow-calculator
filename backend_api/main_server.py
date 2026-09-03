@@ -13,6 +13,11 @@ try:
     from agent_tools.vision_tools import configure_review_tools
     from core.power_logic import construct_y_bus
     from core.adaptive_vision_pipeline import analyze_circuit_image_adaptive
+    from core.bus_number_linker import (
+        link_and_validate_bus_numbers,
+        propagate_bus_numbers_to_devices,
+        synchronize_node_and_line_ids,
+    )
     from review.api import router as review_router
     from review.staged_api import (
         configure_staged_review_model,
@@ -82,6 +87,14 @@ async def process_image(file: UploadFile = File(...)):
     try:
         image_bytes = await file.read()
         result_data = analyze_circuit_image_adaptive(image_bytes, yolo_model)
+        
+        # Link & Validate Bus Numbers (Runs after all objects are masked and rescued)
+        if "nodes" in result_data and result_data["nodes"]:
+            result_data["nodes"], bus_report = link_and_validate_bus_numbers(image_bytes, result_data["nodes"])
+            result_data["nodes"] = propagate_bus_numbers_to_devices(result_data["nodes"], result_data.get("lines", []))
+            result_data["nodes"], result_data["lines"] = synchronize_node_and_line_ids(result_data["nodes"], result_data.get("lines", []))
+            result_data["bus_number_report"] = bus_report
+
         # Keep the legacy nodes/lines response for the current Flutter canvas,
         # and attach the versioned review contract for the new Agent workflow.
         graph_document = build_graph_document(
@@ -101,32 +114,58 @@ async def process_image(file: UploadFile = File(...)):
         return {"status": "error", "message": str(e)}
 
 # ==========================================
-# 🎯 [API 2 - 엑셀 업로드] 플러터에서 엑셀 파일이 날아오면 바로 읽어서 돌려줌!
+# 🎯 [API 2 - 엑셀 업로드 및 계통 파라미터 매핑]
 # ==========================================
+from core.excel_case_importer import ExcelCaseImporter
+
+excel_importer = ExcelCaseImporter()
+
+
 @app.post("/upload_excel")
 async def upload_excel(file: UploadFile = File(...)):
     print(f"\n📂 [엑셀 수신] 업로드된 파일명: {file.filename}")
     try:
-        # 파일을 하드디스크에 저장하지 않고 메모리(BytesIO)에서 바로 엑셀 파싱!
         contents = await file.read()
-        
-        # 발전기 시트 읽기
-        df_gen = pd.read_excel(io.BytesIO(contents), sheet_name='Generator')
-        generators = df_gen.set_index('Gen_ID').to_dict(orient='index')
-        
-        # 선로 시트 읽기
-        df_line = pd.read_excel(io.BytesIO(contents), sheet_name='Line')
-        lines = df_line.set_index('Line_ID').to_dict(orient='index')
-        
-        excel_data = {
-            "generators": generators,
-            "lines": lines
-        }
-        
-        print(f"✅ 엑셀 업로드 및 파싱 성공! 발전기({len(generators)}개), 선로({len(lines)}개) 데이터 전송.")
-        return {"status": "success", "data": excel_data}
+        parsed_case = excel_importer.parse_excel(contents)
+        print(
+            f"✅ 엑셀 파싱 성공! 슬랙 모선: #{parsed_case['slack_bus_number']}, "
+            f"모선({parsed_case['total_buses']}개), 발전기({parsed_case['total_generators']}개), "
+            f"선로({parsed_case['total_branches']}개)"
+        )
+        return {"status": "success", "data": parsed_case}
     except Exception as e:
         print(f"❌ 엑셀 처리 중 에러 발생: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/load_default_excel")
+async def load_default_excel():
+    sample_path = Path(__file__).parent / "sample_cases" / "ac_case25.xlsx"
+    if not sample_path.exists():
+        return {"status": "error", "message": "기본 ac_case25 샘플 파일을 찾을 수 없습니다."}
+    try:
+        with open(sample_path, "rb") as f:
+            contents = f.read()
+        parsed_case = excel_importer.parse_excel(contents)
+        print(f"✅ 기본 엑셀(ac_case25) 로드 성공! 슬랙 모선: #{parsed_case['slack_bus_number']}")
+        return {"status": "success", "data": parsed_case}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/apply_excel_to_elements")
+async def apply_excel_to_elements(request: Request):
+    try:
+        body = await request.json()
+        elements = body.get("elements", [])
+        excel_data = body.get("excel_data", {})
+        updated_elements, summary = excel_importer.apply_to_elements(elements, excel_data)
+        return {
+            "status": "success",
+            "elements": updated_elements,
+            "summary": summary
+        }
+    except Exception as e:
         return {"status": "error", "message": str(e)}
 
 # [API 3] 조류 계산 

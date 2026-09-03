@@ -434,11 +434,6 @@ def validate_graph(
         if unknown:
             issues.append(GraphIssue("error", "unknown_endpoint", "Line references an unknown component", unknown))
             continue
-        pair = tuple(sorted((first, second)))
-        if pair in seen_pairs:
-            issues.append(GraphIssue("warning", "duplicate_edge", "Duplicate object-to-object connection", pair))
-        else:
-            seen_pairs.add(pair)
         degree[first] += 1
         degree[second] += 1
 

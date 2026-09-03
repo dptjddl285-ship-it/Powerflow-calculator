@@ -87,43 +87,52 @@ def generate_display_labels(
                 bus_matches[node_id] = detected_num
                 used_bus_numbers.add(detected_num)
 
-    # Second pass: assign display labels
+    # Second pass: assign display labels preserving real verified bus numbers
     for node in sorted_nodes:
         node_copy = dict(node)
         cls_name = str(node.get("class", node.get("class_name", "unknown"))).lower()
         node_id = str(node.get("id", ""))
+        existing_bus_num = node.get("bus_number") or node.get("connected_bus_number")
 
         if cls_name == "bus":
-            if node_id in bus_matches:
+            if existing_bus_num is not None:
+                node_copy["display_label"] = f"Bus {existing_bus_num}"
+                node_copy["display_number"] = existing_bus_num
+                node_copy["suggested_bus_number"] = existing_bus_num
+                node_copy["number_source"] = "vision_ai_grounded"
+            elif node_id in bus_matches:
                 bus_num = bus_matches[node_id]
-                node_copy["display_label"] = f"BUS {bus_num}"
+                node_copy["display_label"] = f"Bus {bus_num}"
                 node_copy["display_number"] = bus_num
                 node_copy["suggested_bus_number"] = bus_num
                 node_copy["number_source"] = "detected_text"
             else:
-                # Find smallest unused positive integer
-                fallback_num = 1
-                while fallback_num in used_bus_numbers:
-                    fallback_num += 1
-                used_bus_numbers.add(fallback_num)
-                node_copy["display_label"] = f"BUS {fallback_num}"
-                node_copy["display_number"] = fallback_num
-                node_copy["suggested_bus_number"] = fallback_num
-                node_copy["number_source"] = "sequence_fallback"
+                node_copy["display_label"] = "Bus (미지정)"
+                node_copy["display_number"] = None
+                node_copy["suggested_bus_number"] = None
+                node_copy["number_source"] = "unassigned"
 
         elif cls_name == "generator":
-            class_counters["generator"] += 1
-            num = class_counters["generator"]
-            node_copy["display_label"] = f"GEN {num}"
-            node_copy["display_number"] = num
-            node_copy["number_source"] = "sequence_fallback"
+            if existing_bus_num is not None:
+                node_copy["display_label"] = f"G_{existing_bus_num}"
+                node_copy["display_number"] = existing_bus_num
+            else:
+                class_counters["generator"] += 1
+                num = class_counters["generator"]
+                node_copy["display_label"] = f"GEN {num}"
+                node_copy["display_number"] = num
+            node_copy["number_source"] = "device_mapping"
 
         elif cls_name == "load":
-            class_counters["load"] += 1
-            num = class_counters["load"]
-            node_copy["display_label"] = f"LOAD {num}"
-            node_copy["display_number"] = num
-            node_copy["number_source"] = "sequence_fallback"
+            if existing_bus_num is not None:
+                node_copy["display_label"] = f"Load_{existing_bus_num}"
+                node_copy["display_number"] = existing_bus_num
+            else:
+                class_counters["load"] += 1
+                num = class_counters["load"]
+                node_copy["display_label"] = f"LOAD {num}"
+                node_copy["display_number"] = num
+            node_copy["number_source"] = "device_mapping"
 
         elif cls_name == "transformer":
             class_counters["transformer"] += 1
