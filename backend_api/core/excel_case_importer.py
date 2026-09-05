@@ -264,11 +264,25 @@ class ExcelCaseImporter:
                 end_id = el.get('endElementId')
                 fb = el_id_to_bus_num.get(start_id)
                 tb = el_id_to_bus_num.get(end_id)
+                if fb is None or tb is None:
+                    import re
+                    m = re.search(r'(\d+)\s*[-~_↔]\s*(\d+)', str(el.get('label') or el.get('id') or ''))
+                    if m:
+                        fb, tb = int(m.group(1)), int(m.group(2))
+
                 br_info = branch_dict.get(f"{fb}_{tb}") or branch_dict.get(f"{tb}_{fb}") or branch_dict.get((fb, tb))
                 if br_info:
                     el['rPu'] = br_info['r_pu']
                     el['xPu'] = br_info['x_pu']
+                    el['bPu'] = br_info.get('b_pu', 0.0)
                     applied_counts['line'] += 1
+
+                # Check if this branch is also a transformer with off-nominal tap
+                tr_info = trans_dict.get(f"{fb}_{tb}") or trans_dict.get(f"{tb}_{fb}") or trans_dict.get((fb, tb))
+                if tr_info:
+                    el['tapRatio'] = tr_info['tap']
+                    el['tap'] = tr_info['tap']
+                    applied_counts['transformer'] += 1
 
             # 5. Transformer
             elif 'trans' in el_type:
@@ -276,11 +290,33 @@ class ExcelCaseImporter:
                 end_id = el.get('endElementId')
                 fb = el_id_to_bus_num.get(start_id)
                 tb = el_id_to_bus_num.get(end_id)
+                if fb is None or tb is None:
+                    import re
+                    m = re.search(r'(\d+)\s*[-~_↔]\s*(\d+)', str(el.get('label') or el.get('id') or ''))
+                    if m:
+                        fb, tb = int(m.group(1)), int(m.group(2))
+
+                if fb is None and el.get('parentBusId'):
+                    fb = el_id_to_bus_num.get(el.get('parentBusId'))
+
                 tr_info = trans_dict.get(f"{fb}_{tb}") or trans_dict.get(f"{tb}_{fb}") or trans_dict.get((fb, tb))
+                if not tr_info and fb is not None:
+                    for k, v in trans_dict.items():
+                        if v.get('from_bus') == fb or v.get('to_bus') == fb:
+                            tr_info = v
+                            tb = v.get('to_bus') if v.get('from_bus') == fb else v.get('from_bus')
+                            break
+
                 if tr_info:
                     el['tapRatio'] = tr_info['tap']
                     el['tap'] = tr_info['tap']
                     applied_counts['transformer'] += 1
+
+                br_info = branch_dict.get(f"{fb}_{tb}") or branch_dict.get(f"{tb}_{fb}") or branch_dict.get((fb, tb))
+                if br_info:
+                    el['rPu'] = br_info['r_pu']
+                    el['xPu'] = br_info['x_pu']
+                    el['bPu'] = br_info.get('b_pu', 0.0)
 
         summary = {
             'slack_bus_number': slack_bus_no,

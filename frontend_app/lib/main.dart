@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:convert'; 
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http; 
 import 'package:image_picker/image_picker.dart';
 
@@ -39,6 +40,7 @@ class DrawingElement {
 
   bool isSlack = false; double vPu = 1.0; double thetaDeg = 0.0;
   double pPu = 0.0; double qPu = 0.0; double rPu = 0.01; double xPu = 0.05; double bPu = 0.0;
+  double tapRatio = 1.0;
 
   DrawingElement({
     required this.id, required this.type, required this.position,
@@ -58,12 +60,14 @@ class DrawingElement {
     )
     ..showInfo = showInfo 
     ..isSlack = isSlack..vPu = vPu..thetaDeg = thetaDeg
-    ..pPu = pPu..qPu = qPu..rPu = rPu..xPu = xPu..bPu = bPu;
+    ..pPu = pPu..qPu = qPu..rPu = rPu..xPu = xPu..bPu = bPu
+    ..tapRatio = tapRatio;
   }
 
   Map<String, dynamic> toJson() {
     return {
       'id': id,
+      'label': label,
       'type': type.name,
       'parentBusId': parentBusId,
       'startElementId': startElementId,
@@ -76,6 +80,7 @@ class DrawingElement {
       'rPu': rPu,
       'xPu': xPu,
       'bPu': bPu,
+      'tapRatio': tapRatio,
     };
   }
 }
@@ -248,19 +253,426 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     final url = Uri.parse('http://127.0.0.1:8000/run_simulation'); 
     final payload = jsonEncode({'elements': elements.map((e) => e.toJson()).toList()});
 
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => const Center(
+        child: Card(
+          child: Padding(
+            padding: EdgeInsets.all(20.0),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(width: 16),
+                Text("AC Newton-Raphson 조류 계산 중..."),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
     try {
       final response = await http.post(url, headers: {'Content-Type': 'application/json'}, body: payload);
-      if (!mounted) return; // Async Gap 경고 해결
+      if (!mounted) return;
+      Navigator.pop(context); // dismiss loading dialog
+
       if (response.statusCode == 200) {
         final result = jsonDecode(response.body);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(result['message']), backgroundColor: Colors.green));
+        if (result['data'] != null && (result['status'] == 'success' || result['status'] == 'warning')) {
+          if (result['status'] == 'warning') {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text(result['message'] ?? "조류 계산 미수렴 (발산)"), backgroundColor: Colors.orange, duration: const Duration(seconds: 4)),
+            );
+          }
+          _showPowerFlowResultDialog(result['data']);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(result['message'] ?? "조류 계산 실패"), backgroundColor: Colors.orange),
+          );
+        }
       } else {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("서버 응답 오류가 발생했습니다."), backgroundColor: Colors.red));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("서버 응답 오류가 발생했습니다."), backgroundColor: Colors.red),
+        );
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("서버 접속 실패!\n$e"), backgroundColor: Colors.red));
+      Navigator.pop(context); // dismiss loading dialog
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("서버 접속 실패!\n$e"), backgroundColor: Colors.red),
+      );
     }
+  }
+
+  void _showPowerFlowResultDialog(Map<String, dynamic> data) {
+    bool isConverged = data['converged'] == true;
+    int iterations = data['iterations'] ?? 0;
+    double maxMismatch = (data['max_mismatch'] as num?)?.toDouble() ?? 0.0;
+    int? slackBus = data['slack_bus'];
+    var summary = data['summary'] as Map<String, dynamic>? ?? {};
+    List<dynamic> busResults = data['bus_results'] ?? [];
+    List<dynamic> lineResults = data['line_results'] ?? [];
+    String csvText = data['csv_text'] ?? "";
+
+    bool showPu = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDlgState) {
+          return Dialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: Container(
+              width: 1000,
+              height: 720,
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        isConverged ? Icons.check_circle : Icons.warning,
+                        color: isConverged ? Colors.green : Colors.orange,
+                        size: 32,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              isConverged ? "조류 계산 수렴 완료 ($iterations회 반복)" : "조류 계산 미수렴",
+                              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                            ),
+                            Text(
+                              "슬랙 모선: #${slackBus ?? '자동'} | 최대 불평형량 오차: ${maxMismatch.toStringAsExponential(3)}",
+                              style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[100],
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.grey[300]!),
+                        ),
+                        child: Row(
+                          children: [
+                            Text(
+                              showPu ? "단위: pu" : "단위: MW / MVAR",
+                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                            ),
+                            const SizedBox(width: 8),
+                            Switch(
+                              value: showPu,
+                              activeColor: Colors.blueAccent,
+                              onChanged: (v) => setDlgState(() => showPu = v),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.pop(ctx),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.blue[50],
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.blue[200]!),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        _buildKpiItem("총 발전 (P / Q)", "${summary['total_gen_p_mw'] ?? 0} MW / ${summary['total_gen_q_mvar'] ?? 0} MVAR", Colors.blue[900]!),
+                        _buildKpiItem("총 부하 (P / Q)", "${summary['total_load_p_mw'] ?? 0} MW / ${summary['total_load_q_mvar'] ?? 0} MVAR", Colors.teal[900]!),
+                        _buildKpiItem("총 송전 손실 (Loss)", "${summary['total_loss_p_mw'] ?? 0} MW / ${summary['total_loss_q_mvar'] ?? 0} MVAR", Colors.red[900]!),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+
+                  Expanded(
+                    child: DefaultTabController(
+                      length: 2,
+                      child: Column(
+                        children: [
+                          TabBar(
+                            labelColor: Colors.blue[800],
+                            unselectedLabelColor: Colors.grey[600],
+                            indicatorColor: Colors.blue[800],
+                            tabs: [
+                              Tab(
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    const Icon(Icons.grid_on, size: 18),
+                                    const SizedBox(width: 8),
+                                    Text("모선 결과 (${busResults.length}개)"),
+                                  ],
+                                ),
+                              ),
+                              Tab(
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    const Icon(Icons.timeline, size: 18),
+                                    const SizedBox(width: 8),
+                                    Text("선로 조류 (${lineResults.length}개)"),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          Expanded(
+                            child: TabBarView(
+                              children: [
+                                _buildBusResultsTable(busResults, showPu),
+                                _buildLineResultsTable(lineResults, showPu),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: () {
+                          _applyPowerFlowResultsToCanvas(busResults);
+                          Navigator.pop(ctx);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text("✅ 계산된 전압 및 위상각이 캔버스 모선에 실시간 반영되었습니다!"),
+                              backgroundColor: Colors.indigo,
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.sync, size: 18),
+                        label: const Text("캔버스에 전압/위상각 반영"),
+                      ),
+                      Row(
+                        children: [
+                          ElevatedButton.icon(
+                            onPressed: () {
+                              Clipboard.setData(ClipboardData(text: csvText));
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text("📋 CSV 데이터가 클립보드에 복사되었습니다! 엑셀(Ctrl+V)에 바로 붙여넣을 수 있습니다."),
+                                  backgroundColor: Colors.green,
+                                  duration: Duration(seconds: 3),
+                                ),
+                              );
+                            },
+                            icon: const Icon(Icons.copy, size: 18, color: Colors.white),
+                            label: const Text("CSV 텍스트 복사 (엑셀용)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.teal[700]),
+                          ),
+                          const SizedBox(width: 12),
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx),
+                            child: const Text("닫기"),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildKpiItem(String title, String val, Color color) {
+    return Column(
+      children: [
+        Text(title, style: TextStyle(fontSize: 12, color: Colors.grey[700], fontWeight: FontWeight.bold)),
+        const SizedBox(height: 4),
+        Text(val, style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: color)),
+      ],
+    );
+  }
+
+  Widget _buildBusResultsTable(List<dynamic> busResults, bool showPu) {
+    return Scrollbar(
+      thumbVisibility: true,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.vertical,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: DataTable(
+            headingRowColor: MaterialStateProperty.all(Colors.grey[100]),
+            columnSpacing: 22,
+            columns: [
+              const DataColumn(label: Text("Bus", style: TextStyle(fontWeight: FontWeight.bold))),
+              DataColumn(label: Text(showPu ? "Volt (pu)" : "Volt", style: const TextStyle(fontWeight: FontWeight.bold))),
+              DataColumn(label: Text(showPu ? "Angle (deg)" : "Angle", style: const TextStyle(fontWeight: FontWeight.bold))),
+              DataColumn(label: Text(showPu ? "Pgen (pu)" : "Pgen", style: const TextStyle(fontWeight: FontWeight.bold))),
+              DataColumn(label: Text(showPu ? "Qgen (pu)" : "Qgen", style: const TextStyle(fontWeight: FontWeight.bold))),
+              DataColumn(label: Text(showPu ? "Pload (pu)" : "Pload", style: const TextStyle(fontWeight: FontWeight.bold))),
+              DataColumn(label: Text(showPu ? "Qload (pu)" : "Qload", style: const TextStyle(fontWeight: FontWeight.bold))),
+              const DataColumn(label: Text("Type", style: TextStyle(fontWeight: FontWeight.bold))),
+            ],
+            rows: busResults.map((r) {
+              String type = r['type'] ?? 'PQ';
+              Color rowColor = type == 'SLACK'
+                  ? Colors.amber[50]!
+                  : (type == 'PV' ? Colors.blue[50]! : Colors.transparent);
+
+              double volt = showPu ? (r['volt_pu'] as num).toDouble() : (r['volt'] as num).toDouble();
+              double angle = (r['angle'] as num).toDouble();
+              double pgen = showPu ? (r['pgen_pu'] as num).toDouble() : (r['pgen'] as num).toDouble();
+              double qgen = showPu ? (r['qgen_pu'] as num).toDouble() : (r['qgen'] as num).toDouble();
+              double pload = showPu ? (r['pload_pu'] as num).toDouble() : (r['pload'] as num).toDouble();
+              double qload = showPu ? (r['qload_pu'] as num).toDouble() : (r['qload'] as num).toDouble();
+
+              return DataRow(
+                color: MaterialStateProperty.all(rowColor),
+                cells: [
+                  DataCell(Text("${r['bus']}", style: const TextStyle(fontWeight: FontWeight.bold))),
+                  DataCell(Text(volt.toStringAsFixed(4))),
+                  DataCell(Text(angle.toStringAsFixed(4))),
+                  DataCell(Text(pgen.toStringAsFixed(4))),
+                  DataCell(Text(qgen.toStringAsFixed(4))),
+                  DataCell(Text(pload.toStringAsFixed(4))),
+                  DataCell(Text(qload.toStringAsFixed(4))),
+                  DataCell(
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: type == 'SLACK' ? Colors.red[100] : (type == 'PV' ? Colors.blue[100] : Colors.grey[200]),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        type,
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: type == 'SLACK' ? Colors.red[900] : (type == 'PV' ? Colors.blue[900] : Colors.grey[800]),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            }).toList(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLineResultsTable(List<dynamic> lineResults, bool showPu) {
+    if (lineResults.isEmpty) {
+      return const Center(child: Text("선로 조류 데이터가 없습니다."));
+    }
+    return Scrollbar(
+      thumbVisibility: true,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.vertical,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: DataTable(
+            headingRowColor: MaterialStateProperty.all(Colors.grey[100]),
+            columnSpacing: 20,
+            columns: [
+              const DataColumn(label: Text("선로", style: TextStyle(fontWeight: FontWeight.bold))),
+              const DataColumn(label: Text("From", style: TextStyle(fontWeight: FontWeight.bold))),
+              const DataColumn(label: Text("To", style: TextStyle(fontWeight: FontWeight.bold))),
+              DataColumn(label: Text(showPu ? "P From (pu)" : "P From (MW)", style: const TextStyle(fontWeight: FontWeight.bold))),
+              DataColumn(label: Text(showPu ? "Q From (pu)" : "Q From (MVAR)", style: const TextStyle(fontWeight: FontWeight.bold))),
+              DataColumn(label: Text(showPu ? "P To (pu)" : "P To (MW)", style: const TextStyle(fontWeight: FontWeight.bold))),
+              DataColumn(label: Text(showPu ? "Q To (pu)" : "Q To (MVAR)", style: const TextStyle(fontWeight: FontWeight.bold))),
+              DataColumn(label: Text(showPu ? "Loss P (pu)" : "Loss P (MW)", style: const TextStyle(fontWeight: FontWeight.bold))),
+            ],
+            rows: lineResults.map((r) {
+              return DataRow(
+                cells: [
+                  DataCell(Text("${r['label'] ?? ''}", style: const TextStyle(fontWeight: FontWeight.w600))),
+                  DataCell(Text("${r['from_bus']}")),
+                  DataCell(Text("${r['to_bus']}")),
+                  DataCell(Text(showPu ? "${r['p_from_pu']}" : "${r['p_from_mw']}")),
+                  DataCell(Text(showPu ? "${r['q_from_pu']}" : "${r['q_from_mvar']}")),
+                  DataCell(Text(showPu ? "-" : "${r['p_to_mw']}")),
+                  DataCell(Text(showPu ? "-" : "${r['q_to_mvar']}")),
+                  DataCell(Text(showPu ? "${r['loss_p_pu']}" : "${r['loss_p_mw']}", style: const TextStyle(color: Colors.red))),
+                ],
+              );
+            }).toList(),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _applyPowerFlowResultsToCanvas(List<dynamic> busResults) {
+    setState(() {
+      for (var r in busResults) {
+        int bNum = r['bus'];
+        double v = (r['volt'] as num).toDouble();
+        double ang = (r['angle'] as num).toDouble();
+        double pg = (r['pgen_pu'] as num).toDouble();
+        double qg = (r['qgen_pu'] as num).toDouble();
+
+        for (var el in elements.where((e) => e.type == Tool.bus)) {
+          int? elBNum;
+          if (el.label.isNotEmpty) {
+            String digits = el.label.replaceAll(RegExp(r'[^0-9]'), '');
+            if (digits.isNotEmpty) elBNum = int.tryParse(digits);
+          }
+          if (elBNum == null) {
+            String digits = el.id.replaceAll(RegExp(r'[^0-9]'), '');
+            if (digits.isNotEmpty) elBNum = int.tryParse(digits);
+          }
+          if (elBNum == bNum) {
+            el.vPu = v;
+            el.thetaDeg = ang;
+            el.showInfo = true;
+          }
+        }
+
+        for (var el in elements.where((e) => e.type == Tool.generator)) {
+          int? elBNum;
+          if (el.parentBusId != null) {
+            String digits = el.parentBusId!.replaceAll(RegExp(r'[^0-9]'), '');
+            if (digits.isNotEmpty) elBNum = int.tryParse(digits);
+          }
+          if (elBNum == null && el.label.isNotEmpty) {
+            String digits = el.label.replaceAll(RegExp(r'[^0-9]'), '');
+            if (digits.isNotEmpty) elBNum = int.tryParse(digits);
+          }
+          if (elBNum == bNum) {
+            el.vPu = v;
+            el.thetaDeg = ang;
+            if (el.isSlack) {
+              el.pPu = pg;
+              el.qPu = qg;
+            } else {
+              el.qPu = qg;
+            }
+            el.showInfo = true;
+          }
+        }
+      }
+    });
   }
 
   Future<void> _openReviewPage() async {
@@ -388,12 +800,14 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       var buses = excelData['buses'] as Map<String, dynamic>? ?? {};
       var gens = excelData['generators'] as Map<String, dynamic>? ?? {};
       var branches = excelData['branches'] as Map<String, dynamic>? ?? {};
+      var transformers = excelData['transformers'] as Map<String, dynamic>? ?? {};
       int? slackBus = excelData['slack_bus_number'];
 
       int updatedBuses = 0;
       int updatedGens = 0;
       int updatedLoads = 0;
       int updatedLines = 0;
+      int updatedTransformers = 0;
 
       // 1. Map ID to Bus Number
       Map<String, int> elIdToBusNum = {};
@@ -517,6 +931,91 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
               el.bPu = (brInfo['b_pu'] as num?)?.toDouble() ?? 0.0;
               updatedLines++;
             }
+            var trInfo = transformers["${fb}_${tb}"] ??
+                         transformers["${tb}_${fb}"] ??
+                         transformers["($fb, $tb)"] ??
+                         transformers["($tb, $fb)"] ??
+                         transformers["$fb-$tb"] ??
+                         transformers["$tb-$fb"];
+            if (trInfo != null) {
+              el.tapRatio = (trInfo['tap'] as num?)?.toDouble() ?? 1.0;
+              el.label = "Line $fb-$tb (T: ${el.tapRatio})";
+              updatedTransformers++;
+            }
+          }
+        } else if (el.type == Tool.transformer) {
+          int? getBusNum(String? id) {
+            if (id == null) return null;
+            if (elIdToBusNum.containsKey(id)) return elIdToBusNum[id];
+            String digits = id.replaceAll(RegExp(r'[^0-9]'), '');
+            return digits.isNotEmpty ? int.tryParse(digits) : null;
+          }
+          int? fb = getBusNum(el.startElementId);
+          int? tb = getBusNum(el.endElementId);
+
+          if (fb == null || tb == null) {
+            List<int> connectedBuses = [];
+            for (var l in elements.where((e) => e.type == Tool.line)) {
+              if (l.startElementId == el.id && l.endElementId != null) {
+                int? b = getBusNum(l.endElementId);
+                if (b != null && !connectedBuses.contains(b)) connectedBuses.add(b);
+              } else if (l.endElementId == el.id && l.startElementId != null) {
+                int? b = getBusNum(l.startElementId);
+                if (b != null && !connectedBuses.contains(b)) connectedBuses.add(b);
+              }
+            }
+            if (connectedBuses.length >= 2) {
+              fb ??= connectedBuses[0];
+              tb ??= connectedBuses[1];
+            } else if (connectedBuses.length == 1) {
+              fb ??= connectedBuses[0];
+            }
+          }
+
+          if (fb == null || tb == null) {
+            final match = RegExp(r'(\d+)\s*[-~_↔]\s*(\d+)').firstMatch(el.label.isNotEmpty ? el.label : el.id);
+            if (match != null) {
+              fb ??= int.tryParse(match.group(1)!);
+              tb ??= int.tryParse(match.group(2)!);
+            }
+          }
+
+          if (fb == null && el.parentBusId != null) {
+            fb = getBusNum(el.parentBusId);
+          }
+
+          if (fb != null && tb != null) {
+            var trInfo = transformers["${fb}_${tb}"] ?? transformers["${tb}_${fb}"];
+            if (trInfo != null) {
+              el.tapRatio = (trInfo['tap'] as num?)?.toDouble() ?? 1.0;
+            }
+            var brInfo = branches["${fb}_${tb}"] ?? branches["${tb}_${fb}"];
+            if (brInfo != null) {
+              el.rPu = (brInfo['r_pu'] as num?)?.toDouble() ?? 0.0023;
+              el.xPu = (brInfo['x_pu'] as num?)?.toDouble() ?? 0.0839;
+              el.bPu = (brInfo['b_pu'] as num?)?.toDouble() ?? 0.0;
+            }
+            el.label = "T $fb-$tb (Tap: ${el.tapRatio})";
+            updatedTransformers++;
+          } else if (fb != null) {
+            for (var entry in transformers.entries) {
+              var tr = entry.value;
+              int f = (tr['from_bus'] as num).toInt();
+              int t = (tr['to_bus'] as num).toInt();
+              if (f == fb || t == fb) {
+                int otherBus = (f == fb) ? t : f;
+                el.tapRatio = (tr['tap'] as num?)?.toDouble() ?? 1.0;
+                var brInfo = branches["${fb}_${otherBus}"] ?? branches["${otherBus}_${fb}"];
+                if (brInfo != null) {
+                  el.rPu = (brInfo['r_pu'] as num?)?.toDouble() ?? 0.0023;
+                  el.xPu = (brInfo['x_pu'] as num?)?.toDouble() ?? 0.0839;
+                  el.bPu = (brInfo['b_pu'] as num?)?.toDouble() ?? 0.0;
+                }
+                el.label = "T $fb-$otherBus (Tap: ${el.tapRatio})";
+                updatedTransformers++;
+                break;
+              }
+            }
           }
         }
       }
@@ -524,7 +1023,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            "✅ 엑셀 데이터 매칭 완료!\n• 슬랙 모선: #${slackBus ?? '자동지정'}\n• 모선: $updatedBuses개 | 발전기: $updatedGens개 | 부하: $updatedLoads개 | 선로: $updatedLines개",
+            "✅ 엑셀 데이터 매칭 완료!\n• 슬랙 모선: #${slackBus ?? '자동지정'}\n• 모선: $updatedBuses개 | 발전기: $updatedGens개 | 부하: $updatedLoads개 | 선로: $updatedLines개 | 변압기: $updatedTransformers개",
           ),
           backgroundColor: Colors.green,
           duration: const Duration(seconds: 4),
@@ -840,7 +1339,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     String info = "[$name]\n";
     if (e.type == Tool.generator) info += e.isSlack ? "V:${e.vPu}∠${e.thetaDeg}° (Slack)\nP:${e.pPu} Q:${e.qPu}" : "P:${e.pPu} Q:${e.qPu}\nV:${e.vPu}";
     else if (e.type == Tool.load) info += "P:${e.pPu}\nQ:${e.qPu}";
-    else if (e.type == Tool.line) info += "${e.rPu}+j${e.xPu}" + (e.bPu != 0 ? "\nB:${e.bPu}" : "");
+    else if (e.type == Tool.line) info += "${e.rPu}+j${e.xPu}" + (e.bPu != 0 ? "\nB:${e.bPu}" : "") + (e.tapRatio != 1.0 ? "\nTap:${e.tapRatio}" : "");
+    else if (e.type == Tool.transformer) info += "Tap:${e.tapRatio}\n${e.rPu}+j${e.xPu}" + (e.bPu != 0 ? "\nB:${e.bPu}" : "");
     else return const SizedBox.shrink();
 
     Offset basePos = (e.type == Tool.line) ? (e.midPosition ?? (e.position + (e.endPosition ?? e.position)) / 2) : e.position;
@@ -1120,6 +1620,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     final xCtrl = TextEditingController(text: e.xPu.toString());
     final bCtrl = TextEditingController(text: e.bPu.toString());
     final aCtrl = TextEditingController(text: e.thetaDeg.toString());
+    final tapCtrl = TextEditingController(text: e.tapRatio.toString());
     
     bool tempShowInfo = e.showInfo;
     bool tempIsSlack = e.isSlack;
@@ -1175,11 +1676,47 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                   TextField(controller: rCtrl, decoration: const InputDecoration(labelText: "저항 R (pu)")), 
                   TextField(controller: xCtrl, decoration: const InputDecoration(labelText: "리액턴스 X (pu)")), 
                   TextField(controller: bCtrl, decoration: const InputDecoration(labelText: "서셉턴스 B (pu)")), 
+                  TextField(
+                    controller: tapCtrl,
+                    decoration: const InputDecoration(
+                      labelText: "변압기 탭비 Tap (pu)",
+                      helperText: "변압기 선로인 경우 탭비 입력 (일반 송전선로는 1.0)",
+                    ),
+                  ),
                 ],
                 if (e.type == Tool.transformer) ...[ 
-                  TextField(controller: rCtrl, decoration: const InputDecoration(labelText: "저항 R (pu)")), 
-                  TextField(controller: xCtrl, decoration: const InputDecoration(labelText: "리액턴스 X (pu)")), 
-                  TextField(controller: bCtrl, decoration: const InputDecoration(labelText: "서셉턴스 B (pu)")), 
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    margin: const EdgeInsets.only(top: 8, bottom: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.amber.shade300),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.electrical_services, color: Colors.orange),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            "변압기 제원 (권선비 탭비 및 임피던스)",
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  TextField(
+                    controller: tapCtrl,
+                    decoration: const InputDecoration(
+                      labelText: "권선비 / 탭비 Tap (pu)",
+                      hintText: "1.0 (예: 1.03 = 103%)",
+                      helperText: "공칭 변압비 대비 탭 비율 (기본: 1.0, 엑셀값)",
+                    ),
+                  ),
+                  TextField(controller: xCtrl, decoration: const InputDecoration(labelText: "누설 리액턴스 X (pu)", helperText: "변압기 주 리액턴스 (예: 0.0839)")),
+                  TextField(controller: rCtrl, decoration: const InputDecoration(labelText: "권선 저항 R (pu)", helperText: "보통 매우 작음 (예: 0.0023 또는 0.0)")), 
+                  TextField(controller: bCtrl, decoration: const InputDecoration(labelText: "여자 서셉턴스 B (pu)", helperText: "보통 0.0")), 
                 ],
               ])
             ),
@@ -1196,6 +1733,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                     e.xPu = double.tryParse(xCtrl.text) ?? 0.05; 
                     e.bPu = double.tryParse(bCtrl.text) ?? 0.0; 
                     e.thetaDeg = double.tryParse(aCtrl.text) ?? 0; 
+                    e.tapRatio = double.tryParse(tapCtrl.text) ?? 1.0; 
                     
                     e.showInfo = tempShowInfo; 
                     

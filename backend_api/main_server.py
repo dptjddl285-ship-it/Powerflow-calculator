@@ -168,13 +168,150 @@ async def apply_excel_to_elements(request: Request):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-# [API 3] 조류 계산 
+# [API 3] 조류 계산 (AC Newton-Raphson Solver)
+from core.power_flow_solver import PowerFlowSolver
+import io
+import openpyxl
+from fastapi.responses import Response
+
+power_flow_solver = PowerFlowSolver(s_base=100.0, tol=1e-4, max_iter=30)
+last_simulation_result = None
+
+
 @app.post("/run_simulation")
 async def run_simulation(request: Request):
-    data = await request.json()
-    elements = data.get("elements", [])
-    print(f"\n⚡ [조류계산 요청] {len(elements)}개의 부품 데이터를 받았습니다.")
-    return {"status": "success", "message": "조류 계산 성공!"}
+    global last_simulation_result
+    try:
+        data = await request.json()
+        elements = data.get("elements", [])
+        print(f"\n⚡ [조류계산 요청] {len(elements)}개의 부품 데이터를 수신하여 계산을 시작합니다.")
+
+        result = power_flow_solver.solve(elements)
+        if result.get("status") == "error":
+            print(f"⚠️ 조류계산 실패: {result.get('message')}")
+            return result
+
+        last_simulation_result = result
+
+        converged = result.get("converged", False)
+        if not converged:
+            print(f"⚠️ 조류계산 미수렴(발산): {result['iterations']}회 반복, 최대 오차: {result['max_mismatch']}")
+            return {
+                "status": "warning",
+                "message": f"⚠️ 조류 계산 미수렴 (발산): {result['iterations']}회 반복 후에도 허용 오차 내에 수렴하지 못했습니다. (최대 오차: {result['max_mismatch']:.4e})",
+                "data": result,
+            }
+
+        print(
+            f"✅ 조류계산 성공 (수렴 완료: {result['converged']}, "
+            f"{result['iterations']}회 반복, 슬랙: #{result['slack_bus']})"
+        )
+        print(
+            f"📊 총 발전: {result['summary']['total_gen_p_mw']} MW | "
+            f"총 부하: {result['summary']['total_load_p_mw']} MW | "
+            f"손실: {result['summary']['total_loss_p_mw']} MW"
+        )
+
+        return {
+            "status": "success",
+            "message": f"조류 계산 수렴 완료! ({result['iterations']}회 반복, 최대 오차: {result['max_mismatch']})",
+            "data": result,
+        }
+    except Exception as e:
+        print(f"❌ 조류계산 중 예외 발생: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "message": f"조류계산 중 오류가 발생했습니다: {str(e)}"}
+
+
+@app.get("/download_result_csv")
+async def download_result_csv():
+    if not last_simulation_result or "csv_text" not in last_simulation_result:
+        return Response(content="Bus,Volt,Angle,Pgen,Qgen,Pload,Qload\n", media_type="text/csv")
+    csv_bytes = last_simulation_result["csv_text"].encode("utf-8-sig")
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="power_flow_result.csv"'},
+    )
+
+
+@app.get("/download_result_excel")
+async def download_result_excel():
+    if not last_simulation_result:
+        return {"status": "error", "message": "먼저 조류계산을 실행해 주세요."}
+
+    wb = openpyxl.Workbook()
+    # Sheet 1: Bus Results
+    ws_bus = wb.active
+    ws_bus.title = "Bus Results"
+    ws_bus.append(["Bus", "Volt (pu)", "Angle (deg)", "Pgen (MW)", "Qgen (MVAR)", "Pload (MW)", "Qload (MVAR)", "Type"])
+    for r in last_simulation_result.get("bus_results", []):
+        ws_bus.append([
+            r.get("bus"),
+            r.get("volt"),
+            r.get("angle"),
+            r.get("pgen"),
+            r.get("qgen"),
+            r.get("pload"),
+            r.get("qload"),
+            r.get("type"),
+        ])
+
+    # Sheet 2: Line Flows
+    ws_line = wb.create_sheet(title="Line Flows")
+    ws_line.append(["Line", "From Bus", "To Bus", "P From (MW)", "Q From (MVAR)", "P To (MW)", "Q To (MVAR)", "Loss P (MW)", "Loss Q (MVAR)"])
+    for r in last_simulation_result.get("line_results", []):
+        ws_line.append([
+            r.get("label"),
+            r.get("from_bus"),
+            r.get("to_bus"),
+            r.get("p_from_mw"),
+            r.get("q_from_mvar"),
+            r.get("p_to_mw"),
+            r.get("q_to_mvar"),
+            r.get("loss_p_mw"),
+            r.get("loss_q_mvar"),
+        ])
+
+    # Sheet 3: Summary
+    ws_sum = wb.create_sheet(title="Summary")
+    summary = last_simulation_result.get("summary", {})
+    ws_sum.append(["Metric", "Value"])
+    ws_sum.append(["Converged", last_simulation_result.get("converged")])
+    ws_sum.append(["Iterations", last_simulation_result.get("iterations")])
+    ws_sum.append(["Slack Bus", f"#{last_simulation_result.get('slack_bus')}"])
+    ws_sum.append(["Total Gen P (MW)", summary.get("total_gen_p_mw")])
+    ws_sum.append(["Total Gen Q (MVAR)", summary.get("total_gen_q_mvar")])
+    ws_sum.append(["Total Load P (MW)", summary.get("total_load_p_mw")])
+    ws_sum.append(["Total Load Q (MVAR)", summary.get("total_load_q_mvar")])
+    ws_sum.append(["Total Loss P (MW)", summary.get("total_loss_p_mw")])
+    ws_sum.append(["Total Loss Q (MVAR)", summary.get("total_loss_q_mvar")])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    excel_bytes = buf.getvalue()
+
+    return Response(
+        content=excel_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="power_flow_result.xlsx"'},
+    )
+
+
+@app.get("/debug_last_result")
+async def debug_last_result():
+    if not last_simulation_result:
+        return {"msg": "no result"}
+    return {
+        "converged": last_simulation_result.get("converged"),
+        "iterations": last_simulation_result.get("iterations"),
+        "max_mismatch": last_simulation_result.get("max_mismatch"),
+        "total_buses": last_simulation_result.get("total_buses"),
+        "total_branches": last_simulation_result.get("total_branches"),
+        "line_results": last_simulation_result.get("line_results", [])[:20],
+        "summary": last_simulation_result.get("summary"),
+    }
 
 
 if __name__ == "__main__":
