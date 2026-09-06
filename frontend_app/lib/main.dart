@@ -108,12 +108,13 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
   bool showResultOverlay = true;
   bool isInspectorOpen = true;
   bool isSimulating = false;
+  bool isMiniMapVisible = true;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _resetCamera();
+      _zoomToFit();
       _canvasFocusNode.requestFocus();
     });
   }
@@ -124,11 +125,141 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     super.dispose();
   }
 
-  void _resetCamera() {
+  Rect _getContentBounds() {
+    if (elements.isEmpty) {
+      return const Rect.fromLTWH(CANVAS_CENTER - 400, CANVAS_CENTER - 300, 800, 600);
+    }
+    double minX = double.infinity;
+    double minY = double.infinity;
+    double maxX = -double.infinity;
+    double maxY = -double.infinity;
+
+    for (var el in elements) {
+      void includePoint(Offset p) {
+        if (p.dx < minX) minX = p.dx;
+        if (p.dx > maxX) maxX = p.dx;
+        if (p.dy < minY) minY = p.dy;
+        if (p.dy > maxY) maxY = p.dy;
+      }
+
+      includePoint(el.position);
+      if (el.endPosition != null) includePoint(el.endPosition!);
+      if (el.midPosition != null) includePoint(el.midPosition!);
+      if (el.aiPath != null) {
+        for (var pt in el.aiPath!) {
+          includePoint(pt);
+        }
+      }
+      if (el.type != Tool.line) {
+        includePoint(el.position + Offset(el.width / 2 + 25, el.height / 2 + 25));
+        includePoint(el.position - Offset(el.width / 2 + 25, el.height / 2 + 25));
+      }
+    }
+
+    if (minX == double.infinity) {
+      return const Rect.fromLTWH(CANVAS_CENTER - 400, CANVAS_CENTER - 300, 800, 600);
+    }
+
+    if (maxX - minX < 240) {
+      final cx = (minX + maxX) / 2;
+      minX = cx - 120;
+      maxX = cx + 120;
+    }
+    if (maxY - minY < 200) {
+      final cy = (minY + maxY) / 2;
+      minY = cy - 100;
+      maxY = cy + 100;
+    }
+
+    return Rect.fromLTRB(minX, minY, maxX, maxY);
+  }
+
+  void _zoomToFit() {
     final size = MediaQuery.of(context).size;
-    if (size.width == 0) return;
-    _transformationController.value = Matrix4.identity()
-      ..translate(-(CANVAS_CENTER - size.width / 2), -(CANVAS_CENTER - size.height / 2), 0.0);
+    if (size.width == 0 || size.height == 0) return;
+
+    final bounds = _getContentBounds();
+    final double leftPanelWidth = 64.0;
+    final double rightPanelWidth = isInspectorOpen ? 320.0 : 0.0;
+    final double topBarHeight = 56.0;
+    final double bottomPadding = 60.0;
+
+    final double availableWidth = size.width - leftPanelWidth - rightPanelWidth;
+    final double availableHeight = size.height - topBarHeight - bottomPadding;
+
+    if (availableWidth <= 0 || availableHeight <= 0) return;
+
+    const double margin = 120.0;
+    final double contentW = bounds.width + margin * 2;
+    final double contentH = bounds.height + margin * 2;
+
+    final double scaleX = availableWidth / contentW;
+    final double scaleY = availableHeight / contentH;
+    final double targetScale = math.min(scaleX, scaleY).clamp(0.2, 1.6);
+
+    final double screenCenterX = leftPanelWidth + availableWidth / 2;
+    final double screenCenterY = topBarHeight + availableHeight / 2;
+
+    final matrix = Matrix4.identity()
+      ..translate(screenCenterX, screenCenterY)
+      ..scale(targetScale, targetScale)
+      ..translate(-bounds.center.dx, -bounds.center.dy);
+
+    setState(() {
+      _transformationController.value = matrix;
+    });
+  }
+
+  void _resetCamera() {
+    _zoomToFit();
+  }
+
+  bool _isContentOffscreen() {
+    if (elements.isEmpty) return false;
+    final size = MediaQuery.of(context).size;
+    if (size.width == 0 || size.height == 0) return false;
+
+    final inverse = Matrix4.tryInvert(_transformationController.value);
+    if (inverse == null) return false;
+
+    final double left = 64.0;
+    final double right = size.width - (isInspectorOpen ? 320.0 : 0.0);
+    final double top = 56.0;
+    final double bottom = size.height;
+
+    final p1 = MatrixUtils.transformPoint(inverse, Offset(left, top));
+    final p2 = MatrixUtils.transformPoint(inverse, Offset(right, bottom));
+
+    final viewportCanvasRect = Rect.fromPoints(p1, p2);
+    final contentBounds = _getContentBounds();
+
+    return !viewportCanvasRect.overlaps(contentBounds);
+  }
+
+  void _panCameraFromMiniMap(Offset localPos, Size miniMapSize) {
+    final sheetRect = const Rect.fromLTWH(CANVAS_CENTER - 2200, CANVAS_CENTER - 1600, 4400, 3200);
+    final double normX = (localPos.dx / miniMapSize.width).clamp(0.0, 1.0);
+    final double normY = (localPos.dy / miniMapSize.height).clamp(0.0, 1.0);
+
+    final double targetCanvasX = sheetRect.left + normX * sheetRect.width;
+    final double targetCanvasY = sheetRect.top + normY * sheetRect.height;
+
+    final size = MediaQuery.of(context).size;
+    final double curScale = _transformationController.value.getMaxScaleOnAxis();
+
+    final double leftPanelWidth = 64.0;
+    final double rightPanelWidth = isInspectorOpen ? 320.0 : 0.0;
+    final double screenCenterX = leftPanelWidth + (size.width - leftPanelWidth - rightPanelWidth) / 2;
+    final double screenCenterY = 56.0 + (size.height - 56.0) / 2;
+
+    final matrix = Matrix4.identity()
+      ..translate(screenCenterX, screenCenterY)
+      ..scale(curScale, curScale)
+      ..translate(-targetCanvasX, -targetCanvasY);
+
+    setState(() {
+      _transformationController.value = matrix;
+    });
   }
 
   void _zoom(double factor) {
@@ -179,7 +310,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     } else if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyY) {
       _redo();
     } else if (!isCtrl) {
-      if (event.logicalKey == LogicalKeyboardKey.keyV) {
+      if (event.logicalKey == LogicalKeyboardKey.keyF || event.logicalKey == LogicalKeyboardKey.space) {
+        _zoomToFit();
+      } else if (event.logicalKey == LogicalKeyboardKey.keyV) {
         setState(() => selectedTool = Tool.move);
       } else if (event.logicalKey == LogicalKeyboardKey.keyB) {
         setState(() { selectedTool = Tool.bus; selectedElement = null; });
@@ -967,6 +1100,172 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       int updatedLines = 0;
       int updatedTransformers = 0;
 
+      // 0. If canvas is empty, auto-generate topology
+      if (elements.where((e) => e.type == Tool.bus).isEmpty && buses.isNotEmpty) {
+        elements.clear();
+        final busKeys = buses.keys.toList();
+        final int n = busKeys.length;
+        final double radius = (n <= 3) ? 260.0 : (n <= 6 ? 360.0 : 500.0);
+        
+        Map<int, DrawingElement> createdBuses = {};
+        for (int i = 0; i < n; i++) {
+          final bKey = busKeys[i];
+          final bNum = int.tryParse(bKey) ?? (i + 1);
+          final bInfo = buses[bKey] as Map<String, dynamic>;
+          final double angle = -math.pi / 2 + (2 * math.pi * i / n);
+          final pos = Offset(CANVAS_CENTER + math.cos(angle) * radius, CANVAS_CENTER + math.sin(angle) * radius);
+          
+          final busEl = DrawingElement(
+            id: "bus_$bNum",
+            type: Tool.bus,
+            position: pos,
+            width: 140,
+            height: 12,
+            label: bInfo['is_slack'] == true ? "$bNum (Slack)" : "$bNum",
+          )
+            ..isSlack = (bInfo['is_slack'] == true)
+            ..vPu = (bInfo['vm_pu'] as num?)?.toDouble() ?? 1.0
+            ..thetaDeg = (bInfo['va_deg'] as num?)?.toDouble() ?? 0.0
+            ..pPu = (bInfo['pload_pu'] as num?)?.toDouble() ?? 0.0
+            ..qPu = (bInfo['qload_pu'] as num?)?.toDouble() ?? 0.0
+            ..showInfo = true;
+          
+          elements.add(busEl);
+          createdBuses[bNum] = busEl;
+          updatedBuses++;
+
+          if (busEl.pPu > 0.001 || busEl.qPu > 0.001) {
+            final loadPos = pos + const Offset(0, 70);
+            final loadEl = DrawingElement(
+              id: "Load_$bNum",
+              type: Tool.load,
+              position: loadPos,
+              parentBusId: busEl.id,
+              label: "Load $bNum",
+              width: 38,
+              height: 38,
+            )
+              ..pPu = busEl.pPu
+              ..qPu = busEl.qPu
+              ..showInfo = true;
+            elements.add(loadEl);
+            elements.add(DrawingElement(
+              id: "L_Conn_$bNum",
+              type: Tool.line,
+              position: pos,
+              endPosition: loadPos,
+              startElementId: busEl.id,
+              endElementId: loadEl.id,
+            ));
+            updatedLoads++;
+          }
+        }
+
+        for (var entry in gens.entries) {
+          final gNum = int.tryParse(entry.key) ?? 1;
+          final gInfo = entry.value as Map<String, dynamic>;
+          final busEl = createdBuses[gNum];
+          if (busEl != null) {
+            final dir = (busEl.position - const Offset(CANVAS_CENTER, CANVAS_CENTER));
+            final normDir = dir.distance > 0 ? (dir / dir.distance) : const Offset(0, -1);
+            final genPos = busEl.position + normDir * 75;
+            
+            final genEl = DrawingElement(
+              id: "G_$gNum",
+              type: Tool.generator,
+              position: genPos,
+              parentBusId: busEl.id,
+              label: gInfo['is_slack'] == true ? "G_$gNum (Slack)" : "G_$gNum",
+              width: 44,
+              height: 44,
+            )
+              ..isSlack = (gInfo['is_slack'] == true)
+              ..vPu = (gInfo['voltage_setpoint'] as num?)?.toDouble() ?? 1.0
+              ..pPu = (gInfo['pg_pu'] as num?)?.toDouble() ?? 0.0
+              ..qPu = (gInfo['qg_pu'] as num?)?.toDouble() ?? 0.0
+              ..showInfo = true;
+            elements.add(genEl);
+            elements.add(DrawingElement(
+              id: "G_Conn_$gNum",
+              type: Tool.line,
+              position: busEl.position,
+              endPosition: genPos,
+              startElementId: busEl.id,
+              endElementId: genEl.id,
+            ));
+            updatedGens++;
+          }
+        }
+
+        for (var entry in branches.entries) {
+          final brInfo = entry.value as Map<String, dynamic>;
+          final fb = (brInfo['from_bus'] as num?)?.toInt();
+          final tb = (brInfo['to_bus'] as num?)?.toInt();
+          if (fb != null && tb != null && createdBuses.containsKey(fb) && createdBuses.containsKey(tb)) {
+            final startBus = createdBuses[fb]!;
+            final endBus = createdBuses[tb]!;
+            final lineEl = DrawingElement(
+              id: "Line_${fb}_$tb",
+              type: Tool.line,
+              position: startBus.position,
+              endPosition: endBus.position,
+              startElementId: startBus.id,
+              endElementId: endBus.id,
+              label: "Line $fb-$tb",
+            )
+              ..rPu = (brInfo['r_pu'] as num?)?.toDouble() ?? 0.01
+              ..xPu = (brInfo['x_pu'] as num?)?.toDouble() ?? 0.05
+              ..bPu = (brInfo['b_pu'] as num?)?.toDouble() ?? 0.0
+              ..tapRatio = 1.0
+              ..showInfo = true;
+            elements.add(lineEl);
+            updatedLines++;
+          }
+        }
+
+        for (var entry in transformers.entries) {
+          final trInfo = entry.value as Map<String, dynamic>;
+          final fb = (trInfo['from_bus'] as num?)?.toInt();
+          final tb = (trInfo['to_bus'] as num?)?.toInt();
+          if (fb != null && tb != null && createdBuses.containsKey(fb) && createdBuses.containsKey(tb)) {
+            final startBus = createdBuses[fb]!;
+            final endBus = createdBuses[tb]!;
+            final mid = (startBus.position + endBus.position) / 2;
+            final trEl = DrawingElement(
+              id: "T_${fb}_$tb",
+              type: Tool.transformer,
+              position: mid,
+              label: "T $fb-$tb",
+              width: 36,
+              height: 36,
+            )
+              ..tapRatio = (trInfo['tap'] as num?)?.toDouble() ?? 1.0
+              ..rPu = 0.0023
+              ..xPu = 0.0839
+              ..bPu = 0.0
+              ..showInfo = true;
+            elements.add(trEl);
+            elements.add(DrawingElement(
+              id: "TrLine_${fb}_T",
+              type: Tool.line,
+              position: startBus.position,
+              endPosition: mid,
+              startElementId: startBus.id,
+              endElementId: trEl.id,
+            ));
+            elements.add(DrawingElement(
+              id: "TrLine_T_${tb}",
+              type: Tool.line,
+              position: mid,
+              endPosition: endBus.position,
+              startElementId: trEl.id,
+              endElementId: endBus.id,
+            ));
+            updatedTransformers++;
+          }
+        }
+      }
+
       // 1. Map ID to Bus Number
       Map<String, int> elIdToBusNum = {};
       for (var el in elements) {
@@ -1188,6 +1487,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         ),
       );
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _zoomToFit());
   }
 
   void _applyAiDataToCanvas(Map<String, dynamic> aiData) {
@@ -1390,7 +1690,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       autofocus: true,
       onKeyEvent: _handleKeyEvent,
       child: Scaffold(
-        backgroundColor: Colors.white,
+        backgroundColor: const Color(0xFF070A12),
         appBar: _buildTopAppBar(),
         body: Row(
           children: [
@@ -1402,6 +1702,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
               child: Stack(
                 children: [
                   _buildCanvas(),
+                  _buildOffscreenRadar(),
+                  _buildMiniMap(),
                   _buildCanvasViewControls(),
                 ],
               ),
@@ -1412,12 +1714,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
               SizedBox(
                 width: 320,
                 child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    border: Border(left: BorderSide(color: Colors.grey.shade300, width: 1)),
-                    boxShadow: [
-                      BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 6, offset: const Offset(-2, 0)),
-                    ],
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF0F172A),
+                    border: Border(left: BorderSide(color: Color(0xFF1E293B), width: 1)),
                   ),
                   child: InspectorPanel(
                     selectedElement: selectedElement,
@@ -1447,15 +1746,22 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
 
     return AppBar(
       elevation: 0.5,
-      backgroundColor: const Color(0xFF0F172A), // Modern dark slate 900
+      backgroundColor: const Color(0xFF070A12),
       title: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
             padding: const EdgeInsets.all(5),
             decoration: BoxDecoration(
-              color: Colors.blue.shade600,
+              gradient: const LinearGradient(
+                colors: [Color(0xFF2563EB), Color(0xFF1D4ED8)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
               borderRadius: BorderRadius.circular(8),
+              boxShadow: [
+                BoxShadow(color: const Color(0xFF38BDF8).withOpacity(0.3), blurRadius: 6),
+              ],
             ),
             child: const Icon(Icons.bolt, color: Colors.amberAccent, size: 18),
           ),
@@ -1471,7 +1777,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           margin: const EdgeInsets.symmetric(vertical: 12),
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
           decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.08),
+            color: Colors.white.withOpacity(0.06),
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: Colors.white12),
           ),
@@ -1486,7 +1792,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
               ),
               if (hasResults) ...[
                 const SizedBox(width: 8),
-                Container(width: 5, height: 5, decoration: const BoxDecoration(color: Colors.greenAccent, shape: BoxShape.circle)),
+                Container(width: 6, height: 6, decoration: const BoxDecoration(color: Colors.greenAccent, shape: BoxShape.circle)),
                 const SizedBox(width: 6),
                 const Text(
                   "수렴됨",
@@ -1498,14 +1804,20 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         ),
         const SizedBox(width: 8),
         IconButton(
-          icon: const Icon(Icons.undo, color: Colors.white, size: 20),
+          icon: const Icon(Icons.undo, color: Colors.white70, size: 20),
           tooltip: "되돌리기 (Ctrl+Z)",
           onPressed: historyStack.isNotEmpty ? _undo : null,
         ),
         IconButton(
-          icon: const Icon(Icons.redo, color: Colors.white, size: 20),
+          icon: const Icon(Icons.redo, color: Colors.white70, size: 20),
           tooltip: "다시실행 (Ctrl+Y)",
           onPressed: redoStack.isNotEmpty ? _redo : null,
+        ),
+        const SizedBox(width: 4),
+        IconButton(
+          icon: const Icon(Icons.fit_screen, color: Colors.cyanAccent, size: 20),
+          tooltip: "도면 전체 화면 맞춤 (F / Space)",
+          onPressed: _zoomToFit,
         ),
         const SizedBox(width: 6),
         Container(height: 24, width: 1, color: Colors.white24),
@@ -1578,12 +1890,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
   Widget _buildLeftToolPalette() {
     return Container(
       width: 64,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border(right: BorderSide(color: Colors.grey.shade200)),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 4, offset: const Offset(1, 0)),
-        ],
+      decoration: const BoxDecoration(
+        color: Color(0xFF0B1120),
+        border: Border(right: BorderSide(color: Color(0xFF1E293B))),
       ),
       child: Column(
         children: [
@@ -1595,18 +1904,18 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           _paletteItem(Tool.transformer, Icons.crop_square, "변압기", "T"),
           _paletteItem(Tool.line, Icons.polyline, "선로", "W"),
           _paletteItem(Tool.text, Icons.text_fields, "라벨", ""),
-          const Divider(indent: 8, endIndent: 8, height: 16),
+          const Divider(indent: 8, endIndent: 8, height: 16, color: Color(0xFF1E293B)),
           _actionPaletteItem(
             Icons.auto_awesome,
             "AI 도면",
-            Colors.purple,
+            const Color(0xFFA855F7),
             _uploadImageToAI,
           ),
           const Spacer(),
           _actionPaletteItem(
             Icons.delete_sweep_outlined,
             "초기화",
-            Colors.redAccent,
+            const Color(0xFFF43F5E),
             _confirmClearCanvas,
           ),
           const SizedBox(height: 12),
@@ -1618,12 +1927,12 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
   Widget _paletteItem(Tool tool, IconData icon, String label, String shortcut) {
     final bool isSel = selectedTool == tool;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+      padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 8),
       child: Tooltip(
         message: shortcut.isNotEmpty ? "$label ($shortcut)" : label,
         waitDuration: const Duration(milliseconds: 300),
         child: InkWell(
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(8),
           onTap: () {
             setState(() {
               selectedTool = tool;
@@ -1637,23 +1946,46 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
             width: 48,
             height: 48,
             decoration: BoxDecoration(
-              color: isSel ? Colors.blue.shade600 : Colors.transparent,
-              borderRadius: BorderRadius.circular(10),
-              border: isSel ? Border.all(color: Colors.blue.shade800, width: 1.5) : null,
+              color: isSel ? const Color(0xFF1D4ED8) : Colors.transparent,
+              borderRadius: BorderRadius.circular(8),
+              border: isSel
+                  ? Border.all(color: const Color(0xFF60A5FA), width: 1.2)
+                  : Border.all(color: Colors.transparent),
+              boxShadow: isSel
+                  ? [BoxShadow(color: const Color(0xFF2563EB).withOpacity(0.4), blurRadius: 6)]
+                  : null,
             ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
+            child: Stack(
+              alignment: Alignment.center,
               children: [
-                Icon(icon, size: 20, color: isSel ? Colors.white : Colors.blueGrey.shade800),
-                const SizedBox(height: 2),
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 9.5,
-                    fontWeight: isSel ? FontWeight.bold : FontWeight.w500,
-                    color: isSel ? Colors.white : Colors.blueGrey.shade700,
-                  ),
+                Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(icon, size: 19, color: isSel ? Colors.white : const Color(0xFF94A3B8)),
+                    const SizedBox(height: 2),
+                    Text(
+                      label,
+                      style: TextStyle(
+                        fontSize: 9.5,
+                        fontWeight: isSel ? FontWeight.bold : FontWeight.w500,
+                        color: isSel ? Colors.white : const Color(0xFF94A3B8),
+                      ),
+                    ),
+                  ],
                 ),
+                if (shortcut.isNotEmpty)
+                  Positioned(
+                    top: 2,
+                    right: 2,
+                    child: Text(
+                      shortcut,
+                      style: TextStyle(
+                        fontSize: 8,
+                        fontWeight: FontWeight.bold,
+                        color: isSel ? Colors.white70 : const Color(0xFF475569),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -1664,18 +1996,19 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
 
   Widget _actionPaletteItem(IconData icon, String label, Color color, VoidCallback onTap) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+      padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 8),
       child: Tooltip(
         message: label,
         child: InkWell(
-          borderRadius: BorderRadius.circular(10),
+          borderRadius: BorderRadius.circular(8),
           onTap: onTap,
           child: Container(
             width: 48,
             height: 48,
             decoration: BoxDecoration(
-              color: color.withOpacity(0.08),
-              borderRadius: BorderRadius.circular(10),
+              color: color.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: color.withOpacity(0.3)),
             ),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -1701,37 +2034,37 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
         decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.95),
+          color: const Color(0xE60F172A),
           borderRadius: BorderRadius.circular(10),
-          boxShadow: [
-            BoxShadow(color: Colors.black.withOpacity(0.12), blurRadius: 8, offset: const Offset(0, 2)),
+          boxShadow: const [
+            BoxShadow(color: Colors.black45, blurRadius: 10, offset: Offset(0, 3)),
           ],
-          border: Border.all(color: Colors.grey.shade300),
+          border: Border.all(color: const Color(0xFF334155)),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             IconButton(
-              icon: const Icon(Icons.add, size: 20),
+              icon: const Icon(Icons.add, size: 19, color: Color(0xFFCBD5E1)),
               tooltip: "화면 확대 (+)",
               onPressed: () => _zoom(1.2),
             ),
             IconButton(
-              icon: const Icon(Icons.remove, size: 20),
+              icon: const Icon(Icons.remove, size: 19, color: Color(0xFFCBD5E1)),
               tooltip: "화면 축소 (-)",
               onPressed: () => _zoom(1.0 / 1.2),
             ),
             IconButton(
-              icon: const Icon(Icons.fit_screen, size: 20),
-              tooltip: "화면 중앙 정렬 (100%)",
-              onPressed: _resetCamera,
+              icon: const Icon(Icons.fit_screen, size: 19, color: Color(0xFF38BDF8)),
+              tooltip: "도면 전체 화면 맞춤 (F / Space)",
+              onPressed: _zoomToFit,
             ),
-            Container(height: 20, width: 1, color: Colors.grey.shade300, margin: const EdgeInsets.symmetric(horizontal: 4)),
+            Container(height: 18, width: 1, color: const Color(0xFF334155), margin: const EdgeInsets.symmetric(horizontal: 4)),
             IconButton(
               icon: Icon(
                 showResultOverlay ? Icons.visibility : Icons.visibility_off,
-                size: 20,
-                color: showResultOverlay ? Colors.blueAccent : Colors.grey,
+                size: 19,
+                color: showResultOverlay ? const Color(0xFF38BDF8) : const Color(0xFF64748B),
               ),
               tooltip: showResultOverlay ? "조류계산 결과 숨기기" : "조류계산 결과 도면 표시",
               onPressed: () => setState(() => showResultOverlay = !showResultOverlay),
@@ -1739,11 +2072,125 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
             IconButton(
               icon: Icon(
                 isInspectorOpen ? Icons.dock : Icons.chrome_reader_mode_outlined,
-                size: 20,
-                color: isInspectorOpen ? Colors.blueAccent : Colors.grey,
+                size: 19,
+                color: isInspectorOpen ? const Color(0xFF38BDF8) : const Color(0xFF64748B),
               ),
               tooltip: isInspectorOpen ? "속성 패널 접기" : "속성 패널 열기",
               onPressed: () => setState(() => isInspectorOpen = !isInspectorOpen),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOffscreenRadar() {
+    if (elements.isEmpty || !_isContentOffscreen()) return const SizedBox.shrink();
+    return Positioned(
+      top: 16,
+      left: 0,
+      right: 0,
+      child: Center(
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: _zoomToFit,
+            borderRadius: BorderRadius.circular(20),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xF20F172A),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: const Color(0xFF38BDF8), width: 1.5),
+                boxShadow: [
+                  BoxShadow(color: const Color(0xFF38BDF8).withOpacity(0.35), blurRadius: 14, spreadRadius: 1),
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.explore, color: Color(0xFF38BDF8), size: 18),
+                  const SizedBox(width: 8),
+                  const Text(
+                    "📍 도면이 화면 밖에 있습니다 · 클릭 또는 F 키로 복귀",
+                    style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(color: const Color(0xFF1E293B), borderRadius: BorderRadius.circular(4)),
+                    child: Text("${elements.length}개 부품", style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 10)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMiniMap() {
+    if (!isMiniMapVisible) {
+      return Positioned(
+        bottom: 16,
+        right: 16,
+        child: FloatingActionButton.small(
+          backgroundColor: const Color(0xFF0F172A),
+          foregroundColor: const Color(0xFF94A3B8),
+          tooltip: "미니맵 열기",
+          onPressed: () => setState(() => isMiniMapVisible = true),
+          child: const Icon(Icons.map_outlined, size: 18),
+        ),
+      );
+    }
+    return Positioned(
+      bottom: 16,
+      right: 16,
+      child: Container(
+        width: 170,
+        height: 120,
+        decoration: BoxDecoration(
+          color: const Color(0xE60B1120),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFF334155), width: 1),
+          boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 8, offset: Offset(0, 3))],
+        ),
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: const BoxDecoration(
+                color: Color(0xFF0F172A),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(9)),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text("MINI MAP", style: TextStyle(color: Color(0xFF64748B), fontSize: 9.5, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+                  InkWell(
+                    onTap: () => setState(() => isMiniMapVisible = false),
+                    child: const Icon(Icons.close, size: 13, color: Color(0xFF64748B)),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ClipRRect(
+                borderRadius: const BorderRadius.vertical(bottom: Radius.circular(9)),
+                child: GestureDetector(
+                  onTapDown: (details) => _panCameraFromMiniMap(details.localPosition, const Size(170, 95)),
+                  onPanUpdate: (details) => _panCameraFromMiniMap(details.localPosition, const Size(170, 95)),
+                  child: CustomPaint(
+                    size: const Size(170, 95),
+                    painter: MiniMapPainter(
+                      elements: elements,
+                      transform: _transformationController.value,
+                      viewportSize: MediaQuery.of(context).size,
+                    ),
+                  ),
+                ),
+              ),
             ),
           ],
         ),
@@ -1930,7 +2377,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
             top: mid.dy - 12,
             child: IgnorePointer(
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
                   color: const Color(0xE61E293B),
                   borderRadius: BorderRadius.circular(4),
@@ -1993,14 +2440,26 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         onPanUpdate: (d) => setState(() => e.infoOffset += d.delta),
         onTap: () => setState(() => selectedElement = e),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
           decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.9),
-            border: Border.all(color: selectedElement == e ? Colors.blue : Colors.grey, width: 1),
-            borderRadius: BorderRadius.circular(4),
-            boxShadow: [if(selectedElement == e) const BoxShadow(color: Colors.black12, blurRadius: 4)],
+            color: const Color(0xE60F172A),
+            border: Border.all(
+              color: selectedElement == e ? const Color(0xFF38BDF8) : const Color(0xFF334155),
+              width: 1.2,
+            ),
+            borderRadius: BorderRadius.circular(6),
+            boxShadow: [
+              BoxShadow(
+                color: selectedElement == e ? const Color(0xFF38BDF8).withOpacity(0.3) : Colors.black45,
+                blurRadius: 6,
+                offset: const Offset(0, 2),
+              )
+            ],
           ),
-          child: Text(info, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.black)),
+          child: Text(
+            info,
+            style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w600, color: Colors.white, height: 1.25),
+          ),
         ),
       ),
     );
@@ -2074,84 +2533,124 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
   Widget _buildBusGenLoadWidget(DrawingElement e) {
     bool isSelected = (selectedElement == e && selectedTool == Tool.move);
     if (e.type == Tool.text) {
-      return Positioned(left: e.position.dx, top: e.position.dy, child: GestureDetector(onTap: () => setState(() => selectedElement = e), child: Text(e.label.isEmpty ? e.id : e.label, style: const TextStyle(fontWeight: FontWeight.bold))));
+      return Positioned(
+        left: e.position.dx,
+        top: e.position.dy,
+        child: GestureDetector(
+          onTap: () => setState(() => selectedElement = e),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: isSelected ? const Color(0xFF1E293B) : Colors.transparent,
+              borderRadius: BorderRadius.circular(4),
+              border: isSelected ? Border.all(color: const Color(0xFF38BDF8)) : null,
+            ),
+            child: Text(
+              e.label.isEmpty ? e.id : e.label,
+              style: TextStyle(fontWeight: FontWeight.bold, color: isSelected ? const Color(0xFF38BDF8) : Colors.white, fontSize: 12),
+            ),
+          ),
+        ),
+      );
     }
-    Color baseColor = e.type == Tool.bus 
-        ? Colors.black
-        : (e.type == Tool.generator 
-            ? (e.isSlack ? Colors.redAccent : Colors.black)
-            : Colors.black);
-    Color drawColor = isSelected ? Colors.cyanAccent : baseColor;
-    
+
     Widget shapeContent;
     if (e.type == Tool.generator) {
-      shapeContent = Stack(
-        clipBehavior: Clip.none,
-        alignment: Alignment.center,
-        children: [
-          Container(
-            width: e.width, 
-            height: e.height, 
-            decoration: BoxDecoration(
-              color: Colors.white, 
-              border: Border.all(color: drawColor, width: 2.0), 
-              shape: BoxShape.circle,
-              boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 3)],
-            ), 
-            child: Center(
-              child: Text(
-                "G", 
-                style: TextStyle(color: drawColor, fontWeight: FontWeight.bold, fontSize: e.height * 0.45)
-              )
-            )
-          ),
-          Positioned(
-            top: -16,
-            child: Text(
-              e.label.isNotEmpty ? e.label : e.id,
-              style: TextStyle(fontWeight: FontWeight.bold, color: drawColor, fontSize: 10)
-            ),
-          ),
-        ],
-      );
-    } else if (e.type == Tool.load) {
-      shapeContent = Stack(
-        clipBehavior: Clip.none,
-        alignment: Alignment.center,
-        children: [
-          CustomPaint(
-            size: Size(e.width, e.height), 
-            painter: LoadArrowPainter(color: drawColor)
-          ),
-          Positioned(
-            bottom: -16,
-            child: Text(
-              e.label.isNotEmpty ? e.label : e.id,
-              style: TextStyle(fontWeight: FontWeight.bold, color: drawColor, fontSize: 10)
-            ),
-          ),
-        ],
-      );
-    } else if (e.type == Tool.transformer) {
-      bool isVert = e.height >= e.width;
+      Color genBorderColor = isSelected
+          ? const Color(0xFF38BDF8)
+          : (e.isSlack ? const Color(0xFFF43F5E) : const Color(0xFF10B981));
       shapeContent = Stack(
         clipBehavior: Clip.none,
         alignment: Alignment.center,
         children: [
           CustomPaint(
             size: Size(e.width, e.height),
-            painter: TransformerPainter(color: drawColor, isVertical: isVert),
+            painter: GeneratorSymbolPainter(
+              color: genBorderColor,
+              isSlack: e.isSlack,
+              isSelected: isSelected,
+            ),
           ),
           Positioned(
-            top: -16,
-            child: Text(
-              e.label.isNotEmpty ? e.label : e.id,
-              style: TextStyle(fontWeight: FontWeight.bold, color: drawColor, fontSize: 10)
+            top: -22,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: e.isSlack ? const Color(0xFFE11D48) : const Color(0xFF065F46),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(
+                  color: e.isSlack ? const Color(0xFFFDA4AF) : const Color(0xFF34D399),
+                  width: 1,
+                ),
+                boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 4)],
+              ),
+              child: Text(
+                e.label.isNotEmpty ? e.label : (e.isSlack ? "Slack G" : "PV Gen"),
+                style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 9.5),
+              ),
+            ),
+          ),
+        ],
+      );
+    } else if (e.type == Tool.load) {
+      Color loadColor = isSelected ? const Color(0xFF38BDF8) : const Color(0xFFF59E0B);
+      shapeContent = Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.center,
+        children: [
+          CustomPaint(
+            size: Size(e.width, e.height),
+            painter: LoadArrowPainter(color: loadColor, isSelected: isSelected),
+          ),
+          Positioned(
+            bottom: -22,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: const Color(0xFF78350F),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: const Color(0xFFFBBF24), width: 1),
+                boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 4)],
+              ),
+              child: Text(
+                e.label.isNotEmpty ? e.label : "Load",
+                style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 9.5),
+              ),
+            ),
+          ),
+        ],
+      );
+    } else if (e.type == Tool.transformer) {
+      bool isVert = e.height >= e.width;
+      Color trColor = isSelected ? const Color(0xFF38BDF8) : const Color(0xFFA855F7);
+      shapeContent = Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.center,
+        children: [
+          CustomPaint(
+            size: Size(e.width, e.height),
+            painter: TransformerPainter(color: trColor, isVertical: isVert, isSelected: isSelected),
+          ),
+          Positioned(
+            top: -22,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: const Color(0xFF581C87),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: const Color(0xFFC084FC), width: 1),
+                boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 4)],
+              ),
+              child: Text(
+                e.label.isNotEmpty ? e.label : "Tr (${e.tapRatio} pu)",
+                style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 9.5),
+              ),
             ),
           ),
         ],
       );
     } else {
+      final bool isBusSlack = e.isSlack;
       shapeContent = Stack(
         clipBehavior: Clip.none,
         alignment: Alignment.center,
@@ -2160,17 +2659,56 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
             width: e.width, 
             height: e.height, 
             decoration: BoxDecoration(
-              color: isSelected ? Colors.cyanAccent : Colors.black, 
-              borderRadius: BorderRadius.circular(1.5),
-            )
+              gradient: LinearGradient(
+                colors: isSelected
+                    ? [const Color(0xFF38BDF8), const Color(0xFF0284C7)]
+                    : (isBusSlack
+                        ? [const Color(0xFFF43F5E), const Color(0xFFBE123C)]
+                        : [const Color(0xFF475569), const Color(0xFF1E293B)]),
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+              ),
+              borderRadius: BorderRadius.circular(3),
+              border: Border.all(
+                color: isSelected
+                    ? const Color(0xFF7DD3FC)
+                    : (isBusSlack ? const Color(0xFFFDA4AF) : const Color(0xFF64748B)),
+                width: 1.2,
+              ),
+              boxShadow: [
+                if (isSelected)
+                  BoxShadow(color: const Color(0xFF38BDF8).withOpacity(0.5), blurRadius: 10, spreadRadius: 1)
+                else
+                  const BoxShadow(color: Colors.black54, blurRadius: 4, offset: Offset(0, 2)),
+              ],
+            ),
           ),
           Positioned(
-            top: -18,
-            child: Text(
-              e.label.isNotEmpty ? (e.label.toLowerCase().startsWith('bus') ? e.label : "Bus ${e.label}") : e.id, 
-              style: TextStyle(fontWeight: FontWeight.bold, color: drawColor, fontSize: 11)
+            top: -24,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+              decoration: BoxDecoration(
+                color: isBusSlack ? const Color(0xFFE11D48) : const Color(0xFF0F172A),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(
+                  color: isBusSlack
+                      ? const Color(0xFFFDA4AF)
+                      : (isSelected ? const Color(0xFF38BDF8) : const Color(0xFF334155)),
+                  width: 1,
+                ),
+                boxShadow: const [BoxShadow(color: Colors.black45, blurRadius: 4, offset: Offset(0, 1))],
+              ),
+              child: Text(
+                e.label.isNotEmpty ? (e.label.toLowerCase().startsWith('bus') ? e.label : "Bus ${e.label}") : e.id,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: isBusSlack ? Colors.white : (isSelected ? const Color(0xFF38BDF8) : const Color(0xFFE2E8F0)),
+                  fontSize: 10.5,
+                  letterSpacing: 0.3,
+                ),
+              ),
             ),
-          )
+          ),
         ],
       );
     }
@@ -2389,24 +2927,107 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
   }
 }
 
-class LoadArrowPainter extends CustomPainter {
+class GeneratorSymbolPainter extends CustomPainter {
   final Color color;
-  LoadArrowPainter({this.color = Colors.black});
+  final bool isSlack;
+  final bool isSelected;
+
+  GeneratorSymbolPainter({
+    required this.color,
+    required this.isSlack,
+    this.isSelected = false,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.width / 2;
 
+    // Body fill (dark metallic slate)
+    final bodyPaint = Paint()
+      ..color = const Color(0xFF0F172A)
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(center, radius, bodyPaint);
+
+    // Subtle outer glow if selected
+    if (isSelected) {
+      final glowPaint = Paint()
+        ..color = const Color(0xFF38BDF8).withOpacity(0.4)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 6.0
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6);
+      canvas.drawCircle(center, radius + 2, glowPaint);
+    }
+
+    // Outer precision ring
+    final ringPaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = isSelected ? 2.5 : 2.0;
+    canvas.drawCircle(center, radius, ringPaint);
+
+    // 4 rotor ticks on the ring
+    final tickPaint = Paint()
+      ..color = color.withOpacity(0.7)
+      ..strokeWidth = 2.0
+      ..strokeCap = StrokeCap.round;
+    const double tickLen = 4.0;
+    canvas.drawLine(center + Offset(0, -radius), center + Offset(0, -radius + tickLen), tickPaint);
+    canvas.drawLine(center + Offset(0, radius), center + Offset(0, radius - tickLen), tickPaint);
+    canvas.drawLine(center + Offset(-radius, 0), center + Offset(-radius + tickLen, 0), tickPaint);
+    canvas.drawLine(center + Offset(radius, 0), center + Offset(radius - tickLen, 0), tickPaint);
+
+    // Inner stylized generator rotor / 3-phase sine wave
+    final wavePaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.2
+      ..strokeCap = StrokeCap.round;
+
+    final path = Path();
+    final double w = radius * 0.9;
+    final double h = radius * 0.45;
+    path.moveTo(center.dx - w, center.dy);
+    path.cubicTo(
+      center.dx - w / 2, center.dy - h * 1.5,
+      center.dx - w / 4, center.dy - h * 1.5,
+      center.dx, center.dy,
+    );
+    path.cubicTo(
+      center.dx + w / 4, center.dy + h * 1.5,
+      center.dx + w / 2, center.dy + h * 1.5,
+      center.dx + w, center.dy,
+    );
+    canvas.drawPath(path, wavePaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant GeneratorSymbolPainter oldDelegate) =>
+      oldDelegate.color != color || oldDelegate.isSelected != isSelected || oldDelegate.isSlack != isSlack;
+}
+
+class LoadArrowPainter extends CustomPainter {
+  final Color color;
+  final bool isSelected;
+  LoadArrowPainter({this.color = const Color(0xFFF59E0B), this.isSelected = false});
+
+  @override
+  void paint(Canvas canvas, Size size) {
     final double w = size.width;
     final double h = size.height;
     final double cx = w / 2;
 
-    // Classic filled arrow pointing downwards (shaft + arrowhead):
-    final double stemW = math.max(3.0, w * 0.22);
-    final double headH = h * 0.48;
-    final double headW = w * 0.85;
+    if (isSelected) {
+      final glowPaint = Paint()
+        ..color = const Color(0xFF38BDF8).withOpacity(0.5)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
+      canvas.drawCircle(Offset(cx, h / 2), w / 2 + 4, glowPaint);
+    }
+
+    // Stem + Arrowhead dimensions
+    final double stemW = math.max(3.5, w * 0.24);
+    final double headH = h * 0.5;
+    final double headW = w * 0.88;
     final double stemH = h - headH;
 
     final path = Path();
@@ -2419,23 +3040,140 @@ class LoadArrowPainter extends CustomPainter {
     path.lineTo(cx - stemW / 2, stemH);
     path.close();
 
+    // Fill with rich gradient / solid color
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
     canvas.drawPath(path, paint);
+
+    // Arrowhead border
+    final borderPaint = Paint()
+      ..color = isSelected ? const Color(0xFF7DD3FC) : const Color(0xFFFDE68A)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.2;
+    canvas.drawPath(path, borderPaint);
+
+    // Inner chevron accent for electrical power absorption
+    final chevronPaint = Paint()
+      ..color = const Color(0xFF78350F)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0
+      ..strokeCap = StrokeCap.round;
+    final cPath = Path();
+    cPath.moveTo(cx - headW * 0.25, stemH + headH * 0.25);
+    cPath.lineTo(cx, stemH + headH * 0.55);
+    cPath.lineTo(cx + headW * 0.25, stemH + headH * 0.25);
+    canvas.drawPath(cPath, chevronPaint);
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant LoadArrowPainter oldDelegate) =>
+      oldDelegate.color != color || oldDelegate.isSelected != isSelected;
+}
+
+class TransformerPainter extends CustomPainter {
+  final Color color;
+  final bool isVertical;
+  final bool isSelected;
+  TransformerPainter({required this.color, this.isVertical = true, this.isSelected = false});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double w = size.width;
+    final double h = size.height;
+
+    final fillPaint = Paint()
+      ..color = const Color(0xFF0F172A)
+      ..style = PaintingStyle.fill;
+
+    final ringPaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = isSelected ? 2.5 : 2.0;
+
+    if (isSelected) {
+      final glowPaint = Paint()
+        ..color = const Color(0xFF38BDF8).withOpacity(0.4)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
+      canvas.drawCircle(Offset(w / 2, h / 2), (isVertical ? h : w) / 2, glowPaint);
+    }
+
+    if (isVertical) {
+      double r = (h / 3.0).clamp(10.0, w / 2);
+      double cy1 = h / 2 - r * 0.55;
+      double cy2 = h / 2 + r * 0.55;
+
+      canvas.drawCircle(Offset(w / 2, cy1), r, fillPaint);
+      canvas.drawCircle(Offset(w / 2, cy1), r, ringPaint);
+
+      canvas.drawCircle(Offset(w / 2, cy2), r, fillPaint);
+      canvas.drawCircle(Offset(w / 2, cy2), r, ringPaint);
+
+      final corePaint = Paint()
+        ..color = color.withOpacity(0.6)
+        ..strokeWidth = 1.5;
+      canvas.drawLine(Offset(w / 2 - r * 0.7, h / 2), Offset(w / 2 + r * 0.7, h / 2), corePaint);
+    } else {
+      double r = (w / 3.0).clamp(10.0, h / 2);
+      double cx1 = w / 2 - r * 0.55;
+      double cx2 = w / 2 + r * 0.55;
+
+      canvas.drawCircle(Offset(cx1, h / 2), r, fillPaint);
+      canvas.drawCircle(Offset(cx1, h / 2), r, ringPaint);
+
+      canvas.drawCircle(Offset(cx2, h / 2), r, fillPaint);
+      canvas.drawCircle(Offset(cx2, h / 2), r, ringPaint);
+
+      final corePaint = Paint()
+        ..color = color.withOpacity(0.6)
+        ..strokeWidth = 1.5;
+      canvas.drawLine(Offset(w / 2, h / 2 - r * 0.7), Offset(w / 2, h / 2 + r * 0.7), corePaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant TransformerPainter oldDelegate) =>
+      oldDelegate.color != color || oldDelegate.isSelected != isSelected;
 }
 
 class LinePainter extends CustomPainter {
-  final Offset start; final Offset? mid; final Offset end; final bool isSelected;
-  final List<Offset>? aiPath; 
+  final Offset start;
+  final Offset? mid;
+  final Offset end;
+  final bool isSelected;
+  final List<Offset>? aiPath;
+
   LinePainter(this.start, this.mid, this.end, {this.isSelected = false, this.aiPath});
-  
+
   @override
   void paint(Canvas canvas, Size size) {
+    // Outer glow when selected
+    if (isSelected) {
+      final glowPaint = Paint()
+        ..color = const Color(0xFF38BDF8).withOpacity(0.5)
+        ..strokeWidth = 7.0
+        ..style = PaintingStyle.stroke
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5);
+
+      Path glowPath = Path();
+      if (aiPath != null && aiPath!.length >= 2) {
+        glowPath.moveTo(aiPath!.first.dx, aiPath!.first.dy);
+        for (int i = 1; i < aiPath!.length; i++) {
+          glowPath.lineTo(aiPath![i].dx, aiPath![i].dy);
+        }
+      } else {
+        glowPath.moveTo(start.dx, start.dy);
+        if (mid != null) glowPath.lineTo(mid!.dx, mid!.dy);
+        glowPath.lineTo(end.dx, end.dy);
+      }
+      canvas.drawPath(glowPath, glowPaint);
+    }
+
     final p = Paint()
-      ..color = isSelected ? Colors.yellowAccent : const Color(0xFFC62828)
-      ..strokeWidth = isSelected ? 4.0 : 2.5
+      ..color = isSelected ? const Color(0xFF38BDF8) : const Color(0xFF0284C7)
+      ..strokeWidth = isSelected ? 3.2 : 2.4
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
@@ -2447,13 +3185,39 @@ class LinePainter extends CustomPainter {
         path.lineTo(aiPath![i].dx, aiPath![i].dy);
       }
     } else {
-      path.moveTo(start.dx, start.dy); 
-      if (mid != null) path.lineTo(mid!.dx, mid!.dy); 
-      path.lineTo(end.dx, end.dy); 
+      path.moveTo(start.dx, start.dy);
+      if (mid != null) path.lineTo(mid!.dx, mid!.dy);
+      path.lineTo(end.dx, end.dy);
     }
     canvas.drawPath(path, p);
+
+    // Directional chevron indicator in the middle of the line segment
+    Offset midPoint = mid ?? ((start + end) / 2);
+    Offset dir = (end - start);
+    if (dir.distance > 20) {
+      final double angle = math.atan2(dir.dy, dir.dx);
+      canvas.save();
+      canvas.translate(midPoint.dx, midPoint.dy);
+      canvas.rotate(angle);
+
+      final arrowPaint = Paint()
+        ..color = isSelected ? const Color(0xFF7DD3FC) : const Color(0xFF38BDF8)
+        ..style = PaintingStyle.fill;
+
+      final arrowPath = Path();
+      arrowPath.moveTo(5, 0);
+      arrowPath.lineTo(-5, -4);
+      arrowPath.lineTo(-2, 0);
+      arrowPath.lineTo(-5, 4);
+      arrowPath.close();
+
+      canvas.drawPath(arrowPath, arrowPaint);
+      canvas.restore();
+    }
   }
-  @override bool shouldRepaint(CustomPainter old) => true;
+
+  @override
+  bool shouldRepaint(CustomPainter old) => true;
 }
 
 class PreviewLinePainter extends CustomPainter {
@@ -2461,11 +3225,11 @@ class PreviewLinePainter extends CustomPainter {
   PreviewLinePainter(this.start, this.mid, this.current);
   @override
   void paint(Canvas canvas, Size size) {
-    final p = Paint()..color = Colors.blue.withOpacity(0.5)..strokeWidth = 2..style = PaintingStyle.stroke..strokeCap = StrokeCap.round;
-    final dotPaint = Paint()..color = Colors.blue..style = PaintingStyle.fill;
+    final p = Paint()..color = const Color(0xFF38BDF8).withOpacity(0.6)..strokeWidth = 2..style = PaintingStyle.stroke..strokeCap = StrokeCap.round;
+    final dotPaint = Paint()..color = const Color(0xFF38BDF8)..style = PaintingStyle.fill;
     Path path = Path()..moveTo(start.dx, start.dy); canvas.drawCircle(start, 4, dotPaint);
     if (mid != null) { path.lineTo(mid!.dx, mid!.dy); canvas.drawCircle(mid!, 4, dotPaint); }
-    path.lineTo(current.dx, current.dy); canvas.drawPath(path, p); canvas.drawCircle(current, 3, dotPaint..color = Colors.blue.withOpacity(0.5));
+    path.lineTo(current.dx, current.dy); canvas.drawPath(path, p); canvas.drawCircle(current, 3, dotPaint..color = const Color(0xFF38BDF8).withOpacity(0.5));
   }
   @override bool shouldRepaint(CustomPainter old) => true;
 }
@@ -2476,61 +3240,180 @@ class InfiniteGridPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    // 1. Deep Obsidian background void
+    canvas.drawRect(Rect.fromLTWH(0, 0, size.width, size.height), Paint()..color = const Color(0xFF070A12));
+
+    // 2. Transform into canvas coordinates to paint the defined drawing sheet
+    canvas.save();
+    canvas.transform(transform.storage);
+
+    const sheetRect = Rect.fromLTWH(CANVAS_CENTER - 2200, CANVAS_CENTER - 1600, 4400, 3200);
+
+    // Drawing sheet drop shadow
+    final shadowPaint = Paint()
+      ..color = Colors.black.withOpacity(0.6)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 32);
+    canvas.drawRRect(RRect.fromRectAndRadius(sheetRect.inflate(8), const Radius.circular(20)), shadowPaint);
+
+    // Sheet body (Deep blueprint slate)
+    final sheetPaint = Paint()..color = const Color(0xFF0B1120);
+    canvas.drawRRect(RRect.fromRectAndRadius(sheetRect, const Radius.circular(16)), sheetPaint);
+
+    // Sheet outer border
+    final borderPaint = Paint()
+      ..color = const Color(0xFF1E293B)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+    canvas.drawRRect(RRect.fromRectAndRadius(sheetRect, const Radius.circular(16)), borderPaint);
+
+    // CAD Corner Registration Marks
+    final markPaint = Paint()
+      ..color = const Color(0xFF475569)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5;
+    const double mLen = 35.0;
+    // Top-left
+    canvas.drawLine(sheetRect.topLeft, sheetRect.topLeft + const Offset(mLen, 0), markPaint);
+    canvas.drawLine(sheetRect.topLeft, sheetRect.topLeft + const Offset(0, mLen), markPaint);
+    // Top-right
+    canvas.drawLine(sheetRect.topRight, sheetRect.topRight - const Offset(mLen, 0), markPaint);
+    canvas.drawLine(sheetRect.topRight, sheetRect.topRight + const Offset(0, mLen), markPaint);
+    // Bottom-left
+    canvas.drawLine(sheetRect.bottomLeft, sheetRect.bottomLeft + const Offset(mLen, 0), markPaint);
+    canvas.drawLine(sheetRect.bottomLeft, sheetRect.bottomLeft - const Offset(0, mLen), markPaint);
+    // Bottom-right
+    canvas.drawLine(sheetRect.bottomRight, sheetRect.bottomRight - const Offset(mLen, 0), markPaint);
+    canvas.drawLine(sheetRect.bottomRight, sheetRect.bottomRight + const Offset(0, mLen), markPaint);
+
+    // Engineering Dot Grid inside sheet
     final double scale = transform.getMaxScaleOnAxis();
-    final double tx = transform.getTranslation().x;
-    final double ty = transform.getTranslation().y;
-
-    final p = Paint()..color = Colors.grey[100]!..strokeWidth = 1;
-    
-    const double gridSize = 40.0;
-    final double scaledGridSize = gridSize * scale;
-
-    if (scaledGridSize < 2.0) return; 
-
-    double startX = tx % scaledGridSize;
-    double startY = ty % scaledGridSize;
-
-    for (double x = startX; x < size.width; x += scaledGridSize) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), p);
+    if (scale > 0.15) {
+      final dotPaint = Paint()..color = const Color(0xFF1E293B);
+      final majorDotPaint = Paint()..color = const Color(0xFF334155);
+      const double step = 60.0;
+      for (double x = sheetRect.left + step; x < sheetRect.right; x += step) {
+        final bool isMajorX = ((x - sheetRect.left).round() % 300 == 0);
+        for (double y = sheetRect.top + step; y < sheetRect.bottom; y += step) {
+          final bool isMajorY = ((y - sheetRect.top).round() % 300 == 0);
+          if (isMajorX && isMajorY) {
+            canvas.drawCircle(Offset(x, y), 2.0 / scale.clamp(0.5, 2.0), majorDotPaint);
+          } else if (scale > 0.35) {
+            canvas.drawCircle(Offset(x, y), 1.2 / scale.clamp(0.5, 2.0), dotPaint);
+          }
+        }
+      }
     }
-    for (double y = startY; y < size.height; y += scaledGridSize) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), p);
-    }
+
+    // Sheet Title Block in bottom-right corner
+    final titleRect = Rect.fromLTWH(sheetRect.right - 420, sheetRect.bottom - 75, 400, 55);
+    final titleBg = Paint()..color = const Color(0xFF070A12).withOpacity(0.85);
+    canvas.drawRRect(RRect.fromRectAndRadius(titleRect, const Radius.circular(8)), titleBg);
+    canvas.drawRRect(RRect.fromRectAndRadius(titleRect, const Radius.circular(8)), borderPaint);
+
+    final textPainter = TextPainter(
+      text: const TextSpan(
+        children: [
+          TextSpan(text: "POWERLENS CAD · GRID SPECIFICATION\n", style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
+          TextSpan(text: "100 MVA BASE · IEEE COMPLIANT · HIGH PRECISION SOLVER", style: TextStyle(color: Color(0xFF64748B), fontSize: 9.5, letterSpacing: 0.5)),
+        ],
+      ),
+      textDirection: TextDirection.ltr,
+    );
+    textPainter.layout();
+    textPainter.paint(canvas, Offset(titleRect.left + 14, titleRect.top + 12));
+
+    canvas.restore();
   }
 
   @override
   bool shouldRepaint(InfiniteGridPainter old) => old.transform != transform;
 }
 
-class TransformerPainter extends CustomPainter {
-  final Color color;
-  final bool isVertical;
-  TransformerPainter({required this.color, this.isVertical = true});
+class MiniMapPainter extends CustomPainter {
+  final List<DrawingElement> elements;
+  final Matrix4 transform;
+  final Size viewportSize;
+
+  MiniMapPainter({
+    required this.elements,
+    required this.transform,
+    required this.viewportSize,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2.0;
+    final sheetRect = const Rect.fromLTWH(CANVAS_CENTER - 2200, CANVAS_CENTER - 1600, 4400, 3200);
 
-    if (isVertical) {
-      double r = (size.height / 3.2).clamp(8.0, size.width / 2);
-      double cy1 = size.height / 2 - r * 0.65;
-      double cy2 = size.height / 2 + r * 0.65;
-      canvas.drawCircle(Offset(size.width / 2, cy1), r, paint);
-      canvas.drawCircle(Offset(size.width / 2, cy2), r, paint);
-    } else {
-      double r = (size.width / 3.2).clamp(8.0, size.height / 2);
-      double cx1 = size.width / 2 - r * 0.65;
-      double cx2 = size.width / 2 + r * 0.65;
-      canvas.drawCircle(Offset(cx1, size.height / 2), r, paint);
-      canvas.drawCircle(Offset(cx2, size.height / 2), r, paint);
+    // Background sheet on mini map
+    final sheetPaint = Paint()..color = const Color(0xFF0B1120);
+    canvas.drawRRect(RRect.fromRectAndRadius(Rect.fromLTWH(0, 0, size.width, size.height), const Radius.circular(6)), sheetPaint);
+
+    Offset toMiniMap(Offset canvasPt) {
+      final double normX = (canvasPt.dx - sheetRect.left) / sheetRect.width;
+      final double normY = (canvasPt.dy - sheetRect.top) / sheetRect.height;
+      return Offset(normX * size.width, normY * size.height);
+    }
+
+    // Draw lines
+    final linePaint = Paint()
+      ..color = const Color(0xFF0284C7).withOpacity(0.7)
+      ..strokeWidth = 1.2;
+    for (var el in elements.where((e) => e.type == Tool.line && e.endPosition != null)) {
+      final p1 = toMiniMap(el.position);
+      final p2 = toMiniMap(el.endPosition!);
+      canvas.drawLine(p1, p2, linePaint);
+    }
+
+    // Draw buses
+    final busPaint = Paint()..color = const Color(0xFFE2E8F0);
+    for (var el in elements.where((e) => e.type == Tool.bus)) {
+      final pt = toMiniMap(el.position);
+      final w = (el.width / sheetRect.width) * size.width * 2.5;
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromCenter(center: pt, width: math.max(8.0, w), height: 4.0),
+          const Radius.circular(1.5),
+        ),
+        busPaint,
+      );
+    }
+
+    // Draw generators (emerald) and loads (amber)
+    final genPaint = Paint()..color = const Color(0xFF10B981);
+    final loadPaint = Paint()..color = const Color(0xFFF59E0B);
+    for (var el in elements) {
+      if (el.type == Tool.generator) {
+        canvas.drawCircle(toMiniMap(el.position), 3.0, genPaint);
+      } else if (el.type == Tool.load) {
+        canvas.drawCircle(toMiniMap(el.position), 3.0, loadPaint);
+      }
+    }
+
+    // Draw current camera viewport rectangle
+    final inverse = Matrix4.tryInvert(transform);
+    if (inverse != null) {
+      final vpTopLeft = MatrixUtils.transformPoint(inverse, Offset.zero);
+      final vpBottomRight = MatrixUtils.transformPoint(inverse, Offset(viewportSize.width, viewportSize.height));
+
+      final miniTopLeft = toMiniMap(vpTopLeft);
+      final miniBottomRight = toMiniMap(vpBottomRight);
+
+      final vpRect = Rect.fromPoints(miniTopLeft, miniBottomRight);
+      final vpPaint = Paint()
+        ..color = const Color(0xFF38BDF8).withOpacity(0.18)
+        ..style = PaintingStyle.fill;
+      final vpBorderPaint = Paint()
+        ..color = const Color(0xFF38BDF8)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.4;
+
+      canvas.drawRect(vpRect, vpPaint);
+      canvas.drawRect(vpRect, vpBorderPaint);
     }
   }
-  
-  @override 
-  bool shouldRepaint(CustomPainter old) => false;
+
+  @override
+  bool shouldRepaint(covariant MiniMapPainter oldDelegate) => true;
 }
 
 // ==========================================
@@ -2676,64 +3559,65 @@ class _InspectorPanelState extends State<InspectorPanel> {
         children: [
           Row(
             children: [
-              const Icon(Icons.dashboard_outlined, color: Colors.blueGrey, size: 20),
+              const Icon(Icons.dashboard_outlined, color: Color(0xFF94A3B8), size: 20),
               const SizedBox(width: 8),
               const Text(
                 "계통 개요 & 안내",
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
               ),
               const Spacer(),
               IconButton(
-                icon: const Icon(Icons.chevron_right),
+                icon: const Icon(Icons.chevron_right, color: Color(0xFF94A3B8)),
                 tooltip: "패널 접기",
                 onPressed: widget.onClose,
               ),
             ],
           ),
-          const Divider(height: 20),
+          const Divider(height: 20, color: Color(0xFF334155)),
           
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: Colors.blue.shade50,
+              color: const Color(0xFF1E293B),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.blue.shade200),
+              border: Border.all(color: const Color(0xFF334155)),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text("기준 용량 (Sbase)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                Text("${widget.sBase.toStringAsFixed(0)} MVA", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.blue.shade900)),
+                const Text("기준 용량 (Sbase)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white70)),
+                Text("${widget.sBase.toStringAsFixed(0)} MVA", style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Color(0xFF38BDF8))),
               ],
             ),
           ),
           const SizedBox(height: 12),
 
-          const Text("계통 구성 요소", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey)),
+          const Text("계통 구성 요소", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF94A3B8))),
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,
             runSpacing: 8,
             children: [
-              _statBadge("모선 (Bus)", busCount, Colors.blue),
-              _statBadge("발전기 (Gen)", genCount, Colors.redAccent),
-              _statBadge("부하 (Load)", loadCount, Colors.orange),
-              _statBadge("선로 (Line)", lineCount, Colors.teal),
-              _statBadge("변압기 (Tr)", transCount, Colors.purple),
+              _statBadge("모선 (Bus)", busCount, const Color(0xFF38BDF8)),
+              _statBadge("발전기 (Gen)", genCount, const Color(0xFF10B981)),
+              _statBadge("부하 (Load)", loadCount, const Color(0xFFF59E0B)),
+              _statBadge("선로 (Line)", lineCount, const Color(0xFF0284C7)),
+              _statBadge("변압기 (Tr)", transCount, const Color(0xFFA855F7)),
             ],
           ),
           const SizedBox(height: 20),
 
-          const Text("⌨️ 키보드 단축키", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey)),
+          const Text("⌨️ 키보드 단축키", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF94A3B8))),
           const SizedBox(height: 8),
           Container(
             decoration: BoxDecoration(
-              color: Colors.grey.shade50,
+              color: const Color(0xFF1E293B),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.grey.shade200),
+              border: Border.all(color: const Color(0xFF334155)),
             ),
             child: Column(
               children: [
+                _shortcutRow("F / Space", "도면 전체 화면 맞춤"),
                 _shortcutRow("Del / Backspace", "선택 요소 삭제"),
                 _shortcutRow("Esc", "선택 해제 / 도구 취소"),
                 _shortcutRow("Ctrl + Z", "실행 취소 (Undo)"),
@@ -2753,8 +3637,8 @@ class _InspectorPanelState extends State<InspectorPanel> {
             width: double.infinity,
             child: OutlinedButton.icon(
               style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.redAccent,
-                side: const BorderSide(color: Colors.redAccent),
+                foregroundColor: const Color(0xFFF43F5E),
+                side: const BorderSide(color: Color(0xFFF43F5E)),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
               ),
               icon: const Icon(Icons.delete_sweep_outlined, size: 18),
@@ -2771,9 +3655,9 @@ class _InspectorPanelState extends State<InspectorPanel> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
+        color: color.withOpacity(0.12),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.3)),
+        border: Border.all(color: color.withOpacity(0.35)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -2802,18 +3686,18 @@ class _InspectorPanelState extends State<InspectorPanel> {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: const Color(0xFF0F172A),
               borderRadius: BorderRadius.circular(4),
-              border: Border.all(color: Colors.grey.shade300),
+              border: Border.all(color: const Color(0xFF475569)),
             ),
             child: Text(
               keys,
-              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF38BDF8)),
             ),
           ),
           Text(
             desc,
-            style: const TextStyle(fontSize: 11, color: Colors.black87),
+            style: const TextStyle(fontSize: 11, color: Colors.white70),
           ),
         ],
       ),
@@ -2874,7 +3758,7 @@ class _InspectorPanelState extends State<InspectorPanel> {
                   children: [
                     Text(
                       title,
-                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
                       overflow: TextOverflow.ellipsis,
                     ),
                     Text(
@@ -2885,20 +3769,20 @@ class _InspectorPanelState extends State<InspectorPanel> {
                 ),
               ),
               IconButton(
-                icon: const Icon(Icons.close, size: 20),
+                icon: const Icon(Icons.close, size: 20, color: Color(0xFF94A3B8)),
                 tooltip: "선택 해제 (Esc)",
                 onPressed: widget.onClose,
               ),
             ],
           ),
-          const Divider(height: 20),
+          const Divider(height: 20, color: Color(0xFF334155)),
 
           SwitchListTile(
             dense: true,
             contentPadding: EdgeInsets.zero,
-            title: const Text("도면 위에 값 표시", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+            title: const Text("도면 위에 값 표시", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white)),
             value: e.showInfo,
-            activeColor: Colors.blueAccent,
+            activeColor: const Color(0xFF38BDF8),
             onChanged: (v) {
               e.showInfo = v;
               widget.onStateChanged();
@@ -2907,7 +3791,7 @@ class _InspectorPanelState extends State<InspectorPanel> {
 
           if (hasPowerFields) ...[
             const SizedBox(height: 6),
-            const Text("전력 표시/입력 단위", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.blueGrey)),
+            const Text("전력 표시/입력 단위", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF94A3B8))),
             const SizedBox(height: 4),
             _buildUnitToggle(),
             const SizedBox(height: 10),
@@ -2915,33 +3799,26 @@ class _InspectorPanelState extends State<InspectorPanel> {
 
           // Bus Fields
           if (e.type == Tool.bus) ...[
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6.0),
-              child: TextField(
-                controller: labelCtrl,
-                decoration: InputDecoration(
-                  labelText: "버스 번호 / 라벨",
-                  helperText: "예: 1, 2, 3...",
-                  isDense: true,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-                onChanged: (text) {
-                  e.label = text;
-                  widget.onBusRenamed(e);
-                  widget.onStateChanged();
-                },
-              ),
+            _buildTextField(
+              label: "버스 번호 / 라벨",
+              controller: labelCtrl,
+              helperText: "예: 1, 2, 3...",
+              onChanged: (text) {
+                e.label = text;
+                widget.onBusRenamed(e);
+                widget.onStateChanged();
+              },
             ),
             SwitchListTile(
               dense: true,
               contentPadding: EdgeInsets.zero,
-              title: const Text("슬랙 모선 (Slack/Swing)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+              title: const Text("슬랙 모선 (Slack/Swing)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
               subtitle: Text(
                 e.isSlack ? "기준 모선 (위상 θ=0° 고정)" : "일반 모선",
-                style: const TextStyle(fontSize: 10),
+                style: const TextStyle(fontSize: 10, color: Color(0xFF94A3B8)),
               ),
               value: e.isSlack,
-              activeColor: Colors.redAccent,
+              activeColor: const Color(0xFFF43F5E),
               onChanged: (v) {
                 if (v) {
                   for (var b in widget.elements.where((el) => el.type == Tool.bus)) {
@@ -2970,31 +3847,24 @@ class _InspectorPanelState extends State<InspectorPanel> {
 
           // Generator Fields
           if (e.type == Tool.generator) ...[
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6.0),
-              child: TextField(
-                controller: labelCtrl,
-                decoration: InputDecoration(
-                  labelText: "발전기 라벨 (식별자)",
-                  isDense: true,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-                onChanged: (text) {
-                  e.label = text;
-                  widget.onStateChanged();
-                },
-              ),
+            _buildTextField(
+              label: "발전기 라벨 (식별자)",
+              controller: labelCtrl,
+              onChanged: (text) {
+                e.label = text;
+                widget.onStateChanged();
+              },
             ),
             SwitchListTile(
               dense: true,
               contentPadding: EdgeInsets.zero,
-              title: const Text("슬랙 모선 발전기 (Slack/Swing)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+              title: const Text("슬랙 모선 발전기 (Slack/Swing)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
               subtitle: Text(
                 e.isSlack ? "기준 모선 (위상 θ=0°, 손실 자동분담)" : "PV 발전기 (유효전력 P, 전압 V 지정)",
-                style: const TextStyle(fontSize: 10),
+                style: const TextStyle(fontSize: 10, color: Color(0xFF94A3B8)),
               ),
               value: e.isSlack,
-              activeColor: Colors.redAccent,
+              activeColor: const Color(0xFFF43F5E),
               onChanged: (v) {
                 if (v) {
                   for (var g in widget.elements.where((el) => el.type == Tool.generator)) {
@@ -3038,20 +3908,13 @@ class _InspectorPanelState extends State<InspectorPanel> {
 
           // Load Fields
           if (e.type == Tool.load) ...[
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6.0),
-              child: TextField(
-                controller: labelCtrl,
-                decoration: InputDecoration(
-                  labelText: "부하 라벨 (식별자)",
-                  isDense: true,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-                onChanged: (text) {
-                  e.label = text;
-                  widget.onStateChanged();
-                },
-              ),
+            _buildTextField(
+              label: "부하 라벨 (식별자)",
+              controller: labelCtrl,
+              onChanged: (text) {
+                e.label = text;
+                widget.onStateChanged();
+              },
             ),
             _buildNumberField(
               label: "소비 유효전력 P",
@@ -3071,20 +3934,13 @@ class _InspectorPanelState extends State<InspectorPanel> {
 
           // Line Fields
           if (e.type == Tool.line) ...[
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6.0),
-              child: TextField(
-                controller: labelCtrl,
-                decoration: InputDecoration(
-                  labelText: "선로 라벨 (식별자)",
-                  isDense: true,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-                onChanged: (text) {
-                  e.label = text;
-                  widget.onStateChanged();
-                },
-              ),
+            _buildTextField(
+              label: "선로 라벨 (식별자)",
+              controller: labelCtrl,
+              onChanged: (text) {
+                e.label = text;
+                widget.onStateChanged();
+              },
             ),
             _buildNumberField(
               label: "선로 저항 R",
@@ -3118,20 +3974,13 @@ class _InspectorPanelState extends State<InspectorPanel> {
 
           // Transformer Fields
           if (e.type == Tool.transformer) ...[
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6.0),
-              child: TextField(
-                controller: labelCtrl,
-                decoration: InputDecoration(
-                  labelText: "변압기 라벨 (식별자)",
-                  isDense: true,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-                onChanged: (text) {
-                  e.label = text;
-                  widget.onStateChanged();
-                },
-              ),
+            _buildTextField(
+              label: "변압기 라벨 (식별자)",
+              controller: labelCtrl,
+              onChanged: (text) {
+                e.label = text;
+                widget.onStateChanged();
+              },
             ),
             _buildNumberField(
               label: "권선비 / 탭비 Tap",
@@ -3165,32 +4014,25 @@ class _InspectorPanelState extends State<InspectorPanel> {
 
           // Text Fields
           if (e.type == Tool.text) ...[
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6.0),
-              child: TextField(
-                controller: labelCtrl,
-                decoration: InputDecoration(
-                  labelText: "라벨 텍스트 내용",
-                  isDense: true,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-                onChanged: (text) {
-                  e.label = text;
-                  widget.onStateChanged();
-                },
-              ),
+            _buildTextField(
+              label: "라벨 텍스트 내용",
+              controller: labelCtrl,
+              onChanged: (text) {
+                e.label = text;
+                widget.onStateChanged();
+              },
             ),
           ],
 
           const SizedBox(height: 24),
-          const Divider(),
+          const Divider(color: Color(0xFF334155)),
           const SizedBox(height: 8),
 
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red.shade600,
+                backgroundColor: const Color(0xFFE11D48),
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
@@ -3209,9 +4051,9 @@ class _InspectorPanelState extends State<InspectorPanel> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 3),
       decoration: BoxDecoration(
-        color: Colors.grey.shade100,
+        color: const Color(0xFF1E293B),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey.shade300),
+        border: Border.all(color: const Color(0xFF334155)),
       ),
       child: Row(
         children: [
@@ -3229,7 +4071,7 @@ class _InspectorPanelState extends State<InspectorPanel> {
                 padding: const EdgeInsets.symmetric(vertical: 6),
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: useMw ? Colors.blue.shade700 : Colors.transparent,
+                  color: useMw ? const Color(0xFF0284C7) : Colors.transparent,
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
@@ -3237,7 +4079,7 @@ class _InspectorPanelState extends State<InspectorPanel> {
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.bold,
-                    color: useMw ? Colors.white : Colors.blueGrey.shade800,
+                    color: useMw ? Colors.white : const Color(0xFF94A3B8),
                   ),
                 ),
               ),
@@ -3257,7 +4099,7 @@ class _InspectorPanelState extends State<InspectorPanel> {
                 padding: const EdgeInsets.symmetric(vertical: 6),
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: !useMw ? Colors.blue.shade700 : Colors.transparent,
+                  color: !useMw ? const Color(0xFF0284C7) : Colors.transparent,
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
@@ -3265,13 +4107,42 @@ class _InspectorPanelState extends State<InspectorPanel> {
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.bold,
-                    color: !useMw ? Colors.white : Colors.blueGrey.shade800,
+                    color: !useMw ? Colors.white : const Color(0xFF94A3B8),
                   ),
                 ),
               ),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildTextField({
+    required String label,
+    required TextEditingController controller,
+    String? helperText,
+    required Function(String) onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6.0),
+      child: TextField(
+        controller: controller,
+        style: const TextStyle(fontSize: 12, color: Colors.white),
+        decoration: InputDecoration(
+          labelText: label,
+          labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF94A3B8)),
+          helperText: helperText,
+          helperStyle: const TextStyle(fontSize: 10, color: Color(0xFF64748B)),
+          filled: true,
+          fillColor: const Color(0xFF1E293B),
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF334155))),
+          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF334155))),
+          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF38BDF8), width: 1.5)),
+        ),
+        onChanged: onChanged,
       ),
     );
   }
@@ -3287,25 +4158,22 @@ class _InspectorPanelState extends State<InspectorPanel> {
       padding: const EdgeInsets.symmetric(vertical: 6.0),
       child: TextField(
         controller: controller,
+        style: const TextStyle(fontSize: 12, color: Colors.white),
         keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
         decoration: InputDecoration(
           labelText: label,
-          labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF94A3B8)),
           helperText: helperText,
-          helperStyle: const TextStyle(fontSize: 10, color: Colors.blueGrey),
+          helperStyle: const TextStyle(fontSize: 10, color: Color(0xFF64748B)),
           suffixText: unit,
-          suffixStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.blueGrey),
+          suffixStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF38BDF8)),
+          filled: true,
+          fillColor: const Color(0xFF1E293B),
           isDense: true,
           contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: BorderSide(color: Colors.grey.shade300),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: BorderSide(color: Colors.blue.shade700, width: 1.5),
-          ),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF334155))),
+          enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF334155))),
+          focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: const BorderSide(color: Color(0xFF38BDF8), width: 1.5)),
         ),
         onChanged: (text) {
           final val = double.tryParse(text);
