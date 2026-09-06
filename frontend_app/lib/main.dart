@@ -93,6 +93,7 @@ class PowerCanvasPage extends StatefulWidget {
 
 class PowerCanvasPageState extends State<PowerCanvasPage> {
   final TransformationController _transformationController = TransformationController();
+  final FocusNode _canvasFocusNode = FocusNode();
 
   List<DrawingElement> elements = [];
   List<List<DrawingElement>> historyStack = [];
@@ -103,18 +104,161 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
   Offset? lineStart; Offset? lineMid; Offset? currentMousePos;
   String? pendingStartId; Offset? pendingStartAnchor; DrawingElement? snapTarget; 
 
+  Map<String, dynamic>? lastSimulationResult;
+  bool showResultOverlay = true;
+  bool isInspectorOpen = true;
+  bool isSimulating = false;
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _resetCamera());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _resetCamera();
+      _canvasFocusNode.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _canvasFocusNode.dispose();
+    super.dispose();
   }
 
   void _resetCamera() {
     final size = MediaQuery.of(context).size;
     if (size.width == 0) return;
     _transformationController.value = Matrix4.identity()
-      // translateDeprecated 경고 수정을 위해 Z축(0.0) 추가
       ..translate(-(CANVAS_CENTER - size.width / 2), -(CANVAS_CENTER - size.height / 2), 0.0);
+  }
+
+  void _zoom(double factor) {
+    final size = MediaQuery.of(context).size;
+    final center = Offset(size.width / 2, size.height / 2);
+    final matrix = _transformationController.value.clone();
+    matrix.translate(center.dx, center.dy);
+    matrix.scale(factor, factor);
+    matrix.translate(-center.dx, -center.dy);
+    _transformationController.value = matrix;
+  }
+
+  void _handleKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return;
+
+    final isCtrl = HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isMetaPressed;
+    final isShift = HardwareKeyboard.instance.isShiftPressed;
+
+    final focusedWidget = FocusManager.instance.primaryFocus;
+    final isTyping = focusedWidget != null &&
+        focusedWidget != _canvasFocusNode &&
+        focusedWidget.context != null &&
+        focusedWidget.context!.widget is EditableText;
+
+    if (isTyping) {
+      if (event.logicalKey == LogicalKeyboardKey.escape) {
+        FocusManager.instance.primaryFocus?.unfocus();
+      }
+      return;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.delete || event.logicalKey == LogicalKeyboardKey.backspace) {
+      _deleteSelectedElement();
+    } else if (event.logicalKey == LogicalKeyboardKey.escape) {
+      setState(() {
+        selectedTool = Tool.move;
+        selectedElement = null;
+        lineStart = null;
+        lineMid = null;
+        pendingStartId = null;
+      });
+    } else if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyZ) {
+      if (isShift) {
+        _redo();
+      } else {
+        _undo();
+      }
+    } else if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyY) {
+      _redo();
+    } else if (!isCtrl) {
+      if (event.logicalKey == LogicalKeyboardKey.keyV) {
+        setState(() => selectedTool = Tool.move);
+      } else if (event.logicalKey == LogicalKeyboardKey.keyB) {
+        setState(() { selectedTool = Tool.bus; selectedElement = null; });
+      } else if (event.logicalKey == LogicalKeyboardKey.keyG) {
+        setState(() { selectedTool = Tool.generator; selectedElement = null; });
+      } else if (event.logicalKey == LogicalKeyboardKey.keyL) {
+        setState(() { selectedTool = Tool.load; selectedElement = null; });
+      } else if (event.logicalKey == LogicalKeyboardKey.keyT) {
+        setState(() { selectedTool = Tool.transformer; selectedElement = null; });
+      } else if (event.logicalKey == LogicalKeyboardKey.keyW) {
+        setState(() { selectedTool = Tool.line; selectedElement = null; });
+      }
+    }
+  }
+
+  void _deleteSelectedElement() {
+    if (selectedElement == null) return;
+    _saveState();
+    final target = selectedElement!;
+    setState(() {
+      if (target.type == Tool.bus) {
+        elements.removeWhere((el) =>
+            el.id == target.id ||
+            el.parentBusId == target.id ||
+            el.startElementId == target.id ||
+            el.endElementId == target.id);
+      } else {
+        elements.remove(target);
+      }
+      selectedElement = null;
+    });
+  }
+
+  void _handleBusRenamed(DrawingElement e) {
+    if (e.type == Tool.bus && e.label.isNotEmpty) {
+      String oldId = e.id;
+      String newBusNum = _getBusNum(e.label);
+      String newId = "bus_$newBusNum";
+      
+      if (oldId != newId) {
+        e.id = newId;
+        for (var el in elements) {
+          if (el.parentBusId == oldId) el.parentBusId = newId;
+          if (el.startElementId == oldId) el.startElementId = newId;
+          if (el.endElementId == oldId) el.endElementId = newId;
+        }
+      }
+      _updateConnectedElementsId(e);
+    }
+  }
+
+  void _confirmClearCanvas() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("도면 초기화"),
+        content: const Text("도면의 모든 요소를 지우시겠습니까? (Ctrl+Z로 되돌릴 수 있습니다)"),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("취소")),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _saveState();
+              setState(() {
+                elements.clear();
+                selectedElement = null;
+                lineStart = null;
+                lineMid = null;
+                pendingStartId = null;
+                lastSimulationResult = null;
+                _resetCamera();
+              });
+            },
+            child: const Text("초기화", style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
   }
 
   void _saveState() {
@@ -253,40 +397,54 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     final url = Uri.parse('http://127.0.0.1:8000/run_simulation'); 
     final payload = jsonEncode({'elements': elements.map((e) => e.toJson()).toList()});
 
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => const Center(
-        child: Card(
-          child: Padding(
-            padding: EdgeInsets.all(20.0),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                CircularProgressIndicator(),
-                SizedBox(width: 16),
-                Text("AC Newton-Raphson 조류 계산 중..."),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
+    setState(() => isSimulating = true);
 
     try {
       final response = await http.post(url, headers: {'Content-Type': 'application/json'}, body: payload);
       if (!mounted) return;
-      Navigator.pop(context); // dismiss loading dialog
+      setState(() => isSimulating = false);
 
       if (response.statusCode == 200) {
         final result = jsonDecode(response.body);
         if (result['data'] != null && (result['status'] == 'success' || result['status'] == 'warning')) {
+          setState(() {
+            lastSimulationResult = result['data'];
+            showResultOverlay = true;
+          });
+
           if (result['status'] == 'warning') {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(result['message'] ?? "조류 계산 미수렴 (발산)"), backgroundColor: Colors.orange, duration: const Duration(seconds: 4)),
+              SnackBar(
+                content: Text(result['message'] ?? "조류 계산 미수렴 (발산)"),
+                backgroundColor: Colors.orange,
+                duration: const Duration(seconds: 4),
+              ),
+            );
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Row(
+                  children: [
+                    const Icon(Icons.check_circle, color: Colors.greenAccent, size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        "조류계산 수렴 완료 (${result['data']['iterations']}회 반복) · 도면에 결과가 반영되었습니다.",
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
+                ),
+                backgroundColor: const Color(0xFF0F172A),
+                duration: const Duration(seconds: 4),
+                action: SnackBarAction(
+                  label: "수치 표 보기",
+                  textColor: Colors.cyanAccent,
+                  onPressed: () => _showPowerFlowResultDialog(result['data']),
+                ),
+              ),
             );
           }
-          _showPowerFlowResultDialog(result['data']);
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text(result['message'] ?? "조류 계산 실패"), backgroundColor: Colors.orange),
@@ -299,7 +457,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       }
     } catch (e) {
       if (!mounted) return;
-      Navigator.pop(context); // dismiss loading dialog
+      setState(() => isSimulating = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("서버 접속 실패!\n$e"), backgroundColor: Colors.red),
       );
@@ -1227,50 +1385,368 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      appBar: AppBar(
-        title: const Text("Power Designer Pro", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-        backgroundColor: Colors.blueGrey[900],
-        actions: [
-          IconButton(icon: const Icon(Icons.undo, color: Colors.white), onPressed: historyStack.isNotEmpty ? _undo : null),
-          IconButton(icon: const Icon(Icons.redo, color: Colors.white), onPressed: redoStack.isNotEmpty ? _redo : null),
-          IconButton(
-            icon: const Icon(Icons.table_view, color: Colors.greenAccent),
-            tooltip: "엑셀 계통 데이터 가져오기 (.xlsx)",
-            onPressed: _importExcelCase,
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 4.0),
-            child: ElevatedButton.icon(
-              onPressed: _importExcelCase,
-              icon: const Icon(Icons.table_chart, color: Colors.white, size: 18),
-              label: const Text("엑셀 데이터 적용", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.teal[700]),
+    return KeyboardListener(
+      focusNode: _canvasFocusNode,
+      autofocus: true,
+      onKeyEvent: _handleKeyEvent,
+      child: Scaffold(
+        backgroundColor: Colors.white,
+        appBar: _buildTopAppBar(),
+        body: Row(
+          children: [
+            // 1. Left CAD Tool Palette (64px)
+            _buildLeftToolPalette(),
+
+            // 2. Center Infinite Canvas (Expanded)
+            Expanded(
+              child: Stack(
+                children: [
+                  _buildCanvas(),
+                  _buildCanvasViewControls(),
+                ],
+              ),
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 4.0),
-            child: ElevatedButton.icon(
-              onPressed: _openReviewPage,
-              icon: const Icon(Icons.auto_awesome, color: Colors.white, size: 18),
-              label: const Text("AI 도면 검수실", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.purpleAccent),
+
+            // 3. Right Property Inspector (320px)
+            if (isInspectorOpen)
+              SizedBox(
+                width: 320,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    border: Border(left: BorderSide(color: Colors.grey.shade300, width: 1)),
+                    boxShadow: [
+                      BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 6, offset: const Offset(-2, 0)),
+                    ],
+                  ),
+                  child: InspectorPanel(
+                    selectedElement: selectedElement,
+                    elements: elements,
+                    sBase: 100.0,
+                    onStateChanged: () {
+                      _saveState();
+                      setState(() {});
+                    },
+                    onDeleteSelected: _deleteSelectedElement,
+                    onClose: () => setState(() => selectedElement = null),
+                    onBusRenamed: _handleBusRenamed,
+                    onClearAll: _confirmClearCanvas,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  PreferredSizeWidget _buildTopAppBar() {
+    final int busCount = elements.where((e) => e.type == Tool.bus).length;
+    final int lineCount = elements.where((e) => e.type == Tool.line).length;
+    final bool hasResults = lastSimulationResult != null;
+
+    return AppBar(
+      elevation: 0.5,
+      backgroundColor: const Color(0xFF0F172A), // Modern dark slate 900
+      title: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(5),
+            decoration: BoxDecoration(
+              color: Colors.blue.shade600,
+              borderRadius: BorderRadius.circular(8),
             ),
+            child: const Icon(Icons.bolt, color: Colors.amberAccent, size: 18),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 8.0),
-            child: ElevatedButton.icon(
-              onPressed: _sendDataToServer, 
-              icon: const Icon(Icons.cloud_upload, color: Colors.white), 
-              label: const Text("조류계산 (파이썬 전송)", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
-            ),
+          const SizedBox(width: 8),
+          const Text(
+            "PowerLens Pro",
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16, letterSpacing: -0.3),
           ),
         ],
       ),
-      body: Column(
-        children: [_buildToolBar(), Expanded(child: _buildCanvas())],
+      actions: [
+        Container(
+          margin: const EdgeInsets.symmetric(vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white12),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.hub_outlined, color: Colors.cyanAccent, size: 14),
+              const SizedBox(width: 6),
+              Text(
+                "모선 $busCount · 선로 $lineCount",
+                style: const TextStyle(color: Colors.white70, fontSize: 11),
+              ),
+              if (hasResults) ...[
+                const SizedBox(width: 8),
+                Container(width: 5, height: 5, decoration: const BoxDecoration(color: Colors.greenAccent, shape: BoxShape.circle)),
+                const SizedBox(width: 6),
+                const Text(
+                  "수렴됨",
+                  style: TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        IconButton(
+          icon: const Icon(Icons.undo, color: Colors.white, size: 20),
+          tooltip: "되돌리기 (Ctrl+Z)",
+          onPressed: historyStack.isNotEmpty ? _undo : null,
+        ),
+        IconButton(
+          icon: const Icon(Icons.redo, color: Colors.white, size: 20),
+          tooltip: "다시실행 (Ctrl+Y)",
+          onPressed: redoStack.isNotEmpty ? _redo : null,
+        ),
+        const SizedBox(width: 6),
+        Container(height: 24, width: 1, color: Colors.white24),
+        const SizedBox(width: 6),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10.0, horizontal: 4.0),
+          child: OutlinedButton.icon(
+            onPressed: _importExcelCase,
+            icon: const Icon(Icons.table_chart, color: Colors.tealAccent, size: 16),
+            label: const Text("엑셀 가져오기", style: TextStyle(color: Colors.tealAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: Colors.tealAccent),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 10.0, horizontal: 4.0),
+          child: OutlinedButton.icon(
+            onPressed: _openReviewPage,
+            icon: const Icon(Icons.auto_awesome, color: Colors.purpleAccent, size: 16),
+            label: const Text("AI 도면 검수실", style: TextStyle(color: Colors.purpleAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: Colors.purpleAccent),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+            ),
+          ),
+        ),
+        if (hasResults)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10.0, horizontal: 4.0),
+            child: OutlinedButton.icon(
+              onPressed: () => _showPowerFlowResultDialog(lastSimulationResult!),
+              icon: const Icon(Icons.assessment_outlined, color: Colors.amberAccent, size: 16),
+              label: const Text("수치 결과표", style: TextStyle(color: Colors.amberAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: Colors.amberAccent),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+              ),
+            ),
+          ),
+        const SizedBox(width: 6),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 8.0),
+          child: ElevatedButton.icon(
+            onPressed: isSimulating ? null : _sendDataToServer,
+            icon: isSimulating
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                : const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 20),
+            label: Text(
+              isSimulating ? "해석 중..." : "조류계산 실행",
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.blueAccent.shade700,
+              elevation: 2,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+      ],
+    );
+  }
+
+  Widget _buildLeftToolPalette() {
+    return Container(
+      width: 64,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(right: BorderSide(color: Colors.grey.shade200)),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 4, offset: const Offset(1, 0)),
+        ],
+      ),
+      child: Column(
+        children: [
+          const SizedBox(height: 8),
+          _paletteItem(Tool.move, Icons.near_me, "선택", "V"),
+          _paletteItem(Tool.bus, Icons.horizontal_rule, "모선", "B"),
+          _paletteItem(Tool.generator, Icons.motion_photos_on, "발전기", "G"),
+          _paletteItem(Tool.load, Icons.arrow_downward, "부하", "L"),
+          _paletteItem(Tool.transformer, Icons.crop_square, "변압기", "T"),
+          _paletteItem(Tool.line, Icons.polyline, "선로", "W"),
+          _paletteItem(Tool.text, Icons.text_fields, "라벨", ""),
+          const Divider(indent: 8, endIndent: 8, height: 16),
+          _actionPaletteItem(
+            Icons.auto_awesome,
+            "AI 도면",
+            Colors.purple,
+            _uploadImageToAI,
+          ),
+          const Spacer(),
+          _actionPaletteItem(
+            Icons.delete_sweep_outlined,
+            "초기화",
+            Colors.redAccent,
+            _confirmClearCanvas,
+          ),
+          const SizedBox(height: 12),
+        ],
+      ),
+    );
+  }
+
+  Widget _paletteItem(Tool tool, IconData icon, String label, String shortcut) {
+    final bool isSel = selectedTool == tool;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+      child: Tooltip(
+        message: shortcut.isNotEmpty ? "$label ($shortcut)" : label,
+        waitDuration: const Duration(milliseconds: 300),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () {
+            setState(() {
+              selectedTool = tool;
+              if (tool != Tool.move) selectedElement = null;
+              lineStart = null;
+              lineMid = null;
+              pendingStartId = null;
+            });
+          },
+          child: Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: isSel ? Colors.blue.shade600 : Colors.transparent,
+              borderRadius: BorderRadius.circular(10),
+              border: isSel ? Border.all(color: Colors.blue.shade800, width: 1.5) : null,
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 20, color: isSel ? Colors.white : Colors.blueGrey.shade800),
+                const SizedBox(height: 2),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 9.5,
+                    fontWeight: isSel ? FontWeight.bold : FontWeight.w500,
+                    color: isSel ? Colors.white : Colors.blueGrey.shade700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _actionPaletteItem(IconData icon, String label, Color color, VoidCallback onTap) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+      child: Tooltip(
+        message: label,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: onTap,
+          child: Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 18, color: color),
+                const SizedBox(height: 2),
+                Text(
+                  label,
+                  style: TextStyle(fontSize: 9.5, fontWeight: FontWeight.bold, color: color),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCanvasViewControls() {
+    return Positioned(
+      left: 16,
+      bottom: 16,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.95),
+          borderRadius: BorderRadius.circular(10),
+          boxShadow: [
+            BoxShadow(color: Colors.black.withOpacity(0.12), blurRadius: 8, offset: const Offset(0, 2)),
+          ],
+          border: Border.all(color: Colors.grey.shade300),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: const Icon(Icons.add, size: 20),
+              tooltip: "화면 확대 (+)",
+              onPressed: () => _zoom(1.2),
+            ),
+            IconButton(
+              icon: const Icon(Icons.remove, size: 20),
+              tooltip: "화면 축소 (-)",
+              onPressed: () => _zoom(1.0 / 1.2),
+            ),
+            IconButton(
+              icon: const Icon(Icons.fit_screen, size: 20),
+              tooltip: "화면 중앙 정렬 (100%)",
+              onPressed: _resetCamera,
+            ),
+            Container(height: 20, width: 1, color: Colors.grey.shade300, margin: const EdgeInsets.symmetric(horizontal: 4)),
+            IconButton(
+              icon: Icon(
+                showResultOverlay ? Icons.visibility : Icons.visibility_off,
+                size: 20,
+                color: showResultOverlay ? Colors.blueAccent : Colors.grey,
+              ),
+              tooltip: showResultOverlay ? "조류계산 결과 숨기기" : "조류계산 결과 도면 표시",
+              onPressed: () => setState(() => showResultOverlay = !showResultOverlay),
+            ),
+            IconButton(
+              icon: Icon(
+                isInspectorOpen ? Icons.dock : Icons.chrome_reader_mode_outlined,
+                size: 20,
+                color: isInspectorOpen ? Colors.blueAccent : Colors.grey,
+              ),
+              tooltip: isInspectorOpen ? "속성 패널 접기" : "속성 패널 열기",
+              onPressed: () => setState(() => isInspectorOpen = !isInspectorOpen),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1296,11 +1772,18 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           constrained: false, 
           child: GestureDetector(
             behavior: HitTestBehavior.translucent, 
-            onDoubleTap: () { if (selectedElement != null) _showPropertiesDialog(selectedElement!); },
+            onDoubleTap: () {
+              if (selectedElement != null) {
+                setState(() => isInspectorOpen = true);
+              }
+            },
             onTapDown: (details) {
               setState(() => currentMousePos = details.localPosition);
-              if (selectedTool == Tool.move) { _checkSelection(details.localPosition); } 
-              else { _handleDrawingTap(details.localPosition); }
+              if (selectedTool == Tool.move) {
+                _checkSelection(details.localPosition);
+              } else {
+                _handleDrawingTap(details.localPosition);
+              }
             },
             child: MouseRegion(
               onHover: (e) {
@@ -1318,10 +1801,19 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                     ...elements.where((e) => e.type == Tool.line).map((e) => _buildLineWidget(e)),
                     ...elements.where((e) => e.type != Tool.line).map((e) => _buildBusGenLoadWidget(e)),
                     ...elements.where((e) => e.type != Tool.text).map((e) => _buildMovableInfoBox(e)),
+                    ..._buildResultOverlays(),
+                    _buildSnapTargetIndicator(),
                     
                     if (lineStart != null && currentMousePos != null) 
-                      Positioned.fill(child: CustomPaint(painter: PreviewLinePainter(lineStart!, lineMid, snapTarget != null ? _getSnapPoint(snapTarget!, currentMousePos!) : currentMousePos!))),
-                    _buildQuickDeleteButton(),
+                      Positioned.fill(
+                        child: CustomPaint(
+                          painter: PreviewLinePainter(
+                            lineStart!,
+                            lineMid,
+                            snapTarget != null ? _getSnapPoint(snapTarget!, currentMousePos!) : currentMousePos!,
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -1329,6 +1821,155 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           ),
         ),
       ],
+    );
+  }
+
+  List<Widget> _buildResultOverlays() {
+    if (!showResultOverlay || lastSimulationResult == null) return [];
+    final busResults = lastSimulationResult!['bus_results'] as List<dynamic>? ?? [];
+    final lineResults = lastSimulationResult!['line_results'] as List<dynamic>? ?? [];
+    
+    List<Widget> overlays = [];
+
+    // 1. Bus Result Badges
+    for (var el in elements.where((e) => e.type == Tool.bus)) {
+      final busNum = _getBusNum(el.label.isNotEmpty ? el.label : el.id);
+      final bRes = busResults.firstWhere(
+        (b) => b['bus'].toString() == busNum,
+        orElse: () => null,
+      );
+
+      if (bRes != null) {
+        final double v = (bRes['volt'] as num?)?.toDouble() ?? 1.0;
+        final double ang = (bRes['angle'] as num?)?.toDouble() ?? 0.0;
+        final double pgen = (bRes['pgen'] as num?)?.toDouble() ?? 0.0;
+        final double qgen = (bRes['qgen'] as num?)?.toDouble() ?? 0.0;
+        final double pload = (bRes['pload'] as num?)?.toDouble() ?? 0.0;
+        final double qload = (bRes['qload'] as num?)?.toDouble() ?? 0.0;
+
+        Color voltColor = (v >= 0.95 && v <= 1.05) ? Colors.greenAccent.shade700 : Colors.deepOrangeAccent;
+
+        overlays.add(
+          Positioned(
+            left: el.position.dx - 80,
+            top: el.position.dy + (el.height / 2) + 14,
+            child: IgnorePointer(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                decoration: BoxDecoration(
+                  color: const Color(0xE60F172A), // Dark slate
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: voltColor.withOpacity(0.7), width: 1.2),
+                  boxShadow: const [
+                    BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2))
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          "V: ${v.toStringAsFixed(4)} pu",
+                          style: TextStyle(color: voltColor, fontWeight: FontWeight.bold, fontSize: 11),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          "∠${ang >= 0 ? '+' : ''}${ang.toStringAsFixed(2)}°",
+                          style: const TextStyle(color: Colors.white70, fontSize: 11),
+                        ),
+                      ],
+                    ),
+                    if (pgen.abs() > 0.01 || qgen.abs() > 0.01)
+                      Text(
+                        "Gen: ${pgen.toStringAsFixed(1)} MW / ${qgen.toStringAsFixed(1)} MVAR",
+                        style: const TextStyle(color: Colors.greenAccent, fontSize: 9.5),
+                      ),
+                    if (pload.abs() > 0.01 || qload.abs() > 0.01)
+                      Text(
+                        "Load: ${pload.toStringAsFixed(1)} MW / ${qload.toStringAsFixed(1)} MVAR",
+                        style: const TextStyle(color: Colors.amberAccent, fontSize: 9.5),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+    }
+
+    // 2. Line Flow Badges
+    for (var el in elements.where((e) => e.type == Tool.line && e.endPosition != null)) {
+      DrawingElement? startEl;
+      DrawingElement? endEl;
+      try { startEl = elements.firstWhere((e) => e.id == el.startElementId); } catch (_) {}
+      try { endEl = elements.firstWhere((e) => e.id == el.endElementId); } catch (_) {}
+
+      if (startEl == null || endEl == null) continue;
+
+      final fb = _getBusNum(startEl.label.isNotEmpty ? startEl.label : startEl.id);
+      final tb = _getBusNum(endEl.label.isNotEmpty ? endEl.label : endEl.id);
+
+      final lRes = lineResults.firstWhere(
+        (l) => (l['from_bus'].toString() == fb && l['to_bus'].toString() == tb) ||
+               (l['from_bus'].toString() == tb && l['to_bus'].toString() == fb),
+        orElse: () => null,
+      );
+
+      if (lRes != null) {
+        final double pFrom = (lRes['p_from_mw'] as num?)?.toDouble() ?? 0.0;
+        final double lossP = (lRes['loss_p_mw'] as num?)?.toDouble() ?? 0.0;
+        final mid = el.midPosition ?? (el.position + el.endPosition!) / 2;
+
+        overlays.add(
+          Positioned(
+            left: mid.dx - 50,
+            top: mid.dy - 12,
+            child: IgnorePointer(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xE61E293B),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: Colors.cyanAccent.withOpacity(0.5), width: 1),
+                ),
+                child: Text(
+                  "${pFrom.abs().toStringAsFixed(1)} MW (손실: ${lossP.toStringAsFixed(1)})",
+                  style: const TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+    }
+
+    return overlays;
+  }
+
+  Widget _buildSnapTargetIndicator() {
+    if (snapTarget == null || currentMousePos == null || lineStart == null) return const SizedBox.shrink();
+    final pt = _getSnapPoint(snapTarget!, currentMousePos!);
+    return Positioned(
+      left: pt.dx - 8,
+      top: pt.dy - 8,
+      child: IgnorePointer(
+        child: Container(
+          width: 16,
+          height: 16,
+          decoration: BoxDecoration(
+            color: Colors.cyanAccent.withOpacity(0.4),
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.cyanAccent, width: 2),
+            boxShadow: const [
+              BoxShadow(color: Colors.cyanAccent, blurRadius: 6),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -1362,38 +2003,6 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           child: Text(info, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.black)),
         ),
       ),
-    );
-  }
-
-  Widget _buildToolBar() {
-    return Container(
-      padding: const EdgeInsets.all(10), color: Colors.grey[100],
-      child: Wrap(spacing: 8, children: [
-        _toolBtn(Tool.move, Icons.near_me, "선택/이동"),
-        _toolBtn(Tool.bus, Icons.remove, "모선"),
-        _toolBtn(Tool.generator, Icons.radio_button_checked, "발전기"),
-        _toolBtn(Tool.load, Icons.change_history, "부하"), 
-        _toolBtn(Tool.transformer, Icons.crop_square, "변압기"), 
-        _toolBtn(Tool.line, Icons.polyline, "선로연결"),
-        _toolBtn(Tool.text, Icons.text_fields, "라벨"),
-        ActionChip(
-          backgroundColor: Colors.purpleAccent,
-          avatar: const Icon(Icons.camera_alt, size: 16, color: Colors.white),
-          label: const Text("도면 사진 분석", style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
-          onPressed: _uploadImageToAI,
-        ),
-        IconButton(onPressed: () { _saveState(); setState(() { elements.clear(); lineStart = null; lineMid = null; _resetCamera(); }); }, icon: const Icon(Icons.refresh, color: Colors.red)),
-      ]),
-    );
-  }
-
-  Widget _toolBtn(Tool tool, IconData icon, String label) {
-    bool isSel = selectedTool == tool;
-    return ActionChip(
-      backgroundColor: isSel ? Colors.blue : Colors.white,
-      avatar: Icon(icon, size: 16, color: isSel ? Colors.white : Colors.black),
-      label: Text(label, style: TextStyle(color: isSel ? Colors.white : Colors.black, fontSize: 12)),
-      onPressed: () => setState(() { selectedTool = tool; selectedElement = null; lineStart = null; lineMid = null; }),
     );
   }
 
@@ -1776,8 +2385,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
   }
 
   Widget _buildQuickDeleteButton() {
-    if (selectedElement == null) return const SizedBox.shrink();
-    return Positioned(left: selectedElement!.position.dx + 60, top: selectedElement!.position.dy - 80, child: FloatingActionButton.small(backgroundColor: Colors.red, onPressed: () { _saveState(); setState(() { elements.remove(selectedElement); selectedElement = null; }); }, child: const Icon(Icons.delete, color: Colors.white)));
+    return const SizedBox.shrink();
   }
 }
 
@@ -1924,3 +2532,790 @@ class TransformerPainter extends CustomPainter {
   @override 
   bool shouldRepaint(CustomPainter old) => false;
 }
+
+// ==========================================
+// RIGHT PROPERTY INSPECTOR PANEL
+// ==========================================
+
+class InspectorPanel extends StatefulWidget {
+  final DrawingElement? selectedElement;
+  final List<DrawingElement> elements;
+  final double sBase;
+  final VoidCallback onStateChanged;
+  final VoidCallback onDeleteSelected;
+  final VoidCallback onClose;
+  final Function(DrawingElement) onBusRenamed;
+  final VoidCallback onClearAll;
+
+  const InspectorPanel({
+    super.key,
+    required this.selectedElement,
+    required this.elements,
+    this.sBase = 100.0,
+    required this.onStateChanged,
+    required this.onDeleteSelected,
+    required this.onClose,
+    required this.onBusRenamed,
+    required this.onClearAll,
+  });
+
+  @override
+  State<InspectorPanel> createState() => _InspectorPanelState();
+}
+
+class _InspectorPanelState extends State<InspectorPanel> {
+  bool useMw = true;
+  late TextEditingController labelCtrl;
+  late TextEditingController vCtrl;
+  late TextEditingController pCtrl;
+  late TextEditingController qCtrl;
+  late TextEditingController rCtrl;
+  late TextEditingController xCtrl;
+  late TextEditingController bCtrl;
+  late TextEditingController thetaCtrl;
+  late TextEditingController tapCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _initControllers();
+  }
+
+  void _initControllers() {
+    final e = widget.selectedElement;
+    if (e == null) {
+      labelCtrl = TextEditingController();
+      vCtrl = TextEditingController();
+      pCtrl = TextEditingController();
+      qCtrl = TextEditingController();
+      rCtrl = TextEditingController();
+      xCtrl = TextEditingController();
+      bCtrl = TextEditingController();
+      thetaCtrl = TextEditingController();
+      tapCtrl = TextEditingController();
+      return;
+    }
+
+    labelCtrl = TextEditingController(text: e.label.isNotEmpty ? e.label : e.id);
+    vCtrl = TextEditingController(text: e.vPu.toString());
+
+    final double pVal = useMw ? (e.pPu * widget.sBase) : e.pPu;
+    final double qVal = useMw ? (e.qPu * widget.sBase) : e.qPu;
+    pCtrl = TextEditingController(text: _formatNum(pVal));
+    qCtrl = TextEditingController(text: _formatNum(qVal));
+
+    rCtrl = TextEditingController(text: e.rPu.toString());
+    xCtrl = TextEditingController(text: e.xPu.toString());
+    bCtrl = TextEditingController(text: e.bPu.toString());
+    thetaCtrl = TextEditingController(text: e.thetaDeg.toString());
+    tapCtrl = TextEditingController(text: e.tapRatio.toString());
+  }
+
+  String _formatNum(double v) {
+    if (v == v.roundToDouble()) return v.toInt().toString();
+    return v.toStringAsFixed(2);
+  }
+
+  @override
+  void didUpdateWidget(covariant InspectorPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selectedElement != widget.selectedElement) {
+      _updateControllers();
+    }
+  }
+
+  void _updateControllers() {
+    final e = widget.selectedElement;
+    if (e == null) return;
+    labelCtrl.text = e.label.isNotEmpty ? e.label : e.id;
+    vCtrl.text = e.vPu.toString();
+    final double pVal = useMw ? (e.pPu * widget.sBase) : e.pPu;
+    final double qVal = useMw ? (e.qPu * widget.sBase) : e.qPu;
+    pCtrl.text = _formatNum(pVal);
+    qCtrl.text = _formatNum(qVal);
+    rCtrl.text = e.rPu.toString();
+    xCtrl.text = e.xPu.toString();
+    bCtrl.text = e.bPu.toString();
+    thetaCtrl.text = e.thetaDeg.toString();
+    tapCtrl.text = e.tapRatio.toString();
+  }
+
+  @override
+  void dispose() {
+    labelCtrl.dispose();
+    vCtrl.dispose();
+    pCtrl.dispose();
+    qCtrl.dispose();
+    rCtrl.dispose();
+    xCtrl.dispose();
+    bCtrl.dispose();
+    thetaCtrl.dispose();
+    tapCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.selectedElement == null) {
+      return _buildSystemOverview();
+    }
+    return _buildElementEditor();
+  }
+
+  Widget _buildSystemOverview() {
+    final busCount = widget.elements.where((e) => e.type == Tool.bus).length;
+    final genCount = widget.elements.where((e) => e.type == Tool.generator).length;
+    final loadCount = widget.elements.where((e) => e.type == Tool.load).length;
+    final lineCount = widget.elements.where((e) => e.type == Tool.line).length;
+    final transCount = widget.elements.where((e) => e.type == Tool.transformer).length;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.dashboard_outlined, color: Colors.blueGrey, size: 20),
+              const SizedBox(width: 8),
+              const Text(
+                "계통 개요 & 안내",
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+              ),
+              const Spacer(),
+              IconButton(
+                icon: const Icon(Icons.chevron_right),
+                tooltip: "패널 접기",
+                onPressed: widget.onClose,
+              ),
+            ],
+          ),
+          const Divider(height: 20),
+          
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.blue.shade50,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.blue.shade200),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text("기준 용량 (Sbase)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                Text("${widget.sBase.toStringAsFixed(0)} MVA", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.blue.shade900)),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          const Text("계통 구성 요소", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey)),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _statBadge("모선 (Bus)", busCount, Colors.blue),
+              _statBadge("발전기 (Gen)", genCount, Colors.redAccent),
+              _statBadge("부하 (Load)", loadCount, Colors.orange),
+              _statBadge("선로 (Line)", lineCount, Colors.teal),
+              _statBadge("변압기 (Tr)", transCount, Colors.purple),
+            ],
+          ),
+          const SizedBox(height: 20),
+
+          const Text("⌨️ 키보드 단축키", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey)),
+          const SizedBox(height: 8),
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.grey.shade50,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.grey.shade200),
+            ),
+            child: Column(
+              children: [
+                _shortcutRow("Del / Backspace", "선택 요소 삭제"),
+                _shortcutRow("Esc", "선택 해제 / 도구 취소"),
+                _shortcutRow("Ctrl + Z", "실행 취소 (Undo)"),
+                _shortcutRow("Ctrl + Y", "다시 실행 (Redo)"),
+                _shortcutRow("V", "선택 및 이동 모드"),
+                _shortcutRow("B", "모선(Bus) 배치"),
+                _shortcutRow("G", "발전기 배치"),
+                _shortcutRow("L", "부하 배치"),
+                _shortcutRow("T", "변압기 배치"),
+                _shortcutRow("W", "선로 연결 (Wire)"),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.redAccent,
+                side: const BorderSide(color: Colors.redAccent),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              icon: const Icon(Icons.delete_sweep_outlined, size: 18),
+              label: const Text("도면 전체 초기화"),
+              onPressed: widget.onClearAll,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _statBadge(String label, int count, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(width: 6, height: 6, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+          const SizedBox(width: 6),
+          Text(
+            "$label: ",
+            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color),
+          ),
+          Text(
+            "$count",
+            style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: color),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _shortcutRow(String keys, String desc) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: Colors.grey.shade300),
+            ),
+            child: Text(
+              keys,
+              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+            ),
+          ),
+          Text(
+            desc,
+            style: const TextStyle(fontSize: 11, color: Colors.black87),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildElementEditor() {
+    final e = widget.selectedElement!;
+    final String title = e.label.isNotEmpty ? e.label : e.id;
+    final bool hasPowerFields = (e.type == Tool.generator || e.type == Tool.load);
+
+    Color typeColor = Colors.blueGrey;
+    String typeName = "부품";
+    IconData typeIcon = Icons.extension;
+
+    if (e.type == Tool.bus) {
+      typeColor = e.isSlack ? Colors.redAccent : Colors.blueAccent;
+      typeName = e.isSlack ? "슬랙(Slack) 기준 모선" : "모선 (Bus)";
+      typeIcon = Icons.horizontal_rule;
+    } else if (e.type == Tool.generator) {
+      typeColor = e.isSlack ? Colors.redAccent : Colors.green;
+      typeName = e.isSlack ? "슬랙 발전기 (Swing)" : "PV 발전기 (전압 제어)";
+      typeIcon = Icons.motion_photos_on;
+    } else if (e.type == Tool.load) {
+      typeColor = Colors.orange;
+      typeName = "PQ 부하 (Load)";
+      typeIcon = Icons.arrow_downward;
+    } else if (e.type == Tool.transformer) {
+      typeColor = Colors.purple;
+      typeName = "변압기 (Transformer)";
+      typeIcon = Icons.crop_square;
+    } else if (e.type == Tool.line) {
+      typeColor = Colors.teal;
+      typeName = "송전 선로 (AC Line)";
+      typeIcon = Icons.polyline;
+    } else if (e.type == Tool.text) {
+      typeColor = Colors.indigo;
+      typeName = "텍스트 라벨";
+      typeIcon = Icons.text_fields;
+    }
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 16,
+                backgroundColor: typeColor.withOpacity(0.15),
+                child: Icon(typeIcon, size: 18, color: typeColor),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Text(
+                      typeName,
+                      style: TextStyle(fontSize: 11, color: typeColor, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close, size: 20),
+                tooltip: "선택 해제 (Esc)",
+                onPressed: widget.onClose,
+              ),
+            ],
+          ),
+          const Divider(height: 20),
+
+          SwitchListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: const Text("도면 위에 값 표시", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+            value: e.showInfo,
+            activeColor: Colors.blueAccent,
+            onChanged: (v) {
+              e.showInfo = v;
+              widget.onStateChanged();
+            },
+          ),
+
+          if (hasPowerFields) ...[
+            const SizedBox(height: 6),
+            const Text("전력 표시/입력 단위", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.blueGrey)),
+            const SizedBox(height: 4),
+            _buildUnitToggle(),
+            const SizedBox(height: 10),
+          ],
+
+          // Bus Fields
+          if (e.type == Tool.bus) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6.0),
+              child: TextField(
+                controller: labelCtrl,
+                decoration: InputDecoration(
+                  labelText: "버스 번호 / 라벨",
+                  helperText: "예: 1, 2, 3...",
+                  isDense: true,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onChanged: (text) {
+                  e.label = text;
+                  widget.onBusRenamed(e);
+                  widget.onStateChanged();
+                },
+              ),
+            ),
+            SwitchListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text("슬랙 모선 (Slack/Swing)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+              subtitle: Text(
+                e.isSlack ? "기준 모선 (위상 θ=0° 고정)" : "일반 모선",
+                style: const TextStyle(fontSize: 10),
+              ),
+              value: e.isSlack,
+              activeColor: Colors.redAccent,
+              onChanged: (v) {
+                if (v) {
+                  for (var b in widget.elements.where((el) => el.type == Tool.bus)) {
+                    b.isSlack = false;
+                  }
+                }
+                e.isSlack = v;
+                widget.onStateChanged();
+              },
+            ),
+            _buildNumberField(
+              label: "전압 크기 V",
+              unit: "pu",
+              controller: vCtrl,
+              helperText: "기준 공칭 전압 대비 비율 (기본 1.0)",
+              onChanged: (val) => e.vPu = val,
+            ),
+            _buildNumberField(
+              label: "기준 위상각 θ",
+              unit: "deg",
+              controller: thetaCtrl,
+              helperText: "기준 모선은 통상 0.0°",
+              onChanged: (val) => e.thetaDeg = val,
+            ),
+          ],
+
+          // Generator Fields
+          if (e.type == Tool.generator) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6.0),
+              child: TextField(
+                controller: labelCtrl,
+                decoration: InputDecoration(
+                  labelText: "발전기 라벨 (식별자)",
+                  isDense: true,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onChanged: (text) {
+                  e.label = text;
+                  widget.onStateChanged();
+                },
+              ),
+            ),
+            SwitchListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text("슬랙 모선 발전기 (Slack/Swing)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+              subtitle: Text(
+                e.isSlack ? "기준 모선 (위상 θ=0°, 손실 자동분담)" : "PV 발전기 (유효전력 P, 전압 V 지정)",
+                style: const TextStyle(fontSize: 10),
+              ),
+              value: e.isSlack,
+              activeColor: Colors.redAccent,
+              onChanged: (v) {
+                if (v) {
+                  for (var g in widget.elements.where((el) => el.type == Tool.generator)) {
+                    g.isSlack = false;
+                  }
+                }
+                e.isSlack = v;
+                widget.onStateChanged();
+              },
+            ),
+            _buildNumberField(
+              label: "목표 단자 전압 V",
+              unit: "pu",
+              controller: vCtrl,
+              helperText: "발전기가 유지할 전압 (예: 1.04)",
+              onChanged: (val) => e.vPu = val,
+            ),
+            _buildNumberField(
+              label: e.isSlack ? "초기 유효 발전량 P (슬랙 분담)" : "유효 발전 출력 P",
+              unit: useMw ? "MW" : "pu",
+              controller: pCtrl,
+              helperText: useMw ? "(= ${e.pPu.toStringAsFixed(3)} pu)" : "(= ${(e.pPu * widget.sBase).toStringAsFixed(1)} MW)",
+              onChanged: (val) => e.pPu = useMw ? (val / widget.sBase) : val,
+            ),
+            _buildNumberField(
+              label: "무효 발전 출력 Q",
+              unit: useMw ? "MVAR" : "pu",
+              controller: qCtrl,
+              helperText: useMw ? "(= ${e.qPu.toStringAsFixed(3)} pu)" : "(= ${(e.qPu * widget.sBase).toStringAsFixed(1)} MVAR)",
+              onChanged: (val) => e.qPu = useMw ? (val / widget.sBase) : val,
+            ),
+            if (e.isSlack)
+              _buildNumberField(
+                label: "기준 위상각 θ",
+                unit: "deg",
+                controller: thetaCtrl,
+                helperText: "슬랙 모선 기준각 (기본 0°)",
+                onChanged: (val) => e.thetaDeg = val,
+              ),
+          ],
+
+          // Load Fields
+          if (e.type == Tool.load) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6.0),
+              child: TextField(
+                controller: labelCtrl,
+                decoration: InputDecoration(
+                  labelText: "부하 라벨 (식별자)",
+                  isDense: true,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onChanged: (text) {
+                  e.label = text;
+                  widget.onStateChanged();
+                },
+              ),
+            ),
+            _buildNumberField(
+              label: "소비 유효전력 P",
+              unit: useMw ? "MW" : "pu",
+              controller: pCtrl,
+              helperText: useMw ? "(= ${e.pPu.toStringAsFixed(3)} pu)" : "(= ${(e.pPu * widget.sBase).toStringAsFixed(1)} MW)",
+              onChanged: (val) => e.pPu = useMw ? (val / widget.sBase) : val,
+            ),
+            _buildNumberField(
+              label: "소비 무효전력 Q",
+              unit: useMw ? "MVAR" : "pu",
+              controller: qCtrl,
+              helperText: useMw ? "(= ${e.qPu.toStringAsFixed(3)} pu)" : "(= ${(e.qPu * widget.sBase).toStringAsFixed(1)} MVAR)",
+              onChanged: (val) => e.qPu = useMw ? (val / widget.sBase) : val,
+            ),
+          ],
+
+          // Line Fields
+          if (e.type == Tool.line) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6.0),
+              child: TextField(
+                controller: labelCtrl,
+                decoration: InputDecoration(
+                  labelText: "선로 라벨 (식별자)",
+                  isDense: true,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onChanged: (text) {
+                  e.label = text;
+                  widget.onStateChanged();
+                },
+              ),
+            ),
+            _buildNumberField(
+              label: "선로 저항 R",
+              unit: "pu",
+              controller: rCtrl,
+              helperText: "선로 직렬 저항 (예: 0.02)",
+              onChanged: (val) => e.rPu = val,
+            ),
+            _buildNumberField(
+              label: "선로 리액턴스 X",
+              unit: "pu",
+              controller: xCtrl,
+              helperText: "선로 직렬 유도 리액턴스 (예: 0.04)",
+              onChanged: (val) => e.xPu = val,
+            ),
+            _buildNumberField(
+              label: "대지 충전 서셉턴스 B",
+              unit: "pu",
+              controller: bCtrl,
+              helperText: "장거리 선로 커패시턴스 (보통 0.0)",
+              onChanged: (val) => e.bPu = val,
+            ),
+            _buildNumberField(
+              label: "변압기 탭비 Tap",
+              unit: "pu",
+              controller: tapCtrl,
+              helperText: "일반 선로는 1.0 (변압기 결합 시 탭비)",
+              onChanged: (val) => e.tapRatio = val,
+            ),
+          ],
+
+          // Transformer Fields
+          if (e.type == Tool.transformer) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6.0),
+              child: TextField(
+                controller: labelCtrl,
+                decoration: InputDecoration(
+                  labelText: "변압기 라벨 (식별자)",
+                  isDense: true,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onChanged: (text) {
+                  e.label = text;
+                  widget.onStateChanged();
+                },
+              ),
+            ),
+            _buildNumberField(
+              label: "권선비 / 탭비 Tap",
+              unit: "pu",
+              controller: tapCtrl,
+              helperText: "1.00 = 100%, 1.03 = 103%",
+              onChanged: (val) => e.tapRatio = val,
+            ),
+            _buildNumberField(
+              label: "누설 리액턴스 X",
+              unit: "pu",
+              controller: xCtrl,
+              helperText: "변압기 주 리액턴스 (예: 0.025 또는 0.0839)",
+              onChanged: (val) => e.xPu = val,
+            ),
+            _buildNumberField(
+              label: "권선 저항 R",
+              unit: "pu",
+              controller: rCtrl,
+              helperText: "권선 손실 저항 (보통 0.0125 또는 0.0)",
+              onChanged: (val) => e.rPu = val,
+            ),
+            _buildNumberField(
+              label: "여자 서셉턴스 B",
+              unit: "pu",
+              controller: bCtrl,
+              helperText: "보통 0.0",
+              onChanged: (val) => e.bPu = val,
+            ),
+          ],
+
+          // Text Fields
+          if (e.type == Tool.text) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6.0),
+              child: TextField(
+                controller: labelCtrl,
+                decoration: InputDecoration(
+                  labelText: "라벨 텍스트 내용",
+                  isDense: true,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onChanged: (text) {
+                  e.label = text;
+                  widget.onStateChanged();
+                },
+              ),
+            ),
+          ],
+
+          const SizedBox(height: 24),
+          const Divider(),
+          const SizedBox(height: 8),
+
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red.shade600,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              icon: const Icon(Icons.delete_outline, size: 18),
+              label: const Text("선택 요소 삭제 (Delete)", style: TextStyle(fontWeight: FontWeight.bold)),
+              onPressed: widget.onDeleteSelected,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUnitToggle() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 3),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.grey.shade300),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: InkWell(
+              onTap: () {
+                if (!useMw) {
+                  setState(() {
+                    useMw = true;
+                    _updateControllers();
+                  });
+                }
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: useMw ? Colors.blue.shade700 : Colors.transparent,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  "MW / MVAR",
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: useMw ? Colors.white : Colors.blueGrey.shade800,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: InkWell(
+              onTap: () {
+                if (useMw) {
+                  setState(() {
+                    useMw = false;
+                    _updateControllers();
+                  });
+                }
+              },
+              child: Container(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: !useMw ? Colors.blue.shade700 : Colors.transparent,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  "pu (Per Unit)",
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: !useMw ? Colors.white : Colors.blueGrey.shade800,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNumberField({
+    required String label,
+    required TextEditingController controller,
+    String? helperText,
+    String? unit,
+    required Function(double) onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6.0),
+      child: TextField(
+        controller: controller,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+        decoration: InputDecoration(
+          labelText: label,
+          labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          helperText: helperText,
+          helperStyle: const TextStyle(fontSize: 10, color: Colors.blueGrey),
+          suffixText: unit,
+          suffixStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.blueGrey),
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: Colors.grey.shade300),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(8),
+            borderSide: BorderSide(color: Colors.blue.shade700, width: 1.5),
+          ),
+        ),
+        onChanged: (text) {
+          final val = double.tryParse(text);
+          if (val != null) {
+            onChanged(val);
+            widget.onStateChanged();
+          }
+        },
+      ),
+    );
+  }
+}
+
