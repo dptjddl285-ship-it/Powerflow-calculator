@@ -105,7 +105,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
   String? pendingStartId; Offset? pendingStartAnchor; DrawingElement? snapTarget; 
 
   Map<String, dynamic>? lastSimulationResult;
-  bool showResultOverlay = true;
+  bool showResultOverlay = false;
   bool isInspectorOpen = true;
   bool isSimulating = false;
   bool isMiniMapVisible = true;
@@ -542,7 +542,6 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         if (result['data'] != null && (result['status'] == 'success' || result['status'] == 'warning')) {
           setState(() {
             lastSimulationResult = result['data'];
-            showResultOverlay = true;
           });
 
           if (result['status'] == 'warning') {
@@ -562,7 +561,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        "조류계산 수렴 완료 (${result['data']['iterations']}회 반복) · 도면에 결과가 반영되었습니다.",
+                        "조류계산 수렴 완료 (${result['data']['iterations']}회 반복) · 수치 표 또는 요소를 클릭해 확인하세요.",
                         style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
                     ),
@@ -1721,6 +1720,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                   child: InspectorPanel(
                     selectedElement: selectedElement,
                     elements: elements,
+                    simulationResult: lastSimulationResult,
                     sBase: 100.0,
                     onStateChanged: () {
                       _saveState();
@@ -1747,30 +1747,34 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     return AppBar(
       elevation: 0.5,
       backgroundColor: const Color(0xFF070A12),
-      title: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            padding: const EdgeInsets.all(5),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF2563EB), Color(0xFF1D4ED8)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
+      title: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerLeft,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(5),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF2563EB), Color(0xFF1D4ED8)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(8),
+                boxShadow: [
+                  BoxShadow(color: const Color(0xFF38BDF8).withOpacity(0.3), blurRadius: 6),
+                ],
               ),
-              borderRadius: BorderRadius.circular(8),
-              boxShadow: [
-                BoxShadow(color: const Color(0xFF38BDF8).withOpacity(0.3), blurRadius: 6),
-              ],
+              child: const Icon(Icons.bolt, color: Colors.amberAccent, size: 18),
             ),
-            child: const Icon(Icons.bolt, color: Colors.amberAccent, size: 18),
-          ),
-          const SizedBox(width: 8),
-          const Text(
-            "PowerLens Pro",
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16, letterSpacing: -0.3),
-          ),
-        ],
+            const SizedBox(width: 8),
+            const Text(
+              "PowerLens Pro",
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16, letterSpacing: -0.3),
+            ),
+          ],
+        ),
       ),
       actions: [
         Container(
@@ -3423,6 +3427,7 @@ class MiniMapPainter extends CustomPainter {
 class InspectorPanel extends StatefulWidget {
   final DrawingElement? selectedElement;
   final List<DrawingElement> elements;
+  final Map<String, dynamic>? simulationResult;
   final double sBase;
   final VoidCallback onStateChanged;
   final VoidCallback onDeleteSelected;
@@ -3434,6 +3439,7 @@ class InspectorPanel extends StatefulWidget {
     super.key,
     required this.selectedElement,
     required this.elements,
+    this.simulationResult,
     this.sBase = 100.0,
     required this.onStateChanged,
     required this.onDeleteSelected,
@@ -3776,6 +3782,8 @@ class _InspectorPanelState extends State<InspectorPanel> {
             ],
           ),
           const Divider(height: 20, color: Color(0xFF334155)),
+
+          _buildSimulationResultBox(e),
 
           SwitchListTile(
             dense: true,
@@ -4182,6 +4190,138 @@ class _InspectorPanelState extends State<InspectorPanel> {
             widget.onStateChanged();
           }
         },
+      ),
+    );
+  }
+
+  Widget _buildSimulationResultBox(DrawingElement e) {
+    if (widget.simulationResult == null) return const SizedBox.shrink();
+
+    final busResults = widget.simulationResult!['bus_results'] as List<dynamic>? ?? [];
+    final lineResults = widget.simulationResult!['line_results'] as List<dynamic>? ?? [];
+
+    String getBusNum(String text) {
+      final RegExp digitRegExp = RegExp(r'\d+');
+      final match = digitRegExp.firstMatch(text);
+      return match != null ? match.group(0)! : text;
+    }
+
+    if (e.type == Tool.bus) {
+      final busNum = getBusNum(e.label.isNotEmpty ? e.label : e.id);
+      final bRes = busResults.firstWhere(
+        (b) => b['bus'].toString() == busNum,
+        orElse: () => null,
+      );
+      if (bRes == null) return const SizedBox.shrink();
+
+      final double v = (bRes['volt'] as num?)?.toDouble() ?? 1.0;
+      final double ang = (bRes['angle'] as num?)?.toDouble() ?? 0.0;
+      final double pgen = (bRes['pgen'] as num?)?.toDouble() ?? 0.0;
+      final double qgen = (bRes['qgen'] as num?)?.toDouble() ?? 0.0;
+      final double pload = (bRes['pload'] as num?)?.toDouble() ?? 0.0;
+      final double qload = (bRes['qload'] as num?)?.toDouble() ?? 0.0;
+      final bool isNormalVolt = (v >= 0.95 && v <= 1.05);
+
+      return Container(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E293B),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: isNormalVolt ? const Color(0xFF10B981) : const Color(0xFFF59E0B), width: 1.2),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.bolt, size: 16, color: isNormalVolt ? const Color(0xFF10B981) : const Color(0xFFF59E0B)),
+                const SizedBox(width: 6),
+                const Text("조류계산 해석 결과", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
+                const Spacer(),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: (isNormalVolt ? const Color(0xFF10B981) : const Color(0xFFF59E0B)).withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    isNormalVolt ? "정상 전압" : "주의 전압",
+                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: isNormalVolt ? const Color(0xFF10B981) : const Color(0xFFF59E0B)),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            _resRow("모선 전압 크기 (V)", "${v.toStringAsFixed(4)} pu  (${(v * 100).toStringAsFixed(1)}%)"),
+            _resRow("전압 위상각 (θ)", "${ang >= 0 ? '+' : ''}${ang.toStringAsFixed(2)}°"),
+            if (pgen.abs() > 0.01 || qgen.abs() > 0.01)
+              _resRow("발전 전력 (P / Q)", "${pgen.toStringAsFixed(1)} MW / ${qgen.toStringAsFixed(1)} MVAR"),
+            if (pload.abs() > 0.01 || qload.abs() > 0.01)
+              _resRow("부하 소비 (P / Q)", "${pload.toStringAsFixed(1)} MW / ${qload.toStringAsFixed(1)} MVAR"),
+          ],
+        ),
+      );
+    } else if (e.type == Tool.line) {
+      DrawingElement? startEl;
+      DrawingElement? endEl;
+      try { startEl = widget.elements.firstWhere((el) => el.id == e.startElementId); } catch (_) {}
+      try { endEl = widget.elements.firstWhere((el) => el.id == e.endElementId); } catch (_) {}
+      if (startEl == null || endEl == null) return const SizedBox.shrink();
+
+      final fb = getBusNum(startEl.label.isNotEmpty ? startEl.label : startEl.id);
+      final tb = getBusNum(endEl.label.isNotEmpty ? endEl.label : endEl.id);
+      final lRes = lineResults.firstWhere(
+        (l) => (l['from_bus'].toString() == fb && l['to_bus'].toString() == tb) ||
+               (l['from_bus'].toString() == tb && l['to_bus'].toString() == fb),
+        orElse: () => null,
+      );
+      if (lRes == null) return const SizedBox.shrink();
+
+      final double pFrom = (lRes['p_from_mw'] as num?)?.toDouble() ?? 0.0;
+      final double lossP = (lRes['loss_p_mw'] as num?)?.toDouble() ?? 0.0;
+      final double qFrom = (lRes['q_from_mvar'] as num?)?.toDouble() ?? 0.0;
+      final double lossQ = (lRes['loss_q_mvar'] as num?)?.toDouble() ?? 0.0;
+
+      return Container(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E293B),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFF38BDF8), width: 1.2),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.timeline, size: 16, color: Color(0xFF38BDF8)),
+                SizedBox(width: 6),
+                Text("선로 조류 및 손실 결과", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
+              ],
+            ),
+            const SizedBox(height: 8),
+            _resRow("유효 조류 (P)", "${pFrom.abs().toStringAsFixed(1)} MW"),
+            _resRow("무효 조류 (Q)", "${qFrom.abs().toStringAsFixed(1)} MVAR"),
+            _resRow("선로 손실 (P loss)", "${lossP.toStringAsFixed(2)} MW"),
+            _resRow("무효 손실 (Q loss)", "${lossQ.toStringAsFixed(2)} MVAR"),
+          ],
+        ),
+      );
+    }
+    return const SizedBox.shrink();
+  }
+
+  Widget _resRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2.5),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8))),
+          Text(value, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
+        ],
       ),
     );
   }
