@@ -77,7 +77,9 @@ PowerLens는 표준 전력계통 해석용 엑셀 파일(.xlsx)의 입력과 계
 ---
 
 ## 3. 📁 제공 샘플 파일 목록
-1. **c_case25.xlsx**: 25모선 표준 계통 입력 엑셀
-2. **sample_case3.xlsx**: 3모선 축약 계통 입력 엑셀
-3. **power_flow_result_case25.xlsx**: 25모선 조류계산 정답 결과 엑셀
-4. **power_flow_result_case3.xlsx**: 3모선 조류계산 정답 결과 엑셀
+1. **`ac_case25.xlsx`**: 25모선 표준 계통 입력 엑셀
+2. **`sample_case3.xlsx`**: 3모선 표준 계통 입력 엑셀
+3. **`user_case3.xlsx`**: 사용자 지정 3모선 계통 입력 엑셀 (1번 슬랙 1.05pu, 2번 부하 400MW/250Mvar, 3번 발전 200MW/1.04pu)
+4. **`power_flow_result_case25.xlsx`**: 25모선 조류계산 정답 결과 엑셀
+5. **`power_flow_result_case3.xlsx`**: 3모선 조류계산 정답 결과 엑셀
+6. **`power_flow_result_user_case3.xlsx`**: 사용자 지정 3모선 조류계산 정답 결과 엑셀
