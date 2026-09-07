@@ -1164,6 +1164,82 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         }
       }
 
+      int? getBusNum(String? id) {
+        if (id == null) return null;
+        if (elIdToBusNum.containsKey(id)) return elIdToBusNum[id];
+        DrawingElement? matchEl;
+        for (final e in elements) {
+          if (e.id == id) {
+            matchEl = e;
+            break;
+          }
+        }
+        if (matchEl != null) {
+          if (matchEl.type == Tool.bus) {
+            String digits = matchEl.label.replaceAll(RegExp(r'[^0-9]'), '');
+            if (digits.isNotEmpty) return int.tryParse(digits);
+            digits = matchEl.id.split('_').last.replaceAll(RegExp(r'[^0-9]'), '');
+            if (digits.isNotEmpty) return int.tryParse(digits);
+          }
+          return null; // Not a bus!
+        }
+        if (id.startsWith('bus_')) {
+          String digits = id.replaceAll(RegExp(r'[^0-9]'), '');
+          return digits.isNotEmpty ? int.tryParse(digits) : null;
+        }
+        return null;
+      }
+
+      // Pre-resolve Transformers and their connecting lines
+      Map<String, Map<String, dynamic>> transMap = {};
+      Set<String> transformerLeadLineIds = {};
+
+      for (var tr in elements.where((e) => e.type == Tool.transformer)) {
+        List<int> connBuses = [];
+        List<DrawingElement> connLines = [];
+
+        for (var l in elements.where((e) => e.type == Tool.line)) {
+          if (l.startElementId == tr.id || l.endElementId == tr.id) {
+            connLines.add(l);
+            transformerLeadLineIds.add(l.id);
+            String? otherId = (l.startElementId == tr.id) ? l.endElementId : l.startElementId;
+            int? b = getBusNum(otherId);
+            if (b != null && !connBuses.contains(b)) {
+              connBuses.add(b);
+            }
+          }
+        }
+
+        int? fb = connBuses.isNotEmpty ? connBuses[0] : null;
+        int? tb = connBuses.length > 1 ? connBuses[1] : null;
+
+        if (fb == null || tb == null) {
+          final match = RegExp(r'(\d+)\s*[-~_↔]\s*(\d+)').firstMatch(tr.label.isNotEmpty ? tr.label : tr.id);
+          if (match != null) {
+            fb ??= int.tryParse(match.group(1)!);
+            tb ??= int.tryParse(match.group(2)!);
+          }
+        }
+
+        if (fb != null && tb == null) {
+          for (var entry in transformers.entries) {
+            var trData = entry.value;
+            int f = (trData['from_bus'] as num).toInt();
+            int t = (trData['to_bus'] as num).toInt();
+            if (f == fb || t == fb) {
+              tb = (f == fb) ? t : f;
+              break;
+            }
+          }
+        }
+
+        transMap[tr.id] = {
+          'fb': fb,
+          'tb': tb,
+          'connLines': connLines,
+        };
+      }
+
       // 2. Apply parameters to each element
       for (var el in elements) {
         if (el.type == Tool.bus) {
@@ -1230,12 +1306,78 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
             el.label = "Load_$bNum";
             updatedLoads++;
           }
+        } else if (el.type == Tool.transformer) {
+          final tInfo = transMap[el.id];
+          int? fb = tInfo?['fb'];
+          int? tb = tInfo?['tb'];
+          List<DrawingElement> connLines = (tInfo?['connLines'] as List<DrawingElement>?) ?? [];
+
+          if (fb != null && tb != null) {
+            var trInfo = transformers["${fb}_${tb}"] ??
+                         transformers["${tb}_${fb}"] ??
+                         transformers["$fb-$tb"] ??
+                         transformers["$tb-$fb"];
+            var brInfo = branches["${fb}_${tb}"] ??
+                         branches["${tb}_${fb}"] ??
+                         branches["$fb-$tb"] ??
+                         branches["$tb-$fb"];
+
+            double tap = (trInfo?['tap'] as num?)?.toDouble() ?? 1.0;
+            double r = (brInfo?['r_pu'] as num?)?.toDouble() ?? 0.0023;
+            double x = (brInfo?['x_pu'] as num?)?.toDouble() ?? 0.0839;
+            double b = (brInfo?['b_pu'] as num?)?.toDouble() ?? 0.0;
+
+            el.tapRatio = tap;
+            el.rPu = r;
+            el.xPu = x;
+            el.bPu = b;
+            el.label = "T $fb-$tb (Tap: $tap)";
+            updatedTransformers++;
+
+            for (var l in connLines) {
+              l.rPu = r;
+              l.xPu = x;
+              l.bPu = b;
+              l.tapRatio = tap;
+              l.label = "Line $fb-$tb (T: $tap)";
+              updatedLines++;
+            }
+          } else if (fb != null) {
+            for (var entry in transformers.entries) {
+              var tr = entry.value;
+              int f = (tr['from_bus'] as num).toInt();
+              int t = (tr['to_bus'] as num).toInt();
+              if (f == fb || t == fb) {
+                int otherBus = (f == fb) ? t : f;
+                double tap = (tr['tap'] as num?)?.toDouble() ?? 1.0;
+                var brInfo = branches["${fb}_${otherBus}"] ?? branches["${otherBus}_${fb}"];
+                double r = (brInfo?['r_pu'] as num?)?.toDouble() ?? 0.0023;
+                double x = (brInfo?['x_pu'] as num?)?.toDouble() ?? 0.0839;
+                double b = (brInfo?['b_pu'] as num?)?.toDouble() ?? 0.0;
+
+                el.tapRatio = tap;
+                el.rPu = r;
+                el.xPu = x;
+                el.bPu = b;
+                el.label = "T $fb-$otherBus (Tap: $tap)";
+                updatedTransformers++;
+
+                for (var l in connLines) {
+                  l.rPu = r;
+                  l.xPu = x;
+                  l.bPu = b;
+                  l.tapRatio = tap;
+                  l.label = "Line $fb-$otherBus (T: $tap)";
+                  updatedLines++;
+                }
+                break;
+              }
+            }
+          }
         } else if (el.type == Tool.line) {
-          int? getBusNum(String? id) {
-            if (id == null) return null;
-            if (elIdToBusNum.containsKey(id)) return elIdToBusNum[id];
-            String digits = id.replaceAll(RegExp(r'[^0-9]'), '');
-            return digits.isNotEmpty ? int.tryParse(digits) : null;
+          if (transformerLeadLineIds.contains(el.id)) {
+            // Already updated together with its connected transformer above!
+            continue;
           }
           int? fb = getBusNum(el.startElementId);
           int? tb = getBusNum(el.endElementId);
@@ -1277,80 +1419,6 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
               el.tapRatio = (trInfo['tap'] as num?)?.toDouble() ?? 1.0;
               el.label = "Line $fb-$tb (T: ${el.tapRatio})";
               updatedTransformers++;
-            }
-          }
-        } else if (el.type == Tool.transformer) {
-          int? getBusNum(String? id) {
-            if (id == null) return null;
-            if (elIdToBusNum.containsKey(id)) return elIdToBusNum[id];
-            String digits = id.replaceAll(RegExp(r'[^0-9]'), '');
-            return digits.isNotEmpty ? int.tryParse(digits) : null;
-          }
-          int? fb = getBusNum(el.startElementId);
-          int? tb = getBusNum(el.endElementId);
-
-          if (fb == null || tb == null) {
-            List<int> connectedBuses = [];
-            for (var l in elements.where((e) => e.type == Tool.line)) {
-              if (l.startElementId == el.id && l.endElementId != null) {
-                int? b = getBusNum(l.endElementId);
-                if (b != null && !connectedBuses.contains(b)) connectedBuses.add(b);
-              } else if (l.endElementId == el.id && l.startElementId != null) {
-                int? b = getBusNum(l.startElementId);
-                if (b != null && !connectedBuses.contains(b)) connectedBuses.add(b);
-              }
-            }
-            if (connectedBuses.length >= 2) {
-              fb ??= connectedBuses[0];
-              tb ??= connectedBuses[1];
-            } else if (connectedBuses.length == 1) {
-              fb ??= connectedBuses[0];
-            }
-          }
-
-          if (fb == null || tb == null) {
-            final match = RegExp(r'(\d+)\s*[-~_↔]\s*(\d+)').firstMatch(el.label.isNotEmpty ? el.label : el.id);
-            if (match != null) {
-              fb ??= int.tryParse(match.group(1)!);
-              tb ??= int.tryParse(match.group(2)!);
-            }
-          }
-
-          if (fb == null && el.parentBusId != null) {
-            fb = getBusNum(el.parentBusId);
-          }
-
-          if (fb != null && tb != null) {
-            var trInfo = transformers["${fb}_${tb}"] ?? transformers["${tb}_${fb}"];
-            if (trInfo != null) {
-              el.tapRatio = (trInfo['tap'] as num?)?.toDouble() ?? 1.0;
-            }
-            var brInfo = branches["${fb}_${tb}"] ?? branches["${tb}_${fb}"];
-            if (brInfo != null) {
-              el.rPu = (brInfo['r_pu'] as num?)?.toDouble() ?? 0.0023;
-              el.xPu = (brInfo['x_pu'] as num?)?.toDouble() ?? 0.0839;
-              el.bPu = (brInfo['b_pu'] as num?)?.toDouble() ?? 0.0;
-            }
-            el.label = "T $fb-$tb (Tap: ${el.tapRatio})";
-            updatedTransformers++;
-          } else if (fb != null) {
-            for (var entry in transformers.entries) {
-              var tr = entry.value;
-              int f = (tr['from_bus'] as num).toInt();
-              int t = (tr['to_bus'] as num).toInt();
-              if (f == fb || t == fb) {
-                int otherBus = (f == fb) ? t : f;
-                el.tapRatio = (tr['tap'] as num?)?.toDouble() ?? 1.0;
-                var brInfo = branches["${fb}_${otherBus}"] ?? branches["${otherBus}_${fb}"];
-                if (brInfo != null) {
-                  el.rPu = (brInfo['r_pu'] as num?)?.toDouble() ?? 0.0023;
-                  el.xPu = (brInfo['x_pu'] as num?)?.toDouble() ?? 0.0839;
-                  el.bPu = (brInfo['b_pu'] as num?)?.toDouble() ?? 0.0;
-                }
-                el.label = "T $fb-$otherBus (Tap: ${el.tapRatio})";
-                updatedTransformers++;
-                break;
-              }
             }
           }
         }

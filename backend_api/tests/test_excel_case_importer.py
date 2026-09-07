@@ -12,7 +12,11 @@ class TestExcelCaseImporter(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.importer = ExcelCaseImporter()
-        cls.excel_path = r"C:\Users\dptjd\Downloads\84_240909111503033 (3)\ac_case25 - 복사본.xlsx"
+        sample_excel = os.path.join(backend_dir, 'sample_cases', 'ac_case25.xlsx')
+        if os.path.exists(sample_excel):
+            cls.excel_path = sample_excel
+        else:
+            cls.excel_path = r"C:\Users\dptjd\Downloads\84_240909111503033 (3)\ac_case25 - 복사본.xlsx"
 
     def test_parse_ac_case25_excel(self):
         if not os.path.exists(self.excel_path):
@@ -69,6 +73,42 @@ class TestExcelCaseImporter(unittest.TestCase):
         # Load 13 should have Pload
         load13_el = next(e for e in updated if e['id'] == 'load_13')
         self.assertAlmostEqual(load13_el['pPu'], 2.65)
+
+    def test_apply_to_transformer_leads(self):
+        if not os.path.exists(self.excel_path):
+            self.skipTest(f"Excel file not found at {self.excel_path}")
+
+        data = self.importer.parse_excel(self.excel_path)
+        # Diagram with Bus 3 and Bus 24 connected through a transformer node and 2 lead lines
+        dummy_elements = [
+            {'id': 'bus_3', 'type': 'bus', 'label': 'Bus 3', 'bus_number': 3},
+            {'id': 'bus_24', 'type': 'bus', 'label': 'Bus 24', 'bus_number': 24},
+            {'id': 'transformer_43', 'type': 'transformer', 'label': 'transformer_43'},
+            {'id': 'L1', 'type': 'line', 'startElementId': 'bus_3', 'endElementId': 'transformer_43'},
+            {'id': 'L18', 'type': 'line', 'startElementId': 'transformer_43', 'endElementId': 'bus_24'},
+        ]
+
+        updated, summary = self.importer.apply_to_elements(dummy_elements, data)
+        self.assertEqual(summary['applied_counts']['transformer'], 1)
+        self.assertEqual(summary['applied_counts']['line'], 2)
+
+        trans_el = next(e for e in updated if e['id'] == 'transformer_43')
+        self.assertAlmostEqual(trans_el['tapRatio'], 1.03)
+        self.assertAlmostEqual(trans_el['rPu'], 0.0023)
+        self.assertAlmostEqual(trans_el['xPu'], 0.0839)
+        self.assertIn('3-24', trans_el['label'])
+
+        line1 = next(e for e in updated if e['id'] == 'L1')
+        self.assertAlmostEqual(line1['tapRatio'], 1.03)
+        self.assertAlmostEqual(line1['rPu'], 0.0023)
+        self.assertAlmostEqual(line1['xPu'], 0.0839)
+        self.assertIn('3-24', line1['label'])
+
+        line2 = next(e for e in updated if e['id'] == 'L18')
+        self.assertAlmostEqual(line2['tapRatio'], 1.03)
+        self.assertAlmostEqual(line2['rPu'], 0.0023)
+        self.assertAlmostEqual(line2['xPu'], 0.0839)
+        self.assertIn('3-24', line2['label'])
 
 if __name__ == '__main__':
     unittest.main()

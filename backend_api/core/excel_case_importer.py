@@ -216,11 +216,56 @@ class ExcelCaseImporter:
                 if b_num is not None:
                     el_id_to_bus_num[el['id']] = b_num
 
+        # Pre-resolve Transformers and their connecting lines
+        trans_branch_map = {}
+        trans_lead_line_ids = set()
+
+        for tr in elements:
+            tr_type = str(tr.get('type', '')).lower()
+            if 'trans' in tr_type:
+                t_id = tr.get('id')
+                conn_buses = []
+                conn_lines = []
+
+                for l in elements:
+                    if 'line' in str(l.get('type', '')).lower():
+                        s_id = l.get('startElementId')
+                        e_id = l.get('endElementId')
+                        if s_id == t_id or e_id == t_id:
+                            conn_lines.append(l)
+                            trans_lead_line_ids.add(l.get('id'))
+                            other_id = e_id if s_id == t_id else s_id
+                            b = el_id_to_bus_num.get(other_id)
+                            if b is not None and b not in conn_buses:
+                                conn_buses.append(b)
+
+                fb = conn_buses[0] if len(conn_buses) > 0 else None
+                tb = conn_buses[1] if len(conn_buses) > 1 else None
+
+                if fb is None or tb is None:
+                    import re
+                    m = re.search(r'(\d+)\s*[-~_↔]\s*(\d+)', str(tr.get('label') or tr.get('id') or ''))
+                    if m:
+                        fb = fb or int(m.group(1))
+                        tb = tb or int(m.group(2))
+
+                if fb is not None and tb is None:
+                    for k, v in trans_dict.items():
+                        if v.get('from_bus') == fb or v.get('to_bus') == fb:
+                            tb = v.get('to_bus') if v.get('from_bus') == fb else v.get('from_bus')
+                            break
+
+                trans_branch_map[t_id] = {
+                    'fb': fb,
+                    'tb': tb,
+                    'conn_lines': conn_lines,
+                }
+
         for el in elements:
             el_type = str(el.get('type', '')).lower()
             
             # 1. Bus
-            if 'bus' in el_type and not ('gen' in el_type or 'load' in el_type):
+            if 'bus' in el_type and not ('gen' in el_type or 'load' in el_type or 'trans' in el_type):
                 b_num = el_id_to_bus_num.get(el['id'])
                 b_info = bus_dict.get(str(b_num)) or bus_dict.get(b_num)
                 if b_info:
@@ -258,8 +303,48 @@ class ExcelCaseImporter:
                     el['label'] = f"Load_{b_num}"
                     applied_counts['load'] += 1
 
-            # 4. Line
+            # 4. Transformer
+            elif 'trans' in el_type:
+                t_id = el.get('id')
+                t_branch = trans_branch_map.get(t_id, {})
+                fb = t_branch.get('fb')
+                tb = t_branch.get('tb')
+                conn_lines = t_branch.get('conn_lines', [])
+
+                tr_info = trans_dict.get(f"{fb}_{tb}") or trans_dict.get(f"{tb}_{fb}") or trans_dict.get((fb, tb))
+                br_info = branch_dict.get(f"{fb}_{tb}") or branch_dict.get(f"{tb}_{fb}") or branch_dict.get((fb, tb))
+
+                tap = tr_info['tap'] if tr_info else 1.0
+                r_val = br_info['r_pu'] if br_info else 0.0023
+                x_val = br_info['x_pu'] if br_info else 0.0839
+                b_val = br_info.get('b_pu', 0.0) if br_info else 0.0
+
+                el['tapRatio'] = tap
+                el['tap'] = tap
+                el['rPu'] = r_val
+                el['xPu'] = x_val
+                el['bPu'] = b_val
+                if fb is not None and tb is not None:
+                    el['label'] = f"T {fb}-{tb} (Tap: {tap})"
+                applied_counts['transformer'] += 1
+
+                # Apply to all connecting lines of this transformer
+                for l in conn_lines:
+                    l['rPu'] = r_val
+                    l['xPu'] = x_val
+                    l['bPu'] = b_val
+                    l['tapRatio'] = tap
+                    l['tap'] = tap
+                    if fb is not None and tb is not None:
+                        l['label'] = f"Line {fb}-{tb} (T: {tap})"
+                    applied_counts['line'] += 1
+
+            # 5. Normal Line (not connected to a transformer)
             elif 'line' in el_type:
+                if el.get('id') in trans_lead_line_ids:
+                    # Already updated via its transformer
+                    continue
+
                 start_id = el.get('startElementId')
                 end_id = el.get('endElementId')
                 fb = el_id_to_bus_num.get(start_id)
@@ -283,40 +368,8 @@ class ExcelCaseImporter:
                     el['tapRatio'] = tr_info['tap']
                     el['tap'] = tr_info['tap']
                     applied_counts['transformer'] += 1
-
-            # 5. Transformer
-            elif 'trans' in el_type:
-                start_id = el.get('startElementId')
-                end_id = el.get('endElementId')
-                fb = el_id_to_bus_num.get(start_id)
-                tb = el_id_to_bus_num.get(end_id)
-                if fb is None or tb is None:
-                    import re
-                    m = re.search(r'(\d+)\s*[-~_↔]\s*(\d+)', str(el.get('label') or el.get('id') or ''))
-                    if m:
-                        fb, tb = int(m.group(1)), int(m.group(2))
-
-                if fb is None and el.get('parentBusId'):
-                    fb = el_id_to_bus_num.get(el.get('parentBusId'))
-
-                tr_info = trans_dict.get(f"{fb}_{tb}") or trans_dict.get(f"{tb}_{fb}") or trans_dict.get((fb, tb))
-                if not tr_info and fb is not None:
-                    for k, v in trans_dict.items():
-                        if v.get('from_bus') == fb or v.get('to_bus') == fb:
-                            tr_info = v
-                            tb = v.get('to_bus') if v.get('from_bus') == fb else v.get('from_bus')
-                            break
-
-                if tr_info:
-                    el['tapRatio'] = tr_info['tap']
-                    el['tap'] = tr_info['tap']
-                    applied_counts['transformer'] += 1
-
-                br_info = branch_dict.get(f"{fb}_{tb}") or branch_dict.get(f"{tb}_{fb}") or branch_dict.get((fb, tb))
-                if br_info:
-                    el['rPu'] = br_info['r_pu']
-                    el['xPu'] = br_info['x_pu']
-                    el['bPu'] = br_info.get('b_pu', 0.0)
+                elif 'tapRatio' not in el:
+                    el['tapRatio'] = 1.0
 
         summary = {
             'slack_bus_number': slack_bus_no,

@@ -165,12 +165,24 @@ class PowerFlowSolver:
                         })
 
         # 3. Third pass: Collect Branches (Lines and Transformers)
+        transformer_ids = {
+            str(el.get("id", ""))
+            for el in elements
+            if "trans" in str(el.get("type", "")).lower()
+        }
+
         for el in elements:
             el_type = str(el.get("type", "")).lower()
             if "line" in el_type or "trans" in el_type:
                 start_id = str(el.get("startElementId") or el.get("start_element_id") or "")
                 end_id = str(el.get("endElementId") or el.get("end_element_id") or "")
                 label = str(el.get("label", ""))
+
+                # If this line is a connection lead directly wired to a transformer node,
+                # skip adding it as a redundant branch; the transformer node itself represents the branch.
+                if "line" in el_type and not ("trans" in el_type):
+                    if start_id in transformer_ids or end_id in transformer_ids:
+                        continue
 
                 fb = None
                 tb = None
