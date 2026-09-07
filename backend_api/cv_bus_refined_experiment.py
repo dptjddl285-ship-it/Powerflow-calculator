@@ -139,6 +139,8 @@ def collect_bars(
             bar.reason = "rejected: page-spanning candidate"
         elif short_side < thin_line_width * 1.6:
             bar.reason = "rejected: thin device lead / line"
+        elif long_side < max(48.0, thin_line_width * 7.0):
+            bar.reason = "rejected: too short to be electrical bus"
         elif long_side / max(short_side, 1) < 2.5:
             bar.reason = "rejected: not bar-shaped"
         elif touches_device_lead(binary, bar, thin_line_width):

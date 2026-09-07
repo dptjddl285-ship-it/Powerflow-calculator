@@ -491,6 +491,13 @@ def _same_bus_bar(first, second):
     first_horizontal = first_w >= first_h
     second_horizontal = second_w >= second_h
     if first_horizontal != second_horizontal:
+        first_major = max(first_w, first_h)
+        second_major = max(second_w, second_h)
+        if first_major >= second_major * 2.0 or second_major >= first_major * 2.0:
+            maj_x, maj_y, maj_w, maj_h = (first_x, first_y, first_w, first_h) if first_major > second_major else (second_x, second_y, second_w, second_h)
+            min_x, min_y, min_w, min_h = (second_x, second_y, second_w, second_h) if first_major > second_major else (first_x, first_y, first_w, first_h)
+            if abs(min_x - maj_x) <= maj_w / 2.0 + 4.0 and abs(min_y - maj_y) <= maj_h / 2.0 + 4.0:
+                return True
         return False
 
     if first_horizontal:
@@ -710,8 +717,11 @@ def _secondary_bus_family_indices(records, primary_thickness):
         endpoint_ports = int(signature["endpoint_ports"])
         thickness_ratio = float(signature["thickness_ratio"])
         relative_thickness = thickness_ratio / max(float(primary_thickness), 1e-6)
+        bus_item = record.get("bus", {})
+        bar_len = max(float(bus_item.get("w", 50.0)), float(bus_item.get("h", 50.0)))
         if (
-            perpendicular_ports < 2
+            bar_len < 25.0
+            or perpendicular_ports < 2
             or perpendicular_ports + endpoint_ports < 3
             or thickness_ratio < 1.05
             or relative_thickness > 0.68
