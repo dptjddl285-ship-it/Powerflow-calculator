@@ -88,6 +88,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   bool _isFinalVerified = false;
   List<Map<String, dynamic>> _topologyIssues = [];
+  Map<String, dynamic>? _selectedTopologyIssue;
 
   // Chatbot State
   final TextEditingController _chatInputController = TextEditingController();
@@ -1867,6 +1868,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                         _manualLineStartNode == null) {
                                       _manualLineStartNode = node;
                                     }
+                                    if (_currentPhase == ReviewPhase.connectionReview) {
+                                      final matchedIssue = _topologyIssues.firstWhere(
+                                        (i) => (i['component_ids'] as List? ?? [])
+                                            .map((e) => e.toString())
+                                            .contains(node.id),
+                                        orElse: () => {},
+                                      );
+                                      _selectedTopologyIssue =
+                                          matchedIssue.isNotEmpty ? matchedIssue : null;
+                                      _selectedLine = null;
+                                    }
                                   });
                                   if (node.reviewStatus == 'SUSPICIOUS' &&
                                       node.agentExplanation == null) {
@@ -1893,6 +1905,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                 onSelectLine: (line) {
                                   setState(() {
                                     _selectedLine = line;
+                                    if (_currentPhase == ReviewPhase.connectionReview) {
+                                      _selectedNode = null;
+                                      _selectedTopologyIssue = null;
+                                    }
                                     final index = _filteredAndSortedWorkingLines
                                         .indexWhere(
                                           (item) => item.lineId == line.lineId,
@@ -1918,6 +1934,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                 isManualAddLineMode: _isManualAddLineMode,
                                 manualLineStartNode: _manualLineStartNode,
                                 onManualAddLineComplete: _handleManualAddLineComplete,
+                                violationNodeIds: _topologyIssues
+                                    .where((i) => i['severity'] == 'error')
+                                    .expand(
+                                      (i) => (i['component_ids'] as List? ?? [])
+                                          .map((e) => e.toString()),
+                                    )
+                                    .toSet(),
                               ),
                             ),
                             // Floating HUD on Canvas: Direct Label Toggle
@@ -2983,16 +3006,24 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _buildTopologyIssuesSection(),
         const SizedBox(height: 14),
 
-        // 2. Line Selection Chips
+        // 2. Topology Issue Detail & Action Panel (when an issue or violated node is selected)
+        if (_selectedTopologyIssue != null && _selectedNode != null) ...[
+          _buildTopologyIssueDetailPanel(),
+          const SizedBox(height: 14),
+          const Divider(color: Colors.grey, height: 1),
+          const SizedBox(height: 14),
+        ],
+
+        // 3. Line Selection Chips
         _buildLineSelectionChips(),
         const SizedBox(height: 14),
         const Divider(color: Colors.grey, height: 1),
         const SizedBox(height: 14),
 
-        // 3. Selected Line Panel
-        if (_selectedLine == null)
+        // 4. Selected Line Panel
+        if (_selectedLine == null && (_selectedTopologyIssue == null || _selectedNode == null))
           _buildNoSelectionPrompt("선로")
-        else
+        else if (_selectedLine != null)
           _buildSelectedLinePanel(),
       ],
     );
@@ -3057,33 +3088,88 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             const SizedBox(height: 8),
             ..._topologyIssues.map((iss) {
               final isError = iss['severity'] == 'error';
-              return Container(
-                margin: const EdgeInsets.only(bottom: 4),
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: isError
-                      ? Colors.red.withValues(alpha: 0.15)
-                      : Colors.orange.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      isError ? Icons.cancel : Icons.warning,
-                      size: 12,
-                      color: isError ? Colors.redAccent : Colors.orangeAccent,
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        _formatTopologyIssueKo(iss),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 10,
-                        ),
+              final isSelected = _selectedTopologyIssue == iss;
+              return Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () => _onSelectTopologyIssue(iss),
+                  borderRadius: BorderRadius.circular(6),
+                  child: Container(
+                    margin: const EdgeInsets.only(bottom: 6),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+                    decoration: BoxDecoration(
+                      color: isSelected
+                          ? (isError
+                              ? Colors.red.withValues(alpha: 0.35)
+                              : Colors.orange.withValues(alpha: 0.35))
+                          : (isError
+                              ? Colors.red.withValues(alpha: 0.15)
+                              : Colors.orange.withValues(alpha: 0.15)),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                        color: isSelected
+                            ? Colors.yellowAccent
+                            : (isError
+                                ? Colors.redAccent.withValues(alpha: 0.5)
+                                : Colors.orangeAccent.withValues(alpha: 0.5)),
+                        width: isSelected ? 1.8 : 1.0,
                       ),
                     ),
-                  ],
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.only(top: 1),
+                          child: Icon(
+                            isError ? Icons.cancel : Icons.warning,
+                            size: 13,
+                            color: isError ? Colors.redAccent : Colors.orangeAccent,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _formatTopologyIssueKo(iss),
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 10.5,
+                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                ),
+                              ),
+                              const SizedBox(height: 3),
+                              Row(
+                                children: [
+                                  Icon(
+                                    Icons.touch_app,
+                                    size: 10,
+                                    color: isSelected ? Colors.yellowAccent : Colors.grey.shade400,
+                                  ),
+                                  const SizedBox(width: 3),
+                                  Text(
+                                    isSelected
+                                        ? "캔버스 위치 강조됨 · 아래에서 바로 선로 연결"
+                                        : "클릭하여 캔버스 위치 확인 및 선로 연결",
+                                    style: TextStyle(
+                                      color: isSelected ? Colors.yellowAccent : Colors.grey.shade400,
+                                      fontSize: 9.5,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (isSelected)
+                          const Padding(
+                            padding: EdgeInsets.only(left: 4, top: 2),
+                            child: Icon(Icons.arrow_forward_ios, size: 11, color: Colors.yellowAccent),
+                          ),
+                      ],
+                    ),
+                  ),
                 ),
               );
             }),
@@ -3091,6 +3177,185 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         ],
       ),
     );
+  }
+
+  void _onSelectTopologyIssue(Map<String, dynamic> iss) {
+    setState(() {
+      _selectedTopologyIssue = iss;
+      final compIds = iss['component_ids'];
+      if (compIds is List && compIds.isNotEmpty) {
+        final firstId = compIds.first.toString();
+        // Check if it's a node
+        ReviewNodeItem? matchedNode;
+        for (final n in _workingNodes) {
+          if (n.id == firstId) {
+            matchedNode = n;
+            break;
+          }
+        }
+        if (matchedNode != null) {
+          _selectedNode = matchedNode;
+          _selectedLine = null;
+        } else {
+          // Check if it's a line
+          ReviewLineItem? matchedLine;
+          for (final l in _workingLines) {
+            if (l.lineId == firstId) {
+              matchedLine = l;
+              break;
+            }
+          }
+          if (matchedLine != null) {
+            _selectedLine = matchedLine;
+            _selectedNode = null;
+          }
+        }
+      }
+    });
+
+    if (_selectedNode != null) {
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            "캔버스에서 ${_selectedNode!.effectiveDisplayLabel} 부품 위치가 강조 표시되었습니다.",
+          ),
+          backgroundColor: Colors.purple.shade700,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  Widget _buildTopologyIssueDetailPanel() {
+    if (_selectedTopologyIssue == null || _selectedNode == null) {
+      return const SizedBox.shrink();
+    }
+    final iss = _selectedTopologyIssue!;
+    final node = _selectedNode!;
+    final isError = iss['severity'] == 'error';
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF232338),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: isError
+              ? Colors.redAccent.withValues(alpha: 0.8)
+              : Colors.orangeAccent.withValues(alpha: 0.8),
+          width: 1.5,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: isError ? Colors.redAccent : Colors.orangeAccent,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  isError ? "규칙 위반 상세" : "경고 상세",
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  node.effectiveDisplayLabel,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close, size: 16, color: Colors.grey),
+                tooltip: "닫기",
+                onPressed: () => setState(() => _selectedTopologyIssue = null),
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _getTopologyIssueExplanation(iss, node),
+            style: const TextStyle(color: Colors.white70, fontSize: 11, height: 1.4),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      _isManualAddLineMode = true;
+                      _manualLineStartNode = node;
+                    });
+                    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          "👉 도면(캔버스)에서 ${node.effectiveDisplayLabel}와 연결할 모선(Bus)을 클릭하세요.",
+                        ),
+                        backgroundColor: Colors.purple,
+                        duration: const Duration(seconds: 4),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.add_link, size: 15),
+                  label: const Text(
+                    "➕ 지금 선로 연결하기",
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.purpleAccent.shade700,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _getTopologyIssueExplanation(
+    Map<String, dynamic> iss,
+    ReviewNodeItem node,
+  ) {
+    final code = iss['code']?.toString() ?? '';
+    final cls = node.className.toLowerCase();
+    if (code == 'invalid_terminal_degree') {
+      if (cls.contains('load')) {
+        return "전력 계통 규칙상 부하(Load)는 모선(Bus)과 반드시 1개의 선로로 연결되어야 합니다. 현재 도면에서 연결 선로가 검출되지 않았으므로, 아래 버튼을 눌러 인접한 모선과 선로를 연결해주세요.";
+      } else if (cls.contains('gen')) {
+        return "전력 계통 규칙상 발전기(Generator)는 모선(Bus)과 1개의 선로로 연결되어야 합니다. 현재 도면에서 연결 선로가 검출되지 않았습니다.";
+      } else if (cls.contains('trans')) {
+        return "변압기(Transformer)는 1차측과 2차측 2개의 모선과 연결되어야 합니다. 연결된 선로 수를 확인해주세요.";
+      } else if (cls.contains('bus')) {
+        return "모선(Bus)에 연결된 선로가 없습니다. 고립된 모선인지 확인해주세요.";
+      }
+    } else if (code == 'isolated_subgraph') {
+      return "이 부품이 속한 영역이 주 전력 계통망과 단절되어 고립되어 있습니다. 계통 간 연계 선로를 확인해주세요.";
+    } else if (code == 'invalid_device_pair') {
+      return "발전기나 부하 간에 모선 없이 직접 연결되었습니다. 실제 계통에서는 모선을 거쳐 연결되어야 합니다.";
+    }
+    return iss['message']?.toString() ?? "전기적 규칙 위반이 감지되었습니다.";
   }
 
   Widget _buildLineSelectionChips() {
@@ -3541,6 +3806,20 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     }
 
     switch (code) {
+      case 'invalid_terminal_degree':
+        return compsStr.isNotEmpty
+            ? "[단자 연결 오류] '$compsStr' 기기는 모선(Bus)에 정확히 1개의 선로로 연결되어야 합니다 (현재 연결 수 불일치)"
+            : "[단자 연결 오류] 발전기/부하는 모선에 정확히 1개의 선로로 연결되어야 합니다.";
+      case 'invalid_transformer_degree':
+        return compsStr.isNotEmpty
+            ? "[변압기 결선 이상] '$compsStr' 변압기의 1차측/2차측 결선이 불완전합니다."
+            : "[변압기 결선 이상] 변압기 양단 포트 연결이 확인되지 않습니다.";
+      case 'isolated_bus':
+        return compsStr.isNotEmpty
+            ? "[고립 모선] '$compsStr' 모선에 연결된 선로가 없습니다."
+            : "[고립 모선] 모선에 연결된 선로가 없습니다.";
+      case 'isolated_subgraph':
+        return "[망 분리/고립] 독립된 전력망 서브그래프가 감지되었습니다. 주 전력망과의 연계 선로를 확인하세요.";
       case 'duplicate_edge':
         return compsStr.isNotEmpty
             ? "[선로 중복] '$compsStr' 사이에 2개 이상의 선로가 연결됨 (병렬 2회선이 아니면 1개 제외 권장)"

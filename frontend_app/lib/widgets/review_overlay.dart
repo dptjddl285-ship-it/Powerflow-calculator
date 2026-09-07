@@ -32,6 +32,9 @@ class ReviewOverlayView extends StatefulWidget {
   final Function(ReviewNodeItem startNode, ReviewNodeItem endNode)?
   onManualAddLineComplete;
 
+  // Topology Violation Nodes for Warning Visual Cues
+  final Set<String> violationNodeIds;
+
   const ReviewOverlayView({
     super.key,
     required this.imageBytes,
@@ -54,6 +57,7 @@ class ReviewOverlayView extends StatefulWidget {
     this.isManualAddLineMode = false,
     this.manualLineStartNode,
     this.onManualAddLineComplete,
+    this.violationNodeIds = const {},
   });
 
   @override
@@ -407,6 +411,8 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                             widget.selectedNode?.id == node.id;
                         final bool isEndpointOfSelectedLine =
                             lineEndpointNodeIds.contains(node.id);
+                        final bool isViolation =
+                            widget.violationNodeIds.contains(node.id);
 
                         final Color classColor = _getClassColor(node.className);
                         final Color statusColor = _getStatusColor(
@@ -453,22 +459,28 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                     decoration: BoxDecoration(
                                       color: isSelected
                                           ? Colors.yellowAccent.withValues(alpha: 0.2 + 0.15 * pulseVal)
-                                          : (isEndpointOfSelectedLine
-                                              ? Colors.cyanAccent.withValues(alpha: 0.25 + 0.2 * pulseVal)
-                                              : classColor.withValues(alpha: 0.08)),
+                                          : (isViolation
+                                              ? Colors.redAccent.withValues(alpha: 0.25 + 0.2 * pulseVal)
+                                              : (isEndpointOfSelectedLine
+                                                  ? Colors.cyanAccent.withValues(alpha: 0.25 + 0.2 * pulseVal)
+                                                  : classColor.withValues(alpha: 0.08))),
                                       border: Border.all(
                                         color: isSelected
                                             ? Colors.yellowAccent
-                                            : (isEndpointOfSelectedLine
-                                                  ? Colors.cyanAccent
-                                                  : (isRejected
-                                                      ? Colors.redAccent
-                                                      : classColor)),
+                                            : (isViolation
+                                                ? Colors.redAccent
+                                                : (isEndpointOfSelectedLine
+                                                      ? Colors.cyanAccent
+                                                      : (isRejected
+                                                          ? Colors.redAccent
+                                                          : classColor))),
                                         width: isSelected
                                             ? (2.0 + 1.2 * pulseVal)
-                                            : (isEndpointOfSelectedLine
-                                                  ? (2.2 + 1.8 * pulseVal)
-                                                  : 1.2),
+                                            : (isViolation
+                                                ? (2.2 + 1.5 * pulseVal)
+                                                : (isEndpointOfSelectedLine
+                                                      ? (2.2 + 1.8 * pulseVal)
+                                                      : 1.2)),
                                       ),
                                       borderRadius: BorderRadius.circular(2),
                                       boxShadow: isSelected
@@ -479,15 +491,23 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                 spreadRadius: 1.0 + 1.5 * pulseVal,
                                               ),
                                             ]
-                                          : (isEndpointOfSelectedLine
+                                          : (isViolation
                                               ? [
                                                   BoxShadow(
-                                                    color: const Color(0xFF00E5FF).withValues(alpha: 0.6 + 0.35 * pulseVal),
+                                                    color: Colors.redAccent.withValues(alpha: 0.6 + 0.35 * pulseVal),
                                                     blurRadius: 8.0 + 8.0 * pulseVal,
                                                     spreadRadius: 2.0 + 2.0 * pulseVal,
                                                   ),
                                                 ]
-                                              : null),
+                                              : (isEndpointOfSelectedLine
+                                                  ? [
+                                                      BoxShadow(
+                                                        color: const Color(0xFF00E5FF).withValues(alpha: 0.6 + 0.35 * pulseVal),
+                                                        blurRadius: 8.0 + 8.0 * pulseVal,
+                                                        spreadRadius: 2.0 + 2.0 * pulseVal,
+                                                      ),
+                                                    ]
+                                                  : null)),
                                     ),
                                   ),
                                 ),
@@ -517,28 +537,32 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                         decoration: BoxDecoration(
                                           color: isSelected
                                               ? Colors.yellowAccent
-                                              : (isEndpointOfSelectedLine
-                                                    ? Colors.cyanAccent
-                                                    : classColor.withValues(
-                                                        alpha: 0.92,
-                                                      )),
+                                              : (isViolation
+                                                  ? Colors.redAccent
+                                                  : (isEndpointOfSelectedLine
+                                                      ? Colors.cyanAccent
+                                                      : classColor.withValues(
+                                                          alpha: 0.92,
+                                                        ))),
                                           borderRadius: BorderRadius.circular(2),
                                           border: Border.all(
                                             color: isSelected
                                                 ? Colors.orangeAccent
-                                                : (isEndpointOfSelectedLine
+                                                : (isViolation
                                                     ? Colors.white
-                                                    : statusColor),
+                                                    : (isEndpointOfSelectedLine
+                                                        ? Colors.white
+                                                        : statusColor)),
                                             width: isSelected
                                                 ? 1.2
-                                                : (isEndpointOfSelectedLine
+                                                : (isViolation || isEndpointOfSelectedLine
                                                     ? (1.2 + 0.8 * pulseVal)
                                                     : 0.6),
                                           ),
-                                          boxShadow: isEndpointOfSelectedLine
+                                          boxShadow: isEndpointOfSelectedLine || isViolation
                                               ? [
                                                   BoxShadow(
-                                                    color: const Color(0xFF00E5FF).withValues(alpha: 0.6 * pulseVal),
+                                                    color: (isViolation ? Colors.redAccent : const Color(0xFF00E5FF)).withValues(alpha: 0.6 * pulseVal),
                                                     blurRadius: 4.0 + 4.0 * pulseVal,
                                                   ),
                                                 ]
