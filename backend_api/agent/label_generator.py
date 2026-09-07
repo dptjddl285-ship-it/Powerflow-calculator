@@ -96,18 +96,18 @@ def generate_display_labels(
 
         if cls_name == "bus":
             if existing_bus_num is not None:
-                node_copy["display_label"] = f"Bus {existing_bus_num}"
+                node_copy["display_label"] = f"BUS {existing_bus_num}"
                 node_copy["display_number"] = existing_bus_num
                 node_copy["suggested_bus_number"] = existing_bus_num
                 node_copy["number_source"] = "vision_ai_grounded"
             elif node_id in bus_matches:
                 bus_num = bus_matches[node_id]
-                node_copy["display_label"] = f"Bus {bus_num}"
+                node_copy["display_label"] = f"BUS {bus_num}"
                 node_copy["display_number"] = bus_num
                 node_copy["suggested_bus_number"] = bus_num
                 node_copy["number_source"] = "detected_text"
             else:
-                node_copy["display_label"] = "Bus (미지정)"
+                node_copy["display_label"] = "BUS (미지정)"
                 node_copy["display_number"] = None
                 node_copy["suggested_bus_number"] = None
                 node_copy["number_source"] = "unassigned"

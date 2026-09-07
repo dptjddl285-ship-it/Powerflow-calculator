@@ -25,19 +25,19 @@ class TestExcelCaseImporter(unittest.TestCase):
         self.assertGreater(data['total_branches'], 0)
 
         # Bus 13 is Slack
-        bus13 = data['buses'][13]
+        bus13 = data['buses'].get(13) or data['buses'].get('13')
         self.assertTrue(bus13['is_slack'])
         self.assertEqual(bus13['type'], 'Swing')
         self.assertAlmostEqual(bus13['pload_mw'], 265.0)
         self.assertAlmostEqual(bus13['pload_pu'], 2.65)
 
         # Bus 1 is PV
-        bus1 = data['buses'][1]
+        bus1 = data['buses'].get(1) or data['buses'].get('1')
         self.assertFalse(bus1['is_slack'])
         self.assertEqual(bus1['type'], 'PV')
 
         # Generator at Bus 13 is Slack
-        gen13 = data['generators'][13]
+        gen13 = data['generators'].get(13) or data['generators'].get('13')
         self.assertTrue(gen13['is_slack'])
 
     def test_apply_to_drawing_elements(self):

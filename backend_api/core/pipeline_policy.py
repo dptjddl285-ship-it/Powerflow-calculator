@@ -480,7 +480,7 @@ def validate_graph(
 
         endpoint_classes = {classes[first], classes[second]}
         if endpoint_classes <= {"load", "generator"}:
-            issues.append(GraphIssue("error", "invalid_device_pair", "Load/generator devices must connect through a bus", pair))
+            issues.append(GraphIssue("error", "invalid_device_pair", "Load/generator devices must connect through a bus", (first, second)))
 
     for node_id, class_name in classes.items():
         node_degree = degree[node_id]

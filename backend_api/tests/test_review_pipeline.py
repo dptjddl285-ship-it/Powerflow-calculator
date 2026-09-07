@@ -560,6 +560,7 @@ class ReviewPipelineTest(unittest.TestCase):
         old_provider = os.environ.pop("AI_PROVIDER", None)
         old_openai_key = os.environ.pop("OPENAI_API_KEY", None)
         old_gemini_key = os.environ.pop("GEMINI_API_KEY", None)
+        old_google_key = os.environ.pop("GOOGLE_API_KEY", None)
         try:
             # 1. Default without env vars -> Local
             prov = get_assistant_provider()
@@ -597,6 +598,10 @@ class ReviewPipelineTest(unittest.TestCase):
                 os.environ["GEMINI_API_KEY"] = old_gemini_key
             else:
                 os.environ.pop("GEMINI_API_KEY", None)
+            if old_google_key is not None:
+                os.environ["GOOGLE_API_KEY"] = old_google_key
+            else:
+                os.environ.pop("GOOGLE_API_KEY", None)
 
     def test_w_local_chat_question_coverage(self):
         """Test W: LocalReviewAssistantProvider accurately responds to diverse electrical review questions."""
@@ -677,10 +682,11 @@ class ReviewPipelineTest(unittest.TestCase):
         self.assertEqual(bus_0_res["suggested_bus_number"], 4)
         self.assertEqual(bus_0_res["number_source"], "detected_text")
 
-        # bus_1 should get sequence fallback
+        # bus_1 without match gets unassigned
         bus_1_res = next(n for n in labeled_nodes if n["id"] == "bus_1")
-        self.assertTrue(bus_1_res["display_label"].startswith("BUS"))
-        self.assertEqual(bus_1_res["number_source"], "sequence_fallback")
+        self.assertEqual(bus_1_res["display_label"], "BUS (미지정)")
+        self.assertEqual(bus_1_res["number_source"], "unassigned")
+        self.assertIsNone(bus_1_res["suggested_bus_number"])
 
         # Generator & Load
         gen_res = next(n for n in labeled_nodes if n["id"] == "gen_0")
