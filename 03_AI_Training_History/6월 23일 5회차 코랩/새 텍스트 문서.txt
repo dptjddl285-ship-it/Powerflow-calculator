@@ -1,0 +1,66 @@
+                  all          6        179      0.925      0.976      0.967      0.515
+
+      Epoch    GPU_mem   box_loss   cls_loss   dfl_loss  Instances       Size
+    229/300      8.53G     0.9305     0.5328     0.9816        107       1280: 100% ━━━━━━━━━━━━ 14/14 1.8it/s 7.8s
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 100% ━━━━━━━━━━━━ 1/1 2.8it/s 0.4s
+                   all          6        179      0.916      0.988      0.967      0.518
+
+      Epoch    GPU_mem   box_loss   cls_loss   dfl_loss  Instances       Size
+    230/300      8.48G     0.9812     0.5326     0.9752         46       1280: 100% ━━━━━━━━━━━━ 14/14 1.8it/s 7.8s
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 100% ━━━━━━━━━━━━ 1/1 2.9it/s 0.4s
+                   all          6        179      0.916      0.988      0.967      0.518
+EarlyStopping: Training stopped early as no improvement observed in last 100 epochs. Best results observed at epoch 130, best model saved as best.pt.
+To update EarlyStopping(patience=100) pass a new patience value, i.e. `patience=300` or use `patience=0` to disable EarlyStopping.
+
+230 epochs completed in 0.638 hours.
+Optimizer stripped from /content/runs/detect/train/weights/last.pt, 40.7MB
+Optimizer stripped from /content/runs/detect/train/weights/best.pt, 40.7MB
+
+Validating /content/runs/detect/train/weights/best.pt...
+Ultralytics 8.4.75 🚀 Python-3.12.13 torch-2.11.0+cu128 CUDA:0 (Tesla T4, 14913MiB)
+YOLO11m summary (fused): 126 layers, 20,033,116 parameters, 0 gradients, 67.7 GFLOPs
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 100% ━━━━━━━━━━━━ 1/1 2.9it/s 0.3s
+                   all          6        179      0.924      0.959      0.967      0.526
+                   bus          6         79      0.902      0.987      0.971      0.471
+             generator          6         29      0.902          1      0.984      0.652
+                  load          6         49       0.94      0.959      0.936      0.392
+           transformer          6         22      0.951      0.889      0.975      0.589
+Speed: 0.8ms preprocess, 50.6ms inference, 0.0ms loss, 2.4ms postprocess per image
+Results saved to /content/runs/detect/train
+ultralytics.utils.metrics.DetMetrics object with attributes:
+
+ap_class_index: array([0, 1, 2, 3])
+
+
+-----------------------------------------------------------
+
+from ultralytics import YOLO
+
+# 1. 현존 최강의 미디엄 체급 모델 투입!
+model = YOLO('yolo11m.pt')
+
+# 2. 65장의 순정 데이터 포텐셜을 터뜨릴 완벽한 세팅
+model.train(
+    data=f"{dataset.location}/data.yaml",
+    epochs=300,
+    patience=100,
+    
+    # 🚨 [매우 중요] 얇은 선 인식을 위한 1280 고해상도 + 코랩 메모리 터짐 방지용 batch 4
+    imgsz=1280, 
+    batch=4,        
+    
+    device=0,
+    optimizer='auto',
+    plots=True,
+
+    # 🛡️ 안전한 동적 증강 (괴물 박스 완벽 차단)
+    mosaic=0.2,     # 모자이크는 아주 약하게만
+    degrees=0.0,    # [핵심] 회전 절대 금지! (네모 박스 왜곡 방지)
+    scale=0.2,      # 크기 변화 20% 허용
+    fliplr=0.5,     # 좌우 반전 50% 허용
+    hsv_v=0.2       # 밝기 변화 20% 허용
+
+----------------------------------------------------------------------------------
+
+사진을 30->65로 늘리고, 해상도 1280으로하고, 로보플로우에서 회전이나 이런거 다 없앤다음, x3배 이런거 없애고 원본을 가져감.
+점수대가 0.4에서 0.95점대로 실사용가능한 수준으로 올라옴. 이제 파이썬에서 conf 수치를 조절해서 확실히 아이콘식별 혹은 모자이크, 확대, 사진 가로세로 크기 조절해서 코랩의 사진상에서도 괴물박스 안쳐지게 , 아직 파이썬으로 돌려봤을때 괴물박스 버스를 0.51로 나와서 아마 그점에대해서 고민필요해보임.
