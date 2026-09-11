@@ -315,14 +315,14 @@ class ExcelCaseImporter:
                 b_num = el_id_to_bus_num.get(str(el.get('id')))
                 b_info = bus_dict.get(str(b_num)) or bus_dict.get(b_num)
                 if b_info:
-                    el['isSlack'] = b_info['is_slack']
-                    el['vPu'] = b_info['vm_pu']
-                    el['thetaDeg'] = b_info['va_deg']
-                    el['pPu'] = b_info['pload_pu']
-                    el['qPu'] = b_info['qload_pu']
-                    el['bus_type'] = b_info['type']
-                    el['maxVm'] = b_info['max_vm']
-                    el['minVm'] = b_info['min_vm']
+                    el['isSlack'] = bool(b_info.get('is_slack', False))
+                    el['vPu'] = float(b_info.get('vm_pu', 1.0))
+                    el['thetaDeg'] = float(b_info.get('va_deg', 0.0))
+                    el['pPu'] = float(b_info.get('pload_pu', 0.0))
+                    el['qPu'] = float(b_info.get('qload_pu', 0.0))
+                    el['bus_type'] = str(b_info.get('type') or b_info.get('bus_type') or ('3' if el['isSlack'] else '1'))
+                    if 'max_vm' in b_info: el['maxVm'] = b_info['max_vm']
+                    if 'min_vm' in b_info: el['minVm'] = b_info['min_vm']
                     applied_counts['bus'] += 1
 
             # 2. Generator
@@ -340,16 +340,16 @@ class ExcelCaseImporter:
 
                 g_info = gen_by_bus.get(str(b_num)) or gen_by_bus.get(b_num)
                 if g_info:
-                    el['isSlack'] = g_info['is_slack']
-                    el['pPu'] = g_info['pg_pu']
-                    el['qPu'] = g_info['qg_pu']
-                    el['vPu'] = g_info['voltage_setpoint']
-                    is_sc = (not g_info['is_slack']) and (g_info['pg_pu'] == 0 or abs(g_info['pg_pu']) < 1e-4)
+                    el['isSlack'] = bool(g_info.get('is_slack', False))
+                    el['pPu'] = float(g_info.get('pg_pu', 0.0))
+                    el['qPu'] = float(g_info.get('qg_pu', 0.0))
+                    el['vPu'] = float(g_info.get('voltage_setpoint', 1.0))
+                    is_sc = (not el['isSlack']) and (el['pPu'] == 0 or abs(el['pPu']) < 1e-4)
                     el['isSynchronousCondenser'] = is_sc
                     if is_sc:
                         el['label'] = f"SC_{b_num} (동기조상기)"
                     else:
-                        el['label'] = f"G_{b_num}" + (" (Slack)" if g_info['is_slack'] else "")
+                        el['label'] = f"G_{b_num}" + (" (Slack)" if el['isSlack'] else "")
                     applied_counts['generator'] += 1
                     if b_num is not None:
                         applied_gen_buses.add(int(b_num))
@@ -369,8 +369,8 @@ class ExcelCaseImporter:
 
                 b_info = bus_dict.get(str(b_num)) or bus_dict.get(b_num)
                 if b_info:
-                    el['pPu'] = b_info['pload_pu']
-                    el['qPu'] = b_info['qload_pu']
+                    el['pPu'] = float(b_info.get('pload_pu', 0.0))
+                    el['qPu'] = float(b_info.get('qload_pu', 0.0))
                     el['label'] = f"Load_{b_num}"
                     applied_counts['load'] += 1
 
