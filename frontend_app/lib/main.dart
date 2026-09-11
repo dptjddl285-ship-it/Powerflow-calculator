@@ -2263,31 +2263,37 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
               ],
             ), 
             child: Center(
-              child: Text(
-                isSC ? "SC" : (e.isSlack ? "S" : "G"), 
-                style: TextStyle(
-                  color: drawColor, 
-                  fontWeight: FontWeight.bold, 
-                  fontSize: isSC ? e.height * 0.35 : e.height * 0.45,
+              child: Transform.rotate(
+                angle: -e.angle,
+                child: Text(
+                  isSC ? "SC" : (e.isSlack ? "S" : "G"), 
+                  style: TextStyle(
+                    color: drawColor, 
+                    fontWeight: FontWeight.bold, 
+                    fontSize: isSC ? e.height * 0.35 : e.height * 0.45,
+                  ),
                 ),
               ),
             ),
           ),
           Positioned(
             top: -18,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.9),
-                borderRadius: BorderRadius.circular(3),
-                border: Border.all(color: isSelected ? const Color(0xFF2563EB) : Colors.black12),
-              ),
-              child: Text(
-                e.label.isNotEmpty ? e.label : e.id,
-                style: TextStyle(
-                  fontWeight: FontWeight.bold, 
-                  color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF0F172A), 
-                  fontSize: 10,
+            child: Transform.rotate(
+              angle: -e.angle,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.9),
+                  borderRadius: BorderRadius.circular(3),
+                  border: Border.all(color: isSelected ? const Color(0xFF2563EB) : Colors.black12),
+                ),
+                child: Text(
+                  e.label.isNotEmpty ? e.label : e.id,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold, 
+                    color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF0F172A), 
+                    fontSize: 10,
+                  ),
                 ),
               ),
             ),
@@ -2305,19 +2311,22 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           ),
           Positioned(
             bottom: -18,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.9),
-                borderRadius: BorderRadius.circular(3),
-                border: Border.all(color: isSelected ? const Color(0xFF2563EB) : Colors.black12),
-              ),
-              child: Text(
-                e.label.isNotEmpty ? e.label : e.id,
-                style: TextStyle(
-                  fontWeight: FontWeight.bold, 
-                  color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF0F172A), 
-                  fontSize: 10,
+            child: Transform.rotate(
+              angle: -e.angle,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.9),
+                  borderRadius: BorderRadius.circular(3),
+                  border: Border.all(color: isSelected ? const Color(0xFF2563EB) : Colors.black12),
+                ),
+                child: Text(
+                  e.label.isNotEmpty ? e.label : e.id,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold, 
+                    color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF0F172A), 
+                    fontSize: 10,
+                  ),
                 ),
               ),
             ),
@@ -2336,19 +2345,22 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           ),
           Positioned(
             top: -18,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.9),
-                borderRadius: BorderRadius.circular(3),
-                border: Border.all(color: isSelected ? const Color(0xFF2563EB) : Colors.black12),
-              ),
-              child: Text(
-                e.label.isNotEmpty ? e.label : e.id,
-                style: TextStyle(
-                  fontWeight: FontWeight.bold, 
-                  color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF0F172A), 
-                  fontSize: 10,
+            child: Transform.rotate(
+              angle: -e.angle,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.9),
+                  borderRadius: BorderRadius.circular(3),
+                  border: Border.all(color: isSelected ? const Color(0xFF2563EB) : Colors.black12),
+                ),
+                child: Text(
+                  e.label.isNotEmpty ? e.label : e.id,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold, 
+                    color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF0F172A), 
+                    fontSize: 10,
+                  ),
                 ),
               ),
             ),
@@ -2377,19 +2389,22 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           ),
           Positioned(
             top: -20,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.95),
-                borderRadius: BorderRadius.circular(3),
-                border: Border.all(color: isSelected ? const Color(0xFF2563EB) : Colors.black12),
-              ),
-              child: Text(
-                e.label.isNotEmpty ? (e.label.toLowerCase().startsWith('bus') ? e.label : "Bus ${e.label}") : e.id, 
-                style: TextStyle(
-                  fontWeight: FontWeight.bold, 
-                  color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF0F172A), 
-                  fontSize: 11,
+            child: Transform.rotate(
+              angle: -e.angle,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.95),
+                  borderRadius: BorderRadius.circular(3),
+                  border: Border.all(color: isSelected ? const Color(0xFF2563EB) : Colors.black12),
+                ),
+                child: Text(
+                  e.label.isNotEmpty ? (e.label.toLowerCase().startsWith('bus') ? e.label : "Bus ${e.label}") : e.id, 
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold, 
+                    color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF0F172A), 
+                    fontSize: 11,
+                  ),
                 ),
               ),
             ),
@@ -2482,7 +2497,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                   onPanStart: (_) => _saveState(),
                   onPanUpdate: (d) {
                     setState(() {
-                      e.width = (e.width + d.delta.dx).clamp(20, 800);
+                      double deltaX = d.delta.dx * math.cos(e.angle) + d.delta.dy * math.sin(e.angle);
+                      e.width = (e.width + deltaX).clamp(20, 800);
                       if (e.type != Tool.bus) e.height = e.width;
                     });
                   },
