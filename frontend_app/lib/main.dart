@@ -41,6 +41,11 @@ class DrawingElement {
   bool isSlack = false; double vPu = 1.0; double thetaDeg = 0.0;
   double pPu = 0.0; double qPu = 0.0; double rPu = 0.01; double xPu = 0.05; double bPu = 0.0;
   double tapRatio = 1.0;
+  int? circuitCount;
+  String? busType;
+
+  bool get isDoubleCircuit => (circuitCount != null && circuitCount! > 1) || label.contains("회선") || label.contains("병렬");
+  bool get isSynchronousCondenser => !isSlack && type == Tool.generator && (pPu == 0 || pPu.abs() < 1e-4);
 
   DrawingElement({
     required this.id, required this.type, required this.position,
@@ -48,6 +53,8 @@ class DrawingElement {
     this.parentBusId, this.startElementId, this.endElementId, this.startAnchor, this.endAnchor, this.label = "",
     this.infoOffset = const Offset(40, -40),
     this.aiPath,
+    this.circuitCount,
+    this.busType,
   });
 
   DrawingElement copy() {
@@ -57,6 +64,8 @@ class DrawingElement {
       parentBusId: parentBusId, startElementId: startElementId, endElementId: endElementId,
       startAnchor: startAnchor, endAnchor: endAnchor, label: label, infoOffset: infoOffset,
       aiPath: aiPath != null ? List.from(aiPath!) : null,
+      circuitCount: circuitCount,
+      busType: busType,
     )
     ..showInfo = showInfo 
     ..isSlack = isSlack..vPu = vPu..thetaDeg = thetaDeg
@@ -81,6 +90,8 @@ class DrawingElement {
       'xPu': xPu,
       'bPu': bPu,
       'tapRatio': tapRatio,
+      'circuitCount': circuitCount,
+      'bus_type': busType,
     };
   }
 }
@@ -214,15 +225,15 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     final isShift = HardwareKeyboard.instance.isShiftPressed;
 
     final focusedWidget = FocusManager.instance.primaryFocus;
-    final isTyping = focusedWidget != null &&
-        focusedWidget != _canvasFocusNode &&
-        focusedWidget.context != null &&
-        focusedWidget.context!.widget is EditableText;
+    // Any focus outside canvas means the user is actively typing or editing in an input field / inspector
+    final isEditingInput = focusedWidget != null && focusedWidget != _canvasFocusNode;
 
-    if (isTyping) {
+    if (isEditingInput) {
       if (event.logicalKey == LogicalKeyboardKey.escape) {
         FocusManager.instance.primaryFocus?.unfocus();
+        _canvasFocusNode.requestFocus();
       }
+      // CRITICAL: Return immediately so Backspace, Delete, and shortcuts NEVER delete elements while typing!
       return;
     }
 
@@ -231,7 +242,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       return;
     }
 
-    if (event.logicalKey == LogicalKeyboardKey.delete || event.logicalKey == LogicalKeyboardKey.backspace) {
+    // Only allow element deletion when Delete key is pressed on the canvas (Backspace is strictly reserved for text editing)
+    if (event.logicalKey == LogicalKeyboardKey.delete && _canvasFocusNode.hasFocus) {
       _deleteSelectedElement();
     } else if (event.logicalKey == LogicalKeyboardKey.escape) {
       setState(() {
@@ -480,6 +492,25 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         if (result['data'] != null && (result['status'] == 'success' || result['status'] == 'warning')) {
           setState(() {
             lastSimulationResult = result['data'];
+            final busResults = result['data']['bus_results'] as List<dynamic>? ?? [];
+            for (var br in busResults) {
+              int bNum = (br['bus'] as num).toInt();
+              double pgenPu = (br['pgen_pu'] as num?)?.toDouble() ?? 0.0;
+              double qgenPu = (br['qgen_pu'] as num?)?.toDouble() ?? 0.0;
+              double vPu = (br['volt_pu'] as num?)?.toDouble() ?? 1.0;
+              double angleDeg = (br['angle_deg'] as num?)?.toDouble() ?? 0.0;
+
+              for (var el in elements) {
+                if (el.type == Tool.bus && (el.label == "$bNum" || el.label.startsWith("$bNum ") || el.id == "bus_$bNum")) {
+                  el.vPu = vPu;
+                  el.thetaDeg = angleDeg;
+                } else if (el.type == Tool.generator && (el.label == "G_$bNum" || el.label.startsWith("G_$bNum ") || el.label.startsWith("SC_$bNum") || el.id == "gen_$bNum" || el.parentBusId == "bus_$bNum")) {
+                  el.pPu = pgenPu;
+                  el.qPu = qgenPu;
+                  el.vPu = vPu;
+                }
+              }
+            }
           });
 
           if (result['status'] == 'warning') {
@@ -812,6 +843,17 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     if (lineResults.isEmpty) {
       return const Center(child: Text("선로 조류 데이터가 없습니다."));
     }
+
+    final sortedLines = List<dynamic>.from(lineResults)
+      ..sort((a, b) {
+        int fa = (a['from_bus'] as num?)?.toInt() ?? 0;
+        int fb = (b['from_bus'] as num?)?.toInt() ?? 0;
+        if (fa != fb) return fa.compareTo(fb);
+        int ta = (a['to_bus'] as num?)?.toInt() ?? 0;
+        int tb = (b['to_bus'] as num?)?.toInt() ?? 0;
+        return ta.compareTo(tb);
+      });
+
     return Scrollbar(
       thumbVisibility: true,
       child: SingleChildScrollView(
@@ -820,8 +862,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           scrollDirection: Axis.horizontal,
           child: DataTable(
             headingRowColor: MaterialStateProperty.all(Colors.grey[100]),
-            columnSpacing: 20,
+            columnSpacing: 18,
             columns: [
+              const DataColumn(label: Text("No.", style: TextStyle(fontWeight: FontWeight.bold))),
               const DataColumn(label: Text("선로", style: TextStyle(fontWeight: FontWeight.bold))),
               const DataColumn(label: Text("From", style: TextStyle(fontWeight: FontWeight.bold))),
               const DataColumn(label: Text("To", style: TextStyle(fontWeight: FontWeight.bold))),
@@ -831,9 +874,11 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
               DataColumn(label: Text(showPu ? "Q To (pu)" : "Q To (MVAR)", style: const TextStyle(fontWeight: FontWeight.bold))),
               DataColumn(label: Text(showPu ? "Loss P (pu)" : "Loss P (MW)", style: const TextStyle(fontWeight: FontWeight.bold))),
             ],
-            rows: lineResults.map((r) {
+            rows: List.generate(sortedLines.length, (idx) {
+              final r = sortedLines[idx];
               return DataRow(
                 cells: [
+                  DataCell(Text("${idx + 1}", style: const TextStyle(color: Colors.grey, fontWeight: FontWeight.bold))),
                   DataCell(Text("${r['label'] ?? ''}", style: const TextStyle(fontWeight: FontWeight.w600))),
                   DataCell(Text("${r['from_bus']}")),
                   DataCell(Text("${r['to_bus']}")),
@@ -844,7 +889,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                   DataCell(Text(showPu ? "${r['loss_p_pu']}" : "${r['loss_p_mw']}", style: const TextStyle(color: Colors.red))),
                 ],
               );
-            }).toList(),
+            }),
           ),
         ),
       ),
@@ -1030,6 +1075,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       var branches = excelData['branches'] as Map<String, dynamic>? ?? {};
       var transformers = excelData['transformers'] as Map<String, dynamic>? ?? {};
       int? slackBus = excelData['slack_bus_number'];
+      final double sBase = (excelData['sbase_mva'] as num?)?.toDouble() ?? 100.0;
 
       int updatedBuses = 0;
       int updatedGens = 0;
@@ -1088,8 +1134,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
             )
               ..isSlack = (gInfo['is_slack'] == true)
               ..vPu = (gInfo['voltage_setpoint'] as num?)?.toDouble() ?? 1.0
-              ..pPu = (gInfo['pg_pu'] as num?)?.toDouble() ?? 0.0
-              ..qPu = (gInfo['qg_pu'] as num?)?.toDouble() ?? 0.0;
+              ..pPu = (gInfo['is_slack'] == true) ? 0.0 : ((gInfo['pg_pu'] as num?)?.toDouble() ?? 0.0)
+              ..qPu = (gInfo['is_slack'] == true) ? 0.0 : ((gInfo['qg_pu'] as num?)?.toDouble() ?? 0.0);
             elements.add(genEl);
             updatedGens++;
           }
@@ -1145,18 +1191,43 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         WidgetsBinding.instance.addPostFrameCallback((_) => _zoomToFit());
       }
 
+      // Helper: Distance from a point to a bus bar bounding box
+      double distToBus(DrawingElement bus, Offset pt) {
+        double halfW = bus.width / 2;
+        double halfH = bus.height / 2;
+        double minX = bus.position.dx - halfW;
+        double maxX = bus.position.dx + halfW;
+        double minY = bus.position.dy - halfH;
+        double maxY = bus.position.dy + halfH;
+        double dx = math.max(0.0, math.max(minX - pt.dx, pt.dx - maxX));
+        double dy = math.max(0.0, math.max(minY - pt.dy, pt.dy - maxY));
+        return math.sqrt(dx * dx + dy * dy);
+      }
+
       // 1. Map ID to Bus Number
       Map<String, int> elIdToBusNum = {};
       for (var el in elements) {
         if (el.type == Tool.bus) {
           int? bNum;
           if (el.label.isNotEmpty) {
-            String digits = el.label.replaceAll(RegExp(r'[^0-9]'), '');
-            if (digits.isNotEmpty) bNum = int.tryParse(digits);
+            final m = RegExp(r'^(\d+)|Bus\s*(\d+)|#\s*(\d+)').firstMatch(el.label);
+            if (m != null) {
+              String? g = m.group(1) ?? m.group(2) ?? m.group(3);
+              if (g != null) bNum = int.tryParse(g);
+            }
+            if (bNum == null) {
+              final m2 = RegExp(r'(\d+)').firstMatch(el.label);
+              if (m2 != null) bNum = int.tryParse(m2.group(1)!);
+            }
           }
           if (bNum == null) {
-            String digits = el.id.split('_').last.replaceAll(RegExp(r'[^0-9]'), '');
-            if (digits.isNotEmpty) bNum = int.tryParse(digits);
+            final m = RegExp(r'bus_(\d+)').firstMatch(el.id);
+            if (m != null) {
+              bNum = int.tryParse(m.group(1)!);
+            } else {
+              final m2 = RegExp(r'(\d+)').firstMatch(el.id);
+              if (m2 != null) bNum = int.tryParse(m2.group(1)!);
+            }
           }
           if (bNum != null) {
             elIdToBusNum[el.id] = bNum;
@@ -1165,7 +1236,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       }
 
       int? getBusNum(String? id) {
-        if (id == null) return null;
+        if (id == null || id.isEmpty) return null;
         if (elIdToBusNum.containsKey(id)) return elIdToBusNum[id];
         DrawingElement? matchEl;
         for (final e in elements) {
@@ -1176,16 +1247,59 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         }
         if (matchEl != null) {
           if (matchEl.type == Tool.bus) {
-            String digits = matchEl.label.replaceAll(RegExp(r'[^0-9]'), '');
-            if (digits.isNotEmpty) return int.tryParse(digits);
-            digits = matchEl.id.split('_').last.replaceAll(RegExp(r'[^0-9]'), '');
-            if (digits.isNotEmpty) return int.tryParse(digits);
+            final m = RegExp(r'^(\d+)|Bus\s*(\d+)|#\s*(\d+)').firstMatch(matchEl.label);
+            if (m != null) {
+              String? g = m.group(1) ?? m.group(2) ?? m.group(3);
+              if (g != null) return int.tryParse(g);
+            }
+            final m2 = RegExp(r'bus_(\d+)').firstMatch(matchEl.id);
+            if (m2 != null) return int.tryParse(m2.group(1)!);
+            final m3 = RegExp(r'(\d+)').firstMatch(matchEl.id);
+            if (m3 != null) return int.tryParse(m3.group(1)!);
           }
           return null; // Not a bus!
         }
-        if (id.startsWith('bus_')) {
-          String digits = id.replaceAll(RegExp(r'[^0-9]'), '');
-          return digits.isNotEmpty ? int.tryParse(digits) : null;
+        final m = RegExp(r'bus_(\d+)').firstMatch(id);
+        if (m != null) return int.tryParse(m.group(1)!);
+        return null;
+      }
+
+      Map<String, dynamic>? findBranchInfo(int f, int t) {
+        var info = branches["${f}_${t}"] ??
+                   branches["${t}_${f}"] ??
+                   branches["($f, $t)"] ??
+                   branches["($t, $f)"] ??
+                   branches["$f-$t"] ??
+                   branches["$t-$f"];
+        if (info != null) return info as Map<String, dynamic>;
+        for (var v in branches.values) {
+          if (v is Map) {
+            int? vf = (v['from_bus'] as num?)?.toInt();
+            int? vt = (v['to_bus'] as num?)?.toInt();
+            if ((vf == f && vt == t) || (vf == t && vt == f)) {
+              return v as Map<String, dynamic>;
+            }
+          }
+        }
+        return null;
+      }
+
+      Map<String, dynamic>? findTransformerInfo(int f, int t) {
+        var info = transformers["${f}_${t}"] ??
+                   transformers["${t}_${f}"] ??
+                   transformers["($f, $t)"] ??
+                   transformers["($t, $f)"] ??
+                   transformers["$f-$t"] ??
+                   transformers["$t-$f"];
+        if (info != null) return info as Map<String, dynamic>;
+        for (var v in transformers.values) {
+          if (v is Map) {
+            int? vf = (v['from_bus'] as num?)?.toInt();
+            int? vt = (v['to_bus'] as num?)?.toInt();
+            if ((vf == f && vt == t) || (vf == t && vt == f)) {
+              return v as Map<String, dynamic>;
+            }
+          }
         }
         return null;
       }
@@ -1199,11 +1313,45 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         List<DrawingElement> connLines = [];
 
         for (var l in elements.where((e) => e.type == Tool.line)) {
-          if (l.startElementId == tr.id || l.endElementId == tr.id) {
+          // 1. Never steal true transmission lines connecting two buses!
+          int? sb = getBusNum(l.startElementId);
+          int? eb = getBusNum(l.endElementId);
+          if (sb != null && eb != null) {
+            continue; // Inter-bus transmission line
+          }
+
+          // 2. Never steal load or generator feeder lines!
+          DrawingElement? sEl;
+          DrawingElement? eEl;
+          try { sEl = elements.firstWhere((e) => e.id == l.startElementId); } catch (_) {}
+          try { eEl = elements.firstWhere((e) => e.id == l.endElementId); } catch (_) {}
+          if (sEl?.type == Tool.load || eEl?.type == Tool.load ||
+              sEl?.type == Tool.generator || eEl?.type == Tool.generator ||
+              l.id.contains('load') || l.id.contains('gen') ||
+              l.label.contains('Load_') || l.label.contains('G_')) {
+            continue;
+          }
+
+          // 3. Only accept lines that directly connect to this transformer!
+          bool isDirect = (l.startElementId == tr.id || l.endElementId == tr.id);
+          if (isDirect) {
             connLines.add(l);
             transformerLeadLineIds.add(l.id);
             String? otherId = (l.startElementId == tr.id) ? l.endElementId : l.startElementId;
             int? b = getBusNum(otherId);
+            if (b == null) {
+              Offset otherPos = (l.startElementId == tr.id) ? (l.endPosition ?? l.position) : l.position;
+              double minD = 180.0;
+              for (var busEl in elements.where((e) => e.type == Tool.bus)) {
+                double d = distToBus(busEl, otherPos);
+                if (d < minD) {
+                  minD = d;
+                  b = getBusNum(busEl.id);
+                  if (l.startElementId == tr.id) l.endElementId = busEl.id;
+                  else l.startElementId = busEl.id;
+                }
+              }
+            }
             if (b != null && !connBuses.contains(b)) {
               connBuses.add(b);
             }
@@ -1214,10 +1362,15 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         int? tb = connBuses.length > 1 ? connBuses[1] : null;
 
         if (fb == null || tb == null) {
-          final match = RegExp(r'(\d+)\s*[-~_↔]\s*(\d+)').firstMatch(tr.label.isNotEmpty ? tr.label : tr.id);
+          final match = RegExp(r'^(?:T|trans)[-_ ]*(\d+)[-_ ]+(\d+)', caseSensitive: false).firstMatch(tr.label.isNotEmpty ? tr.label : tr.id) ??
+                        RegExp(r'(\d+)\s*[-~_↔]\s*(\d+)').firstMatch(tr.label.isNotEmpty ? tr.label : tr.id);
           if (match != null) {
-            fb ??= int.tryParse(match.group(1)!);
-            tb ??= int.tryParse(match.group(2)!);
+            int candF = int.tryParse(match.group(1)!) ?? 0;
+            int candT = int.tryParse(match.group(2)!) ?? 0;
+            if (buses.containsKey(candF.toString()) && buses.containsKey(candT.toString())) {
+              fb ??= candF;
+              tb ??= candT;
+            }
           }
         }
 
@@ -1231,6 +1384,16 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
               break;
             }
           }
+        } else if (fb == null && tb != null) {
+          for (var entry in transformers.entries) {
+            var trData = entry.value;
+            int f = (trData['from_bus'] as num).toInt();
+            int t = (trData['to_bus'] as num).toInt();
+            if (f == tb || t == tb) {
+              fb = (f == tb) ? t : f;
+              break;
+            }
+          }
         }
 
         transMap[tr.id] = {
@@ -1240,67 +1403,118 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         };
       }
 
+      // 1.5 Pre-connect Generators & Loads to Buses via ID, label, connecting lines or proximity
+      for (var dev in elements.where((e) => e.type == Tool.generator || e.type == Tool.load)) {
+        if (dev.parentBusId == null || dev.parentBusId!.isEmpty) {
+          int? bNum;
+          final mId = RegExp(r'^(?:gen|load|g|l)[-_ ]*(\d+)', caseSensitive: false).firstMatch(dev.id);
+          if (mId != null) bNum = int.tryParse(mId.group(1)!);
+          if (bNum == null && dev.label.isNotEmpty) {
+            final mLbl = RegExp(r'^(?:gen|load|g|l)[-_ ]*(\d+)', caseSensitive: false).firstMatch(dev.label);
+            if (mLbl != null) bNum = int.tryParse(mLbl.group(1)!);
+          }
+          if (bNum != null) {
+            final bEl = elements.where((e) => e.type == Tool.bus && (e.id == "bus_$bNum" || elIdToBusNum[e.id] == bNum)).firstOrNull;
+            if (bEl != null) dev.parentBusId = bEl.id;
+          }
+        }
+        if (dev.parentBusId == null) {
+          for (var l in elements.where((e) => e.type == Tool.line)) {
+            if (l.startElementId == dev.id && l.endElementId != null) {
+              var b = elements.where((e) => e.id == l.endElementId && e.type == Tool.bus).firstOrNull;
+              if (b != null) { dev.parentBusId = b.id; break; }
+            } else if (l.endElementId == dev.id && l.startElementId != null) {
+              var b = elements.where((e) => e.id == l.startElementId && e.type == Tool.bus).firstOrNull;
+              if (b != null) { dev.parentBusId = b.id; break; }
+            }
+          }
+        }
+        if (dev.parentBusId == null) {
+          double minD = 180.0;
+          for (var b in elements.where((e) => e.type == Tool.bus)) {
+            double d = distToBus(b, dev.position);
+            if (d < minD) {
+              minD = d;
+              dev.parentBusId = b.id;
+            }
+          }
+        }
+      }
+
       // 2. Apply parameters to each element
       for (var el in elements) {
         if (el.type == Tool.bus) {
           int? bNum = elIdToBusNum[el.id];
           if (bNum != null && buses.containsKey(bNum.toString())) {
             var bInfo = buses[bNum.toString()];
-            el.isSlack = bInfo['is_slack'] == true;
-            el.vPu = (bInfo['vm_pu'] as num?)?.toDouble() ?? 1.0;
+            el.isSlack = (bNum == slackBus) || (bInfo['is_slack'] == true);
+            double vSpec = (bInfo['vm_pu'] as num?)?.toDouble() ?? 1.0;
+            if (gens.containsKey(bNum.toString())) {
+              var gInfo = gens[bNum.toString()];
+              double? gVset = (gInfo['voltage_setpoint'] as num?)?.toDouble();
+              if (gVset != null && gVset > 0) vSpec = gVset;
+            }
+            el.vPu = vSpec;
             el.thetaDeg = (bInfo['va_deg'] as num?)?.toDouble() ?? 0.0;
             el.pPu = (bInfo['pload_pu'] as num?)?.toDouble() ?? 0.0;
             el.qPu = (bInfo['qload_pu'] as num?)?.toDouble() ?? 0.0;
-            if (el.isSlack) {
-              el.label = "$bNum (Slack)";
-            }
+            el.label = el.isSlack ? "$bNum (Slack)" : "$bNum";
             updatedBuses++;
           }
         } else if (el.type == Tool.generator) {
           int? bNum;
-          if (el.parentBusId != null && elIdToBusNum.containsKey(el.parentBusId)) {
+          final mId = RegExp(r'^(?:gen|g)[-_ ]*(\d+)', caseSensitive: false).firstMatch(el.id);
+          if (mId != null) bNum = int.tryParse(mId.group(1)!);
+          if (bNum == null && el.label.isNotEmpty) {
+            final mLbl = RegExp(r'^(?:gen|g)[-_ ]*(\d+)', caseSensitive: false).firstMatch(el.label);
+            if (mLbl != null) bNum = int.tryParse(mLbl.group(1)!);
+          }
+          if (bNum == null && el.parentBusId != null && elIdToBusNum.containsKey(el.parentBusId)) {
             bNum = elIdToBusNum[el.parentBusId];
           }
           if (bNum == null && el.parentBusId != null) {
             String digits = el.parentBusId!.replaceAll(RegExp(r'[^0-9]'), '');
-            if (digits.isNotEmpty) bNum = int.tryParse(digits);
-          }
-          if (bNum == null && el.label.isNotEmpty) {
-            String digits = el.label.replaceAll(RegExp(r'[^0-9]'), '');
-            if (digits.isNotEmpty) bNum = int.tryParse(digits);
-          }
-          if (bNum == null && el.id.isNotEmpty) {
-            String digits = el.id.replaceAll(RegExp(r'[^0-9]'), '');
             if (digits.isNotEmpty) bNum = int.tryParse(digits);
           }
           if (bNum != null && gens.containsKey(bNum.toString())) {
             var gInfo = gens[bNum.toString()];
-            el.isSlack = gInfo['is_slack'] == true;
-            el.pPu = (gInfo['pg_pu'] as num?)?.toDouble() ?? 0.0;
-            el.qPu = (gInfo['qg_pu'] as num?)?.toDouble() ?? 0.0;
+            el.parentBusId = "bus_$bNum";
+            el.isSlack = (bNum == slackBus) || (gInfo['is_slack'] == true);
+            if (el.isSlack) {
+              el.pPu = 0.0;
+              el.qPu = 0.0;
+            } else {
+              el.pPu = (gInfo['pg_pu'] as num?)?.toDouble() ?? 0.0;
+              el.qPu = (gInfo['qg_pu'] as num?)?.toDouble() ?? 0.0;
+            }
             el.vPu = (gInfo['voltage_setpoint'] as num?)?.toDouble() ?? 1.0;
-            el.label = "G_$bNum" + (el.isSlack ? " (Slack)" : "");
+            if (el.isSlack) {
+              el.label = "G_$bNum (Slack)";
+            } else if (el.pPu == 0 || el.pPu.abs() < 1e-4) {
+              el.label = "SC_$bNum (동기조상기)";
+            } else {
+              el.label = "G_$bNum";
+            }
             updatedGens++;
           }
         } else if (el.type == Tool.load) {
           int? bNum;
-          if (el.parentBusId != null && elIdToBusNum.containsKey(el.parentBusId)) {
+          final mId = RegExp(r'^(?:load|l)[-_ ]*(\d+)', caseSensitive: false).firstMatch(el.id);
+          if (mId != null) bNum = int.tryParse(mId.group(1)!);
+          if (bNum == null && el.label.isNotEmpty) {
+            final mLbl = RegExp(r'^(?:load|l)[-_ ]*(\d+)', caseSensitive: false).firstMatch(el.label);
+            if (mLbl != null) bNum = int.tryParse(mLbl.group(1)!);
+          }
+          if (bNum == null && el.parentBusId != null && elIdToBusNum.containsKey(el.parentBusId)) {
             bNum = elIdToBusNum[el.parentBusId];
           }
           if (bNum == null && el.parentBusId != null) {
             String digits = el.parentBusId!.replaceAll(RegExp(r'[^0-9]'), '');
             if (digits.isNotEmpty) bNum = int.tryParse(digits);
           }
-          if (bNum == null && el.label.isNotEmpty) {
-            String digits = el.label.replaceAll(RegExp(r'[^0-9]'), '');
-            if (digits.isNotEmpty) bNum = int.tryParse(digits);
-          }
-          if (bNum == null && el.id.isNotEmpty) {
-            String digits = el.id.replaceAll(RegExp(r'[^0-9]'), '');
-            if (digits.isNotEmpty) bNum = int.tryParse(digits);
-          }
           if (bNum != null && buses.containsKey(bNum.toString())) {
             var bInfo = buses[bNum.toString()];
+            el.parentBusId = "bus_$bNum";
             el.pPu = (bInfo['pload_pu'] as num?)?.toDouble() ?? 0.0;
             el.qPu = (bInfo['qload_pu'] as num?)?.toDouble() ?? 0.0;
             el.label = "Load_$bNum";
@@ -1313,14 +1527,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           List<DrawingElement> connLines = (tInfo?['connLines'] as List<DrawingElement>?) ?? [];
 
           if (fb != null && tb != null) {
-            var trInfo = transformers["${fb}_${tb}"] ??
-                         transformers["${tb}_${fb}"] ??
-                         transformers["$fb-$tb"] ??
-                         transformers["$tb-$fb"];
-            var brInfo = branches["${fb}_${tb}"] ??
-                         branches["${tb}_${fb}"] ??
-                         branches["$fb-$tb"] ??
-                         branches["$tb-$fb"];
+            var trInfo = findTransformerInfo(fb, tb);
+            var brInfo = findBranchInfo(fb, tb);
 
             double tap = (trInfo?['tap'] as num?)?.toDouble() ?? 1.0;
             double r = (brInfo?['r_pu'] as num?)?.toDouble() ?? 0.0023;
@@ -1349,8 +1557,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
               int t = (tr['to_bus'] as num).toInt();
               if (f == fb || t == fb) {
                 int otherBus = (f == fb) ? t : f;
-                double tap = (tr['tap'] as num?)?.toDouble() ?? 1.0;
-                var brInfo = branches["${fb}_${otherBus}"] ?? branches["${otherBus}_${fb}"];
+                var trInfo = findTransformerInfo(fb, otherBus);
+                var brInfo = findBranchInfo(fb, otherBus);
+                double tap = (trInfo?['tap'] as num?)?.toDouble() ?? 1.0;
                 double r = (brInfo?['r_pu'] as num?)?.toDouble() ?? 0.0023;
                 double x = (brInfo?['x_pu'] as num?)?.toDouble() ?? 0.0839;
                 double b = (brInfo?['b_pu'] as num?)?.toDouble() ?? 0.0;
@@ -1379,10 +1588,212 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
             // Already updated together with its connected transformer above!
             continue;
           }
+
+          // Check if this line is an inter-bus transmission line or a device connection lead
+          DrawingElement? sEl;
+          DrawingElement? eEl;
+          try { sEl = elements.firstWhere((e) => e.id == el.startElementId); } catch (_) {}
+          try { eEl = elements.firstWhere((e) => e.id == el.endElementId); } catch (_) {}
+
+          // Snapping for unset endpoints: check buses first for transmission lines
+          if (sEl == null) {
+            double minDist = 90.0;
+            for (var b in elements.where((e) => e.type == Tool.bus)) {
+              if (distToBus(b, el.position) < minDist) {
+                sEl = b;
+                el.startElementId = b.id;
+                break;
+              }
+            }
+          }
+          if (eEl == null && el.endPosition != null) {
+            double minDist = 90.0;
+            for (var b in elements.where((e) => e.type == Tool.bus)) {
+              if (distToBus(b, el.endPosition!) < minDist) {
+                eEl = b;
+                el.endElementId = b.id;
+                break;
+              }
+            }
+          }
+
+          // If still unset, check if it snaps to a generator or load
+          if (sEl == null) {
+            double minDist = 40.0;
+            for (var target in elements.where((e) => e.type == Tool.generator || e.type == Tool.load)) {
+              if ((target.position - el.position).distance < minDist) {
+                sEl = target;
+                el.startElementId = target.id;
+                break;
+              }
+            }
+          }
+          if (eEl == null && el.endPosition != null) {
+            double minDist = 40.0;
+            for (var target in elements.where((e) => e.type == Tool.generator || e.type == Tool.load)) {
+              if ((target.position - el.endPosition!).distance < minDist) {
+                eEl = target;
+                el.endElementId = target.id;
+                break;
+              }
+            }
+          }
+
+          DrawingElement? genEl = (sEl?.type == Tool.generator) ? sEl : ((eEl?.type == Tool.generator) ? eEl : null);
+          DrawingElement? loadEl = (sEl?.type == Tool.load) ? sEl : ((eEl?.type == Tool.load) ? eEl : null);
+          DrawingElement? busEl = (sEl?.type == Tool.bus) ? sEl : ((eEl?.type == Tool.bus) ? eEl : null);
+
+          // If both ends are buses, this is strictly a transmission line!
+          if (sEl?.type == Tool.bus && eEl?.type == Tool.bus) {
+            genEl = null;
+            loadEl = null;
+          }
+
+          if (busEl == null && (genEl != null || loadEl != null)) {
+            final dev = genEl ?? loadEl!;
+            if (dev.parentBusId != null) {
+              try { busEl = elements.firstWhere((b) => b.id == dev.parentBusId && b.type == Tool.bus); } catch (_) {}
+            }
+            if (busEl == null) {
+              Offset otherPos = (sEl == dev) ? (el.endPosition ?? el.position) : el.position;
+              double minD = 220.0;
+              for (var b in elements.where((e) => e.type == Tool.bus)) {
+                double d = distToBus(b, otherPos);
+                if (d < minD) {
+                  minD = d;
+                  busEl = b;
+                }
+              }
+            }
+            if (busEl != null) {
+              if (sEl == dev) el.endElementId = busEl.id;
+              else el.startElementId = busEl.id;
+            }
+          }
+
+          int? bNum = busEl != null ? getBusNum(busEl.id) : null;
+          if (bNum == null && genEl != null) {
+            if (genEl.parentBusId != null) bNum = getBusNum(genEl.parentBusId);
+            if (bNum == null) {
+              final m = RegExp(r'(\d+)').firstMatch(genEl.label.isNotEmpty ? genEl.label : genEl.id);
+              if (m != null) bNum = int.tryParse(m.group(1)!);
+            }
+          }
+          if (bNum == null && loadEl != null) {
+            if (loadEl.parentBusId != null) bNum = getBusNum(loadEl.parentBusId);
+            if (bNum == null) {
+              final m = RegExp(r'(\d+)').firstMatch(loadEl.label.isNotEmpty ? loadEl.label : loadEl.id);
+              if (m != null) bNum = int.tryParse(m.group(1)!);
+            }
+          }
+          if (bNum == null && (genEl != null || loadEl != null)) {
+            final m = RegExp(r'(\d+)').firstMatch(el.label);
+            if (m != null) bNum = int.tryParse(m.group(1)!);
+          }
+
+          if (genEl != null && bNum != null) {
+            genEl.parentBusId = busEl?.id;
+            if (gens.containsKey(bNum.toString())) {
+              var gInfo = gens[bNum.toString()];
+              genEl.isSlack = gInfo['is_slack'] == true;
+              if (genEl.isSlack) {
+                genEl.pPu = 0.0;
+                genEl.qPu = 0.0;
+              } else {
+                genEl.pPu = (gInfo['pg_pu'] as num?)?.toDouble() ?? 0.0;
+                genEl.qPu = (gInfo['qg_pu'] as num?)?.toDouble() ?? 0.0;
+              }
+              genEl.vPu = (gInfo['voltage_setpoint'] as num?)?.toDouble() ?? 1.0;
+              if (genEl.isSlack) {
+                genEl.label = "G_$bNum (Slack)";
+              } else if (genEl.pPu == 0 || genEl.pPu.abs() < 1e-4) {
+                genEl.label = "SC_$bNum (동기조상기)";
+              } else {
+                genEl.label = "G_$bNum";
+              }
+            }
+            el.rPu = 0.0;
+            el.xPu = 0.0;
+            el.bPu = 0.0;
+            el.tapRatio = 1.0;
+            el.pPu = genEl.pPu;
+            el.qPu = genEl.qPu;
+            final double pMw = genEl.pPu * sBase;
+            if (genEl.isSlack) {
+              el.label = "Line Bus $bNum ↔ G_$bNum (Slack)";
+            } else {
+              el.label = "Line Bus $bNum ↔ G_$bNum (${pMw.toStringAsFixed(1)} MW)";
+            }
+            updatedLines++;
+            continue;
+          }
+
+          if (loadEl != null && bNum != null) {
+            loadEl.parentBusId = busEl?.id;
+            if (buses.containsKey(bNum.toString())) {
+              var bInfo = buses[bNum.toString()];
+              loadEl.pPu = (bInfo['pload_pu'] as num?)?.toDouble() ?? 0.0;
+              loadEl.qPu = (bInfo['qload_pu'] as num?)?.toDouble() ?? 0.0;
+              loadEl.label = "Load_$bNum";
+            }
+            el.rPu = 0.0;
+            el.xPu = 0.0;
+            el.bPu = 0.0;
+            el.tapRatio = 1.0;
+            el.pPu = loadEl.pPu;
+            el.qPu = loadEl.qPu;
+            final double pMw = loadEl.pPu * sBase;
+            el.label = "Line Bus $bNum ↔ Load_$bNum (${pMw.toStringAsFixed(1)} MW)";
+            updatedLines++;
+            continue;
+          }
+
+          // Feeder lines directly connected to Generator or Load have zero series impedance
+          if (genEl != null || loadEl != null) {
+            el.rPu = 0.0;
+            el.xPu = 0.0;
+            el.bPu = 0.0;
+            el.tapRatio = 1.0;
+            updatedLines++;
+            continue;
+          }
+
           int? fb = getBusNum(el.startElementId);
           int? tb = getBusNum(el.endElementId);
+
+          // Proximity fallback using bounding box distance if endpoint ID is not explicitly linked
+          if (fb == null) {
+            double minDist = 180.0;
+            for (var b in elements.where((e) => e.type == Tool.bus)) {
+              double d = distToBus(b, el.position);
+              if (d < minDist) {
+                minDist = d;
+                fb = getBusNum(b.id);
+                el.startElementId = b.id;
+              }
+            }
+          }
+          if (tb == null && el.endPosition != null) {
+            double minDist = 180.0;
+            for (var b in elements.where((e) => e.type == Tool.bus)) {
+              double d = distToBus(b, el.endPosition!);
+              if (d < minDist) {
+                minDist = d;
+                tb = getBusNum(b.id);
+                el.endElementId = b.id;
+              }
+            }
+          }
+
           if (fb == null || tb == null) {
-            final match = RegExp(r'(\d+)\s*[-~↔]\s*(\d+)').firstMatch(el.label);
+            final match = RegExp(r'(\d+)\s*[-~]\s*(\d+)').firstMatch(el.label);
+            if (match != null) {
+              fb = int.tryParse(match.group(1)!);
+              tb = int.tryParse(match.group(2)!);
+            }
+          }
+          if (fb == null || tb == null) {
+            final match = RegExp(r'line_(\d+)_(\d+)').firstMatch(el.id);
             if (match != null) {
               fb = int.tryParse(match.group(1)!);
               tb = int.tryParse(match.group(2)!);
@@ -1397,24 +1808,19 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           }
           if (fb != null && tb != null) {
             el.label = "Line $fb-$tb";
-            var brInfo = branches["${fb}_${tb}"] ??
-                         branches["${tb}_${fb}"] ??
-                         branches["($fb, $tb)"] ??
-                         branches["($tb, $fb)"] ??
-                         branches["$fb-$tb"] ??
-                         branches["$tb-$fb"];
+            var brInfo = findBranchInfo(fb, tb);
             if (brInfo != null) {
               el.rPu = (brInfo['r_pu'] as num?)?.toDouble() ?? 0.01;
               el.xPu = (brInfo['x_pu'] as num?)?.toDouble() ?? 0.05;
               el.bPu = (brInfo['b_pu'] as num?)?.toDouble() ?? 0.0;
+              int circuits = (brInfo['circuit_count'] as num?)?.toInt() ?? 1;
+              el.circuitCount = circuits;
+              if (circuits > 1) {
+                el.label = "Line $fb-$tb ($circuits회선 병렬 등가)";
+              }
               updatedLines++;
             }
-            var trInfo = transformers["${fb}_${tb}"] ??
-                         transformers["${tb}_${fb}"] ??
-                         transformers["($fb, $tb)"] ??
-                         transformers["($tb, $fb)"] ??
-                         transformers["$fb-$tb"] ??
-                         transformers["$tb-$fb"];
+            var trInfo = findTransformerInfo(fb, tb);
             if (trInfo != null) {
               el.tapRatio = (trInfo['tap'] as num?)?.toDouble() ?? 1.0;
               el.label = "Line $fb-$tb (T: ${el.tapRatio})";
@@ -1513,7 +1919,14 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           label = id;
         }
 
-        elements.add(DrawingElement(
+        // Determine parentBusId from node metadata if available
+        String? parentBusId = node['connected_bus_id']?.toString();
+        int? devBusNum = (node['connected_bus_number'] as num?)?.toInt() ?? (node['bus_number'] as num?)?.toInt();
+        if (parentBusId == null && devBusNum != null && type != Tool.bus) {
+          parentBusId = "bus_$devBusNum";
+        }
+
+        final newEl = DrawingElement(
           id: id,
           type: type,
           position: Offset(cx, cy),
@@ -1521,7 +1934,14 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           height: h,
           angle: angle,
           label: label,
-        ));
+          parentBusId: parentBusId,
+        );
+        if (type == Tool.bus && devBusNum != null) {
+          if (devBusNum == 1 || node['is_slack'] == true || node['isSlack'] == true) {
+            newEl.isSlack = true;
+          }
+        }
+        elements.add(newEl);
       }
 
       // 3. Parse lines using exact pixel paths
@@ -1532,9 +1952,21 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         List<dynamic> connectedTo = line['connected_to'] ?? [];
         
         if (lineLabel.isEmpty && connectedTo.length >= 2) {
-          String ep1 = connectedTo[0].toString().split('_').last;
-          String ep2 = connectedTo[1].toString().split('_').last;
-          lineLabel = "Line $ep1-$ep2";
+          String id1 = connectedTo[0].toString();
+          String id2 = connectedTo[1].toString();
+          bool isBus1 = id1.startsWith('bus_');
+          bool isBus2 = id2.startsWith('bus_');
+          String num1 = id1.split('_').last;
+          String num2 = id2.split('_').last;
+          if (isBus1 && isBus2) {
+            lineLabel = "Line $num1-$num2";
+          } else if (isBus1) {
+            lineLabel = "Line Bus $num1 ↔ $id2";
+          } else if (isBus2) {
+            lineLabel = "Line Bus $num2 ↔ $id1";
+          } else {
+            lineLabel = "Line $num1-$num2";
+          }
         }
 
         if (rawPath.length >= 2) {
@@ -1586,8 +2018,23 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         }
       }
 
-      // 5. Connect every Generator & Load to its parent Bus (via line or spatial proximity)
+      // 5. Connect every Generator & Load to its parent Bus (via bus number, line, or spatial proximity)
       for (var dev in elements.where((e) => e.type == Tool.generator || e.type == Tool.load)) {
+        if (dev.parentBusId == null || dev.parentBusId!.isEmpty) {
+          int? bNum;
+          final mId = RegExp(r'^(?:gen|load|g|l)[-_ ]*(\d+)', caseSensitive: false).firstMatch(dev.id);
+          if (mId != null) bNum = int.tryParse(mId.group(1)!);
+          if (bNum == null && dev.label.isNotEmpty) {
+            final mLbl = RegExp(r'^(?:gen|load|g|l)[-_ ]*(\d+)', caseSensitive: false).firstMatch(dev.label);
+            if (mLbl != null) bNum = int.tryParse(mLbl.group(1)!);
+          }
+          if (bNum != null) {
+            final targetBus = elements.where((e) => e.type == Tool.bus && (e.id == "bus_$bNum" || e.id == "$bNum" || e.label == "$bNum" || e.label.startsWith("$bNum "))).firstOrNull;
+            if (targetBus != null) {
+              dev.parentBusId = targetBus.id;
+            }
+          }
+        }
         if (dev.parentBusId == null || dev.parentBusId!.isEmpty) {
           for (var l in elements.where((e) => e.type == Tool.line)) {
             if (l.startElementId == dev.id && l.endElementId != null) {
@@ -1615,7 +2062,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
               nearestBus = b;
             }
           }
-          if (nearestBus != null && minDist < 350.0) {
+          if (nearestBus != null && minDist < 200.0) {
             dev.parentBusId = nearestBus.id;
           }
         }
@@ -2163,6 +2610,69 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       DrawingElement? endEl;
       try { startEl = elements.firstWhere((e) => e.id == el.startElementId); } catch (_) {}
       try { endEl = elements.firstWhere((e) => e.id == el.endElementId); } catch (_) {}
+      final String? sBusStr = (startEl != null) ? _getBusNum(startEl.label.isNotEmpty ? startEl.label : startEl.id) : (el.startElementId != null ? _getBusNum(el.startElementId!) : null);
+      final String? eBusStr = (endEl != null) ? _getBusNum(endEl.label.isNotEmpty ? endEl.label : endEl.id) : (el.endElementId != null ? _getBusNum(el.endElementId!) : null);
+      final bool isBothBuses = (startEl?.type == Tool.bus && endEl?.type == Tool.bus) ||
+          (sBusStr != null && eBusStr != null && int.tryParse(sBusStr) != null && int.tryParse(eBusStr) != null &&
+           startEl?.type != Tool.generator && endEl?.type != Tool.generator &&
+           startEl?.type != Tool.load && endEl?.type != Tool.load &&
+           startEl?.type != Tool.transformer && endEl?.type != Tool.transformer &&
+           !el.id.contains('trans') && !el.id.contains('load') && !el.id.contains('gen')) ||
+          (RegExp(r'^line_\d+_\d+$').hasMatch(el.id)) ||
+          (RegExp(r'^Line\s+\d+[-~]\d+').hasMatch(el.label));
+      final bool isGenLead = !isBothBuses && (startEl?.type == Tool.generator || endEl?.type == Tool.generator || el.label.contains("↔ G_") || el.label.contains("G_") || (el.id.startsWith("lead_") && el.id.contains("gen")));
+      final bool isLoadLead = !isBothBuses && !isGenLead && (startEl?.type == Tool.load || endEl?.type == Tool.load || el.label.contains("↔ Load_") || el.label.contains("Load_") || (el.id.startsWith("lead_") && el.id.contains("load")));
+      final mid = el.midPosition ?? (el.position + el.endPosition!) / 2;
+
+      if (isGenLead && (el.pPu.abs() > 0.001 || el.qPu.abs() > 0.001)) {
+        final double pMw = el.pPu * 100.0;
+        overlays.add(
+          Positioned(
+            left: mid.dx - 45,
+            top: mid.dy - 12,
+            child: IgnorePointer(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xE61E293B),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: Colors.greenAccent.withOpacity(0.6), width: 1),
+                ),
+                child: Text(
+                  "${pMw.abs().toStringAsFixed(1)} MW (발전)",
+                  style: const TextStyle(color: Colors.greenAccent, fontSize: 9.5, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+          ),
+        );
+        continue;
+      }
+
+      if (isLoadLead && (el.pPu.abs() > 0.001 || el.qPu.abs() > 0.001)) {
+        final double pMw = el.pPu * 100.0;
+        overlays.add(
+          Positioned(
+            left: mid.dx - 45,
+            top: mid.dy - 12,
+            child: IgnorePointer(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                decoration: BoxDecoration(
+                  color: const Color(0xE61E293B),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: Colors.orangeAccent.withOpacity(0.6), width: 1),
+                ),
+                child: Text(
+                  "${pMw.abs().toStringAsFixed(1)} MW (부하)",
+                  style: const TextStyle(color: Colors.orangeAccent, fontSize: 9.5, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+          ),
+        );
+        continue;
+      }
 
       if (startEl == null || endEl == null) continue;
 
@@ -2178,7 +2688,6 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       if (lRes != null) {
         final double pFrom = (lRes['p_from_mw'] as num?)?.toDouble() ?? 0.0;
         final double lossP = (lRes['loss_p_mw'] as num?)?.toDouble() ?? 0.0;
-        final mid = el.midPosition ?? (el.position + el.endPosition!) / 2;
 
         overlays.add(
           Positioned(
@@ -2234,11 +2743,39 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     
     String name = e.label.isNotEmpty ? e.label : e.id;
     String info = "[$name]\n";
-    if (e.type == Tool.generator) info += e.isSlack ? "V:${e.vPu}∠${e.thetaDeg}° (Slack)\nP:${e.pPu} Q:${e.qPu}" : "P:${e.pPu} Q:${e.qPu}\nV:${e.vPu}";
-    else if (e.type == Tool.load) info += "P:${e.pPu}\nQ:${e.qPu}";
-    else if (e.type == Tool.line) info += "${e.rPu}+j${e.xPu}" + (e.bPu != 0 ? "\nB:${e.bPu}" : "") + (e.tapRatio != 1.0 ? "\nTap:${e.tapRatio}" : "");
-    else if (e.type == Tool.transformer) info += "Tap:${e.tapRatio}\n${e.rPu}+j${e.xPu}" + (e.bPu != 0 ? "\nB:${e.bPu}" : "");
-    else return const SizedBox.shrink();
+    if (e.type == Tool.generator) {
+      info += e.isSlack ? "V:${e.vPu}∠${e.thetaDeg}° (Slack)\nP:${e.pPu} Q:${e.qPu}" : "P:${e.pPu} Q:${e.qPu}\nV:${e.vPu}";
+    } else if (e.type == Tool.load) {
+      info += "P:${e.pPu}\nQ:${e.qPu}";
+    } else if (e.type == Tool.line) {
+      DrawingElement? startEl;
+      DrawingElement? endEl;
+      try { startEl = elements.firstWhere((el) => el.id == e.startElementId); } catch (_) {}
+      try { endEl = elements.firstWhere((el) => el.id == e.endElementId); } catch (_) {}
+      final String? sBusStr = (startEl != null) ? _getBusNum(startEl.label.isNotEmpty ? startEl.label : startEl.id) : (e.startElementId != null ? _getBusNum(e.startElementId!) : null);
+      final String? eBusStr = (endEl != null) ? _getBusNum(endEl.label.isNotEmpty ? endEl.label : endEl.id) : (e.endElementId != null ? _getBusNum(e.endElementId!) : null);
+      final bool isBothBuses = (startEl?.type == Tool.bus && endEl?.type == Tool.bus) ||
+          (sBusStr != null && eBusStr != null && int.tryParse(sBusStr) != null && int.tryParse(eBusStr) != null &&
+           startEl?.type != Tool.generator && endEl?.type != Tool.generator &&
+           startEl?.type != Tool.load && endEl?.type != Tool.load &&
+           startEl?.type != Tool.transformer && endEl?.type != Tool.transformer &&
+           !e.id.contains('trans') && !e.id.contains('load') && !e.id.contains('gen')) ||
+          (RegExp(r'^line_\d+_\d+$').hasMatch(e.id)) ||
+          (RegExp(r'^Line\s+\d+[-~]\d+').hasMatch(e.label));
+      final bool isGenLead = !isBothBuses && (startEl?.type == Tool.generator || endEl?.type == Tool.generator || e.label.contains("↔ G_") || e.label.contains("G_") || (e.id.startsWith("lead_") && e.id.contains("gen")));
+      final bool isLoadLead = !isBothBuses && !isGenLead && (startEl?.type == Tool.load || endEl?.type == Tool.load || e.label.contains("↔ Load_") || e.label.contains("Load_") || (e.id.startsWith("lead_") && e.id.contains("load")));
+      if (isGenLead) {
+        info += "발전: ${(e.pPu * 100.0).toStringAsFixed(1)} MW\n무효: ${(e.qPu * 100.0).toStringAsFixed(1)} MVAR";
+      } else if (isLoadLead) {
+        info += "부하: ${(e.pPu * 100.0).toStringAsFixed(1)} MW\n무효: ${(e.qPu * 100.0).toStringAsFixed(1)} MVAR";
+      } else {
+        info += "${e.rPu}+j${e.xPu}" + (e.bPu != 0 ? "\nB:${e.bPu}" : "") + (e.tapRatio != 1.0 ? "\nTap:${e.tapRatio}" : "");
+      }
+    } else if (e.type == Tool.transformer) {
+      info += "Tap: ${e.tapRatio} pu";
+    } else {
+      return const SizedBox.shrink();
+    }
 
     Offset basePos = (e.type == Tool.line) ? (e.midPosition ?? (e.position + (e.endPosition ?? e.position)) / 2) : e.position;
 
@@ -2490,6 +3027,19 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     bool tempShowInfo = e.showInfo;
     bool tempIsSlack = e.isSlack;
 
+    DrawingElement? lineStartEl;
+    DrawingElement? lineEndEl;
+    if (e.type == Tool.line) {
+      try { lineStartEl = elements.firstWhere((el) => el.id == e.startElementId); } catch (_) {}
+      try { lineEndEl = elements.firstWhere((el) => el.id == e.endElementId); } catch (_) {}
+    }
+    final bool isBothBuses = e.type == Tool.line &&
+        (lineStartEl?.type == Tool.bus && lineEndEl?.type == Tool.bus);
+    final bool isGenLead = !isBothBuses && e.type == Tool.line &&
+        (lineStartEl?.type == Tool.generator || lineEndEl?.type == Tool.generator || e.label.contains("↔ G_") || e.id.contains("gen"));
+    final bool isLoadLead = !isBothBuses && !isGenLead && e.type == Tool.line &&
+        (lineStartEl?.type == Tool.load || lineEndEl?.type == Tool.load || e.label.contains("↔ Load_") || e.id.contains("load"));
+
     showDialog(
       context: context, 
       builder: (context) => StatefulBuilder(
@@ -2537,7 +3087,41 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                   TextField(controller: pCtrl, decoration: const InputDecoration(labelText: "부하 P (pu)")), 
                   TextField(controller: qCtrl, decoration: const InputDecoration(labelText: "부하 Q (pu)")) 
                 ],
-                if (e.type == Tool.line) ...[ 
+                if (isGenLead) ...[
+                  TextField(
+                    controller: pCtrl,
+                    decoration: const InputDecoration(labelText: "발전 주입 유효전력 P (pu)", helperText: "발전기 단자에서 모선으로 유입되는 전력"),
+                  ),
+                  TextField(
+                    controller: qCtrl,
+                    decoration: const InputDecoration(labelText: "발전 무효전력 Q (pu)"),
+                  ),
+                  TextField(
+                    controller: rCtrl,
+                    decoration: const InputDecoration(labelText: "인입선 저항 R (pu)", helperText: "발전기 단자 직결 (기본 0.0)"),
+                  ),
+                  TextField(
+                    controller: xCtrl,
+                    decoration: const InputDecoration(labelText: "인입선 리액턴스 X (pu)", helperText: "발전기 단자 직결 (기본 0.0)"),
+                  ),
+                ] else if (isLoadLead) ...[
+                  TextField(
+                    controller: pCtrl,
+                    decoration: const InputDecoration(labelText: "부하 소비 유효전력 P (pu)", helperText: "모선에서 부하로 소비되는 전력"),
+                  ),
+                  TextField(
+                    controller: qCtrl,
+                    decoration: const InputDecoration(labelText: "부하 소비 무효전력 Q (pu)"),
+                  ),
+                  TextField(
+                    controller: rCtrl,
+                    decoration: const InputDecoration(labelText: "인입선 저항 R (pu)", helperText: "부하 단자 직결 (기본 0.0)"),
+                  ),
+                  TextField(
+                    controller: xCtrl,
+                    decoration: const InputDecoration(labelText: "인입선 리액턴스 X (pu)", helperText: "부하 단자 직결 (기본 0.0)"),
+                  ),
+                ] else if (e.type == Tool.line) ...[ 
                   TextField(controller: rCtrl, decoration: const InputDecoration(labelText: "저항 R (pu)")), 
                   TextField(controller: xCtrl, decoration: const InputDecoration(labelText: "리액턴스 X (pu)")), 
                   TextField(controller: bCtrl, decoration: const InputDecoration(labelText: "서셉턴스 B (pu)")), 
@@ -2564,7 +3148,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                         SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            "변압기 제원 (권선비 탭비 및 임피던스)",
+                            "변압기 제원 (권선비 / 탭비)",
                             style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                           ),
                         ),
@@ -2576,12 +3160,22 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                     decoration: const InputDecoration(
                       labelText: "권선비 / 탭비 Tap (pu)",
                       hintText: "1.0 (예: 1.03 = 103%)",
-                      helperText: "공칭 변압비 대비 탭 비율 (기본: 1.0, 엑셀값)",
+                      helperText: "공칭 변압비 대비 탭 비율 (기본: 1.0, 엑셀 transformer 시트)",
                     ),
                   ),
-                  TextField(controller: xCtrl, decoration: const InputDecoration(labelText: "누설 리액턴스 X (pu)", helperText: "변압기 주 리액턴스 (예: 0.0839)")),
-                  TextField(controller: rCtrl, decoration: const InputDecoration(labelText: "권선 저항 R (pu)", helperText: "보통 매우 작음 (예: 0.0023 또는 0.0)")), 
-                  TextField(controller: bCtrl, decoration: const InputDecoration(labelText: "여자 서셉턴스 B (pu)", helperText: "보통 0.0")), 
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.blue.shade50,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: Colors.blue.shade200),
+                    ),
+                    child: const Text(
+                      "※ 변압기 임피던스(저항 R, 리액턴스 X)는 엑셀 branch 규격에 맞춰 연결된 선로(Line)에서 관리됩니다.",
+                      style: TextStyle(fontSize: 11, color: Color(0xFF1E293B)),
+                    ),
+                  ),
                 ],
               ])
             ),
@@ -2609,6 +3203,20 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                         }
                       }
                       e.isSlack = tempIsSlack;
+                    }
+
+                    if (isGenLead) {
+                      if (lineStartEl?.type == Tool.generator) {
+                        lineStartEl!.pPu = e.pPu; lineStartEl!.qPu = e.qPu;
+                      } else if (lineEndEl?.type == Tool.generator) {
+                        lineEndEl!.pPu = e.pPu; lineEndEl!.qPu = e.qPu;
+                      }
+                    } else if (isLoadLead) {
+                      if (lineStartEl?.type == Tool.load) {
+                        lineStartEl!.pPu = e.pPu; lineStartEl!.qPu = e.qPu;
+                      } else if (lineEndEl?.type == Tool.load) {
+                        lineEndEl!.pPu = e.pPu; lineEndEl!.qPu = e.qPu;
+                      }
                     }
 
                     // ✅ [수정완료] 버스 번호 입력 시 ID 자체를 bus_번호로 변경하고 연결 끊김 방지
@@ -2823,6 +3431,7 @@ class InspectorPanel extends StatefulWidget {
 
 class _InspectorPanelState extends State<InspectorPanel> {
   bool useMw = true;
+  bool _isShortcutsExpanded = true;
   late TextEditingController labelCtrl;
   late TextEditingController vCtrl;
   late TextEditingController pCtrl;
@@ -2877,25 +3486,26 @@ class _InspectorPanelState extends State<InspectorPanel> {
   @override
   void didUpdateWidget(covariant InspectorPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.selectedElement != widget.selectedElement) {
-      _updateControllers();
-    }
+    _updateControllers();
   }
 
   void _updateControllers() {
     final e = widget.selectedElement;
     if (e == null) return;
-    labelCtrl.text = e.label.isNotEmpty ? e.label : e.id;
-    vCtrl.text = e.vPu.toString();
+    String newLabel = e.label.isNotEmpty ? e.label : e.id;
+    if (labelCtrl.text != newLabel) labelCtrl.text = newLabel;
+    if (vCtrl.text != e.vPu.toString()) vCtrl.text = e.vPu.toString();
     final double pVal = useMw ? (e.pPu * widget.sBase) : e.pPu;
     final double qVal = useMw ? (e.qPu * widget.sBase) : e.qPu;
-    pCtrl.text = _formatNum(pVal);
-    qCtrl.text = _formatNum(qVal);
-    rCtrl.text = e.rPu.toString();
-    xCtrl.text = e.xPu.toString();
-    bCtrl.text = e.bPu.toString();
-    thetaCtrl.text = e.thetaDeg.toString();
-    tapCtrl.text = e.tapRatio.toString();
+    String newP = _formatNum(pVal);
+    String newQ = _formatNum(qVal);
+    if (pCtrl.text != newP) pCtrl.text = newP;
+    if (qCtrl.text != newQ) qCtrl.text = newQ;
+    if (rCtrl.text != e.rPu.toString()) rCtrl.text = e.rPu.toString();
+    if (xCtrl.text != e.xPu.toString()) xCtrl.text = e.xPu.toString();
+    if (bCtrl.text != e.bPu.toString()) bCtrl.text = e.bPu.toString();
+    if (thetaCtrl.text != e.thetaDeg.toString()) thetaCtrl.text = e.thetaDeg.toString();
+    if (tapCtrl.text != e.tapRatio.toString()) tapCtrl.text = e.tapRatio.toString();
   }
 
   @override
@@ -2928,7 +3538,7 @@ class _InspectorPanelState extends State<InspectorPanel> {
     final transCount = widget.elements.where((e) => e.type == Tool.transformer).length;
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2982,29 +3592,58 @@ class _InspectorPanelState extends State<InspectorPanel> {
           ),
           const SizedBox(height: 20),
 
-          const Text("⌨️ 키보드 단축키", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey)),
-          const SizedBox(height: 8),
-          Container(
-            decoration: BoxDecoration(
-              color: Colors.grey.shade50,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.grey.shade200),
-            ),
-            child: Column(
-              children: [
-                _shortcutRow("Del / Backspace", "선택 요소 삭제"),
-                _shortcutRow("Esc", "선택 해제 / 도구 취소"),
-                _shortcutRow("Ctrl + Z", "실행 취소 (Undo)"),
-                _shortcutRow("Ctrl + Y", "다시 실행 (Redo)"),
-                _shortcutRow("V", "선택 및 이동 모드"),
-                _shortcutRow("B", "모선(Bus) 배치"),
-                _shortcutRow("G", "발전기 배치"),
-                _shortcutRow("L", "부하 배치"),
-                _shortcutRow("T", "변압기 배치"),
-                _shortcutRow("W", "선로 연결 (Wire)"),
-              ],
+          InkWell(
+            onTap: () => setState(() => _isShortcutsExpanded = !_isShortcutsExpanded),
+            borderRadius: BorderRadius.circular(6),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text("⌨️ 키보드 단축키", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey)),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _isShortcutsExpanded ? "접기" : "펼치기",
+                        style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                      ),
+                      const SizedBox(width: 2),
+                      Icon(
+                        _isShortcutsExpanded ? Icons.expand_less : Icons.expand_more,
+                        size: 18,
+                        color: Colors.grey,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
+          if (_isShortcutsExpanded) ...[
+            const SizedBox(height: 8),
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.grey.shade200),
+              ),
+              child: Column(
+                children: [
+                  _shortcutRow("Del / Backspace", "선택 요소 삭제"),
+                  _shortcutRow("Esc", "선택 해제 / 도구 취소"),
+                  _shortcutRow("Ctrl + Z", "실행 취소 (Undo)"),
+                  _shortcutRow("Ctrl + Y", "다시 실행 (Redo)"),
+                  _shortcutRow("V", "선택 및 이동 모드"),
+                  _shortcutRow("B", "모선(Bus) 배치"),
+                  _shortcutRow("G", "발전기 배치"),
+                  _shortcutRow("L", "부하 배치"),
+                  _shortcutRow("T", "변압기 배치"),
+                  _shortcutRow("W", "선로 연결 (Wire)"),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 20),
 
           SizedBox(
@@ -3078,10 +3717,49 @@ class _InspectorPanelState extends State<InspectorPanel> {
     );
   }
 
+  String? _getBusNumDigits(String? text) {
+    if (text == null || text.isEmpty) return null;
+    final match = RegExp(r'\d+').firstMatch(text);
+    return match?.group(0);
+  }
+
   Widget _buildElementEditor() {
     final e = widget.selectedElement!;
     final String title = e.label.isNotEmpty ? e.label : e.id;
-    final bool hasPowerFields = (e.type == Tool.generator || e.type == Tool.load);
+    DrawingElement? lineStartEl;
+    DrawingElement? lineEndEl;
+    if (e.type == Tool.line) {
+      try { lineStartEl = widget.elements.firstWhere((el) => el.id == e.startElementId); } catch (_) {}
+      try { lineEndEl = widget.elements.firstWhere((el) => el.id == e.endElementId); } catch (_) {}
+    }
+    final sBusNum = _getBusNumDigits(lineStartEl?.label.isNotEmpty == true ? lineStartEl!.label : e.startElementId);
+    final eBusNum = _getBusNumDigits(lineEndEl?.label.isNotEmpty == true ? lineEndEl!.label : e.endElementId);
+    final bool isBothBuses = e.type == Tool.line && (
+        (lineStartEl?.type == Tool.bus && lineEndEl?.type == Tool.bus) ||
+        (sBusNum != null && eBusNum != null &&
+         lineStartEl?.type != Tool.generator && lineEndEl?.type != Tool.generator &&
+         lineStartEl?.type != Tool.load && lineEndEl?.type != Tool.load &&
+         lineStartEl?.type != Tool.transformer && lineEndEl?.type != Tool.transformer &&
+         !e.id.contains('trans') && !e.id.contains('load') && !e.id.contains('gen')) ||
+        (RegExp(r'^line_\d+_\d+$').hasMatch(e.id)) ||
+        (RegExp(r'^Line\s+\d+[-~]\d+').hasMatch(e.label))
+    );
+    final bool isGenLead = !isBothBuses && e.type == Tool.line && (
+        lineStartEl?.type == Tool.generator || lineEndEl?.type == Tool.generator ||
+        e.label.contains("↔ G_") || e.label.contains("G_") ||
+        (e.id.startsWith("lead_") && e.id.contains("gen"))
+    );
+    final bool isLoadLead = !isBothBuses && !isGenLead && e.type == Tool.line && (
+        lineStartEl?.type == Tool.load || lineEndEl?.type == Tool.load ||
+        e.label.contains("↔ Load_") || e.label.contains("Load_") ||
+        (e.id.startsWith("lead_") && e.id.contains("load"))
+    );
+    final bool isTransLead = !isBothBuses && !isGenLead && !isLoadLead && e.type == Tool.line && (
+        lineStartEl?.type == Tool.transformer || lineEndEl?.type == Tool.transformer ||
+        (e.id.startsWith("lead_") && e.id.contains("trans")) ||
+        (e.label.contains("↔ T") && !e.label.contains("Load") && !e.label.contains("G_"))
+    );
+    final bool hasPowerFields = (e.type == Tool.generator || e.type == Tool.load || isGenLead || isLoadLead);
 
     Color typeColor = Colors.blueGrey;
     String typeName = "부품";
@@ -3103,6 +3781,18 @@ class _InspectorPanelState extends State<InspectorPanel> {
       typeColor = Colors.purple;
       typeName = "변압기 (Transformer)";
       typeIcon = Icons.crop_square;
+    } else if (isGenLead) {
+      typeColor = Colors.green;
+      typeName = "발전기 인입선 (Gen Feeder)";
+      typeIcon = Icons.power_input;
+    } else if (isLoadLead) {
+      typeColor = Colors.orange;
+      typeName = "부하 인입선 (Load Feeder)";
+      typeIcon = Icons.power_input;
+    } else if (isTransLead) {
+      typeColor = Colors.purple;
+      typeName = "변압기 인입선 (Trans Feeder)";
+      typeIcon = Icons.power_input;
     } else if (e.type == Tool.line) {
       typeColor = Colors.teal;
       typeName = "송전 선로 (AC Line)";
@@ -3114,7 +3804,7 @@ class _InspectorPanelState extends State<InspectorPanel> {
     }
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -3212,6 +3902,32 @@ class _InspectorPanelState extends State<InspectorPanel> {
                 widget.onStateChanged();
               },
             ),
+            if (e.isSlack) ...[
+              Container(
+                margin: const EdgeInsets.symmetric(vertical: 8),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red.shade200),
+                ),
+                child: const Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.info_outline, size: 18, color: Colors.redAccent),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        "🚩 슬랙(Slack / 기준) 모선\n"
+                        "• 계통의 기준 모선으로 위상각(θ = 0.0°)이 고정됩니다.\n"
+                        "• 발전량은 계통 전체 수급 불균형과 손실을 보상하도록 조류계산 시 자동 결정됩니다.",
+                        style: TextStyle(fontSize: 11, color: Colors.redAccent, height: 1.4),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             _buildNumberField(
               label: "전압 크기 V",
               unit: "pu",
@@ -3250,7 +3966,7 @@ class _InspectorPanelState extends State<InspectorPanel> {
               contentPadding: EdgeInsets.zero,
               title: const Text("슬랙 모선 발전기 (Slack/Swing)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
               subtitle: Text(
-                e.isSlack ? "기준 모선 (위상 θ=0°, 손실 자동분담)" : "PV 발전기 (유효전력 P, 전압 V 지정)",
+                e.isSlack ? "기준 모선 (위상 θ=0°, 손실/부하 자동분담)" : (e.isSynchronousCondenser ? "동기조상기 (P=0 MW 고정, 전압 V 제어)" : "PV 발전기 (유효전력 P, 전압 V 지정)"),
                 style: const TextStyle(fontSize: 10),
               ),
               value: e.isSlack,
@@ -3265,6 +3981,59 @@ class _InspectorPanelState extends State<InspectorPanel> {
                 widget.onStateChanged();
               },
             ),
+            if (e.isSlack) ...[
+              Container(
+                margin: const EdgeInsets.symmetric(vertical: 8),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.red.shade200),
+                ),
+                child: const Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.info_outline, size: 18, color: Colors.redAccent),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        "🚩 슬랙(Slack / 기준) 모선 발전기\n"
+                        "• 전압(V)과 기준 위상(θ=0°)만 고정 제약조건입니다.\n"
+                        "• 유효 발전량(P) 및 무효 발전량(Q)은 조류계산 시 전체 계통 수급 균형(부하 + 손실 - 타발전기)에 의해 자동 산출됩니다.\n"
+                        "• 아래 표시된 수치는 엑셀에 저장되어 있던 참고값(직전 계산값)이며, 조류계산 시 입력 제약으로 쓰이지 않고 실제 수렴 결과값으로 갱신됩니다.",
+                        style: TextStyle(fontSize: 11, color: Colors.redAccent, height: 1.4),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            if (e.isSynchronousCondenser) ...[
+              Container(
+                margin: const EdgeInsets.symmetric(vertical: 8),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.blue.shade300),
+                ),
+                child: const Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.bolt, size: 20, color: Colors.blueAccent),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        "⚡ 동기조상기 (Synchronous Condenser)\n"
+                        "• 유효 발전 출력 P = 0 MW (터빈 없는 전압 조정기)\n"
+                        "• 목표 단자 전압(V)을 유지하기 위해 필요한 무효전력(Q)을 조류계산이 자동으로 공급/흡수 계산합니다.",
+                        style: TextStyle(fontSize: 11, color: Colors.blueAccent, height: 1.4),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             _buildNumberField(
               label: "목표 단자 전압 V",
               unit: "pu",
@@ -3272,20 +4041,78 @@ class _InspectorPanelState extends State<InspectorPanel> {
               helperText: "발전기가 유지할 전압 (예: 1.04)",
               onChanged: (val) => e.vPu = val,
             ),
-            _buildNumberField(
-              label: e.isSlack ? "초기 유효 발전량 P (슬랙 분담)" : "유효 발전 출력 P",
-              unit: useMw ? "MW" : "pu",
-              controller: pCtrl,
-              helperText: useMw ? "(= ${e.pPu.toStringAsFixed(3)} pu)" : "(= ${(e.pPu * widget.sBase).toStringAsFixed(1)} MW)",
-              onChanged: (val) => e.pPu = useMw ? (val / widget.sBase) : val,
-            ),
-            _buildNumberField(
-              label: "무효 발전 출력 Q",
-              unit: useMw ? "MVAR" : "pu",
-              controller: qCtrl,
-              helperText: useMw ? "(= ${e.qPu.toStringAsFixed(3)} pu)" : "(= ${(e.qPu * widget.sBase).toStringAsFixed(1)} MVAR)",
-              onChanged: (val) => e.qPu = useMw ? (val / widget.sBase) : val,
-            ),
+            if (e.isSlack) ...[
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6.0),
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.grey.shade300),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text("유효 발전량 P (슬랙)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.black87)),
+                          Text(
+                            e.pPu == 0 ? "계산 전 (미지수)" : "${(e.pPu * widget.sBase).toStringAsFixed(2)} MW",
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: e.pPu == 0 ? Colors.grey : Colors.redAccent,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        e.pPu == 0 ? "• 조류계산 실행 시 계통 전체 수급 균형에 맞춰 자동 산출됩니다." : "• 조류계산 수렴 결과 산출된 슬랙 유효 발전량입니다.",
+                        style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                      ),
+                      const Divider(height: 16),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text("무효 발전량 Q (슬랙)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.black87)),
+                          Text(
+                            e.qPu == 0 ? "계산 전 (미지수)" : "${(e.qPu * widget.sBase).toStringAsFixed(2)} MVAR",
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: e.qPu == 0 ? Colors.grey : Colors.blueAccent,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        e.qPu == 0 ? "• 조류계산 실행 시 기준 단자 전압 유지를 위해 자동 산출됩니다." : "• 조류계산 수렴 결과 산출된 슬랙 무효 발전량입니다.",
+                        style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ] else ...[
+              _buildNumberField(
+                label: e.isSynchronousCondenser ? "유효 발전 출력 P (0 MW 고정)" : "유효 발전 출력 P",
+                unit: useMw ? "MW" : "pu",
+                controller: pCtrl,
+                helperText: useMw ? "(= ${e.pPu.toStringAsFixed(3)} pu)" : "(= ${(e.pPu * widget.sBase).toStringAsFixed(1)} MW)",
+                onChanged: (val) => e.pPu = useMw ? (val / widget.sBase) : val,
+              ),
+              _buildNumberField(
+                label: e.isSynchronousCondenser ? "무효 발전 출력 Q (계산 시 자동 산출)" : "무효 발전 출력 Q",
+                unit: useMw ? "MVAR" : "pu",
+                controller: qCtrl,
+                helperText: useMw ? "(= ${e.qPu.toStringAsFixed(3)} pu)" : "(= ${(e.qPu * widget.sBase).toStringAsFixed(1)} MVAR)",
+                onChanged: (val) => e.qPu = useMw ? (val / widget.sBase) : val,
+              ),
+            ],
             if (e.isSlack)
               _buildNumberField(
                 label: "기준 위상각 θ",
@@ -3329,8 +4156,146 @@ class _InspectorPanelState extends State<InspectorPanel> {
             ),
           ],
 
-          // Line Fields
-          if (e.type == Tool.line) ...[
+          // Generator Lead Line Fields
+          if (e.type == Tool.line && isGenLead) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6.0),
+              child: TextField(
+                controller: labelCtrl,
+                decoration: InputDecoration(
+                  labelText: "인입선 라벨 (식별자)",
+                  isDense: true,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onChanged: (text) {
+                  e.label = text;
+                  widget.onStateChanged();
+                },
+              ),
+            ),
+            _buildNumberField(
+              label: "발전 주입 유효전력 P",
+              unit: useMw ? "MW" : "pu",
+              controller: pCtrl,
+              helperText: useMw ? "(= ${e.pPu.toStringAsFixed(3)} pu)" : "(= ${(e.pPu * widget.sBase).toStringAsFixed(1)} MW)",
+              onChanged: (val) {
+                e.pPu = useMw ? (val / widget.sBase) : val;
+                if (lineStartEl?.type == Tool.generator) lineStartEl!.pPu = e.pPu;
+                else if (lineEndEl?.type == Tool.generator) lineEndEl!.pPu = e.pPu;
+                widget.onStateChanged();
+              },
+            ),
+            _buildNumberField(
+              label: "발전 무효전력 Q",
+              unit: useMw ? "MVAR" : "pu",
+              controller: qCtrl,
+              helperText: useMw ? "(= ${e.qPu.toStringAsFixed(3)} pu)" : "(= ${(e.qPu * widget.sBase).toStringAsFixed(1)} MVAR)",
+              onChanged: (val) {
+                e.qPu = useMw ? (val / widget.sBase) : val;
+                if (lineStartEl?.type == Tool.generator) lineStartEl!.qPu = e.qPu;
+                else if (lineEndEl?.type == Tool.generator) lineEndEl!.qPu = e.qPu;
+                widget.onStateChanged();
+              },
+            ),
+            _buildNumberField(
+              label: "인입선 직렬 저항 R",
+              unit: "pu",
+              controller: rCtrl,
+              helperText: "발전기 단자 직결 (기본 0.0)",
+              onChanged: (val) => e.rPu = val,
+            ),
+            _buildNumberField(
+              label: "인입선 직렬 리액턴스 X",
+              unit: "pu",
+              controller: xCtrl,
+              helperText: "발전기 단자 직결 (기본 0.0)",
+              onChanged: (val) => e.xPu = val,
+            ),
+          ] else if (e.type == Tool.line && isLoadLead) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6.0),
+              child: TextField(
+                controller: labelCtrl,
+                decoration: InputDecoration(
+                  labelText: "인입선 라벨 (식별자)",
+                  isDense: true,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onChanged: (text) {
+                  e.label = text;
+                  widget.onStateChanged();
+                },
+              ),
+            ),
+            _buildNumberField(
+              label: "부하 소비 유효전력 P",
+              unit: useMw ? "MW" : "pu",
+              controller: pCtrl,
+              helperText: useMw ? "(= ${e.pPu.toStringAsFixed(3)} pu)" : "(= ${(e.pPu * widget.sBase).toStringAsFixed(1)} MW)",
+              onChanged: (val) {
+                e.pPu = useMw ? (val / widget.sBase) : val;
+                if (lineStartEl?.type == Tool.load) lineStartEl!.pPu = e.pPu;
+                else if (lineEndEl?.type == Tool.load) lineEndEl!.pPu = e.pPu;
+                widget.onStateChanged();
+              },
+            ),
+            _buildNumberField(
+              label: "부하 소비 무효전력 Q",
+              unit: useMw ? "MVAR" : "pu",
+              controller: qCtrl,
+              helperText: useMw ? "(= ${e.qPu.toStringAsFixed(3)} pu)" : "(= ${(e.qPu * widget.sBase).toStringAsFixed(1)} MVAR)",
+              onChanged: (val) {
+                e.qPu = useMw ? (val / widget.sBase) : val;
+                if (lineStartEl?.type == Tool.load) lineStartEl!.qPu = e.qPu;
+                else if (lineEndEl?.type == Tool.load) lineEndEl!.qPu = e.qPu;
+                widget.onStateChanged();
+              },
+            ),
+            _buildNumberField(
+              label: "인입선 직렬 저항 R",
+              unit: "pu",
+              controller: rCtrl,
+              helperText: "부하 단자 직결 (기본 0.0)",
+              onChanged: (val) => e.rPu = val,
+            ),
+            _buildNumberField(
+              label: "인입선 직렬 리액턴스 X",
+              unit: "pu",
+              controller: xCtrl,
+              helperText: "부하 단자 직결 (기본 0.0)",
+              onChanged: (val) => e.xPu = val,
+            ),
+          ] else if (e.type == Tool.line && isTransLead) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6.0),
+              child: TextField(
+                controller: labelCtrl,
+                decoration: InputDecoration(
+                  labelText: "인입선 라벨 (식별자)",
+                  isDense: true,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onChanged: (text) {
+                  e.label = text;
+                  widget.onStateChanged();
+                },
+              ),
+            ),
+            _buildNumberField(
+              label: "인입선 직렬 저항 R",
+              unit: "pu",
+              controller: rCtrl,
+              helperText: "변압기 분기 직렬 저항 (엑셀 기준값 반영)",
+              onChanged: (val) => e.rPu = val,
+            ),
+            _buildNumberField(
+              label: "인입선 직렬 리액턴스 X",
+              unit: "pu",
+              controller: xCtrl,
+              helperText: "변압기 분기 직렬 리액턴스 (엑셀 기준값 반영)",
+              onChanged: (val) => e.xPu = val,
+            ),
+          ] else if (e.type == Tool.line) ...[
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 6.0),
               child: TextField(
@@ -3346,6 +4311,32 @@ class _InspectorPanelState extends State<InspectorPanel> {
                 },
               ),
             ),
+            if (e.isDoubleCircuit) ...[
+              Container(
+                margin: const EdgeInsets.symmetric(vertical: 8),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.teal.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.teal.shade300),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.alt_route, size: 20, color: Colors.teal),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        "⚡ 복회선 적용됨 (Double Circuit - ${e.circuitCount ?? 2}회선 병렬 등가)\n"
+                        "• 모선 간 2가닥 이상의 선로가 병렬 연결된 복회선입니다.\n"
+                        "• 저항(R)과 리액턴스(X)가 1/2로 병렬 합성(등가 임피던스)되어 조류계산에 반영됩니다.",
+                        style: const TextStyle(fontSize: 11, color: Colors.teal, height: 1.4),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             _buildNumberField(
               label: "선로 저항 R",
               unit: "pu",
@@ -3397,29 +4388,30 @@ class _InspectorPanelState extends State<InspectorPanel> {
               label: "권선비 / 탭비 Tap",
               unit: "pu",
               controller: tapCtrl,
-              helperText: "1.00 = 100%, 1.03 = 103%",
+              helperText: "엑셀 transformer 시트 기준 (1.00 = 100%, 1.03 = 103%)",
               onChanged: (val) => e.tapRatio = val,
             ),
-            _buildNumberField(
-              label: "누설 리액턴스 X",
-              unit: "pu",
-              controller: xCtrl,
-              helperText: "변압기 주 리액턴스 (예: 0.025 또는 0.0839)",
-              onChanged: (val) => e.xPu = val,
-            ),
-            _buildNumberField(
-              label: "권선 저항 R",
-              unit: "pu",
-              controller: rCtrl,
-              helperText: "권선 손실 저항 (보통 0.0125 또는 0.0)",
-              onChanged: (val) => e.rPu = val,
-            ),
-            _buildNumberField(
-              label: "여자 서셉턴스 B",
-              unit: "pu",
-              controller: bCtrl,
-              helperText: "보통 0.0",
-              onChanged: (val) => e.bPu = val,
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.blue.shade200),
+              ),
+              child: const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.info_outline, size: 18, color: Colors.blueAccent),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      "변압기는 탭비(Tap)만 보유하며, 임피던스(저항 R, 리액턴스 X)는 엑셀 branch 시트 규격에 따라 변압기와 연결된 선로(Line)에 적용됩니다.",
+                      style: TextStyle(fontSize: 11, color: Color(0xFF1E293B), height: 1.4),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
 
@@ -3651,6 +4643,51 @@ class _InspectorPanelState extends State<InspectorPanel> {
       DrawingElement? endEl;
       try { startEl = widget.elements.firstWhere((el) => el.id == e.startElementId); } catch (_) {}
       try { endEl = widget.elements.firstWhere((el) => el.id == e.endElementId); } catch (_) {}
+
+      final sBusNum = _getBusNumDigits(startEl?.label.isNotEmpty == true ? startEl!.label : e.startElementId);
+      final eBusNum = _getBusNumDigits(endEl?.label.isNotEmpty == true ? endEl!.label : e.endElementId);
+      final bool isBothBuses = (startEl?.type == Tool.bus && endEl?.type == Tool.bus) ||
+          (sBusNum != null && eBusNum != null &&
+           startEl?.type != Tool.generator && endEl?.type != Tool.generator &&
+           startEl?.type != Tool.load && endEl?.type != Tool.load &&
+           startEl?.type != Tool.transformer && endEl?.type != Tool.transformer &&
+           !e.id.contains('trans') && !e.id.contains('load') && !e.id.contains('gen')) ||
+          (RegExp(r'^line_\d+_\d+$').hasMatch(e.id)) ||
+          (RegExp(r'^Line\s+\d+[-~]\d+').hasMatch(e.label));
+      final bool isGen = !isBothBuses && (startEl?.type == Tool.generator || endEl?.type == Tool.generator || e.label.contains("↔ G_") || e.label.contains("G_") || (e.id.startsWith("lead_") && e.id.contains("gen")));
+      final bool isLd = !isBothBuses && !isGen && (startEl?.type == Tool.load || endEl?.type == Tool.load || e.label.contains("↔ Load_") || e.label.contains("Load_") || (e.id.startsWith("lead_") && e.id.contains("load")));
+
+      if (isGen || isLd) {
+        final double pMw = e.pPu * widget.sBase;
+        final double qMvar = e.qPu * widget.sBase;
+        final Color boxColor = isGen ? Colors.green : Colors.orange;
+        return Container(
+          margin: const EdgeInsets.symmetric(vertical: 8),
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: boxColor.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: boxColor.withOpacity(0.4), width: 1.2),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(isGen ? Icons.motion_photos_on : Icons.arrow_downward, size: 16, color: boxColor),
+                  const SizedBox(width: 6),
+                  Text(isGen ? "발전기 인입 조류 (단자 직결)" : "부하 인입 조류 (단자 직결)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: boxColor)),
+                ],
+              ),
+              const SizedBox(height: 8),
+              _resRow(isGen ? "발전 주입 (P)" : "부하 소비 (P)", "${pMw.abs().toStringAsFixed(1)} MW  (${e.pPu.toStringAsFixed(3)} pu)"),
+              _resRow(isGen ? "무효 주입 (Q)" : "무효 소비 (Q)", "${qMvar.abs().toStringAsFixed(1)} MVAR  (${e.qPu.toStringAsFixed(3)} pu)"),
+              _resRow("인입 손실 (P loss)", "0.00 MW (단자 직결 손실 없음)"),
+            ],
+          ),
+        );
+      }
+
       if (startEl == null || endEl == null) return const SizedBox.shrink();
 
       final fb = getBusNum(startEl.label.isNotEmpty ? startEl.label : startEl.id);

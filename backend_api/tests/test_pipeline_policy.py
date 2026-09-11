@@ -246,6 +246,23 @@ class PipelinePolicyTest(unittest.TestCase):
         self.assertEqual(result["lines"][0]["path"], [[10, 20], [30, 40]])
         self.assertEqual(result["lines"][0]["port_distances"]["bus_1"], 5.0)
 
+    def test_validate_graph_detects_nested_bus_collision(self) -> None:
+        nodes = [
+            {"id": "bus_1", "class": "bus", "bbox": [500.0, 500.0, 120.0, 12.0]},
+            {"id": "bus_2", "class": "bus", "bbox": [510.0, 500.0, 15.0, 6.0]},  # Nested inside bus_1
+            {"id": "bus_3", "class": "bus", "bbox": [800.0, 800.0, 100.0, 12.0]}, # Distant normal bus
+        ]
+        lines = [
+            {"connected_to": ["bus_1", "bus_3"]},
+            {"connected_to": ["bus_2", "bus_3"]},
+        ]
+        issues = validate_graph(nodes, lines)
+        collision_issues = [i for i in issues if i.code == "nested_bus_collision"]
+        self.assertEqual(len(collision_issues), 1)
+        self.assertIn("bus_1", collision_issues[0].component_ids)
+        self.assertIn("bus_2", collision_issues[0].component_ids)
+        self.assertEqual(collision_issues[0].severity, "error")
+
 
 if __name__ == "__main__":
     unittest.main()

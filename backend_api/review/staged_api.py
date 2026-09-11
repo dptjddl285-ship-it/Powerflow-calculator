@@ -551,6 +551,7 @@ async def review_verify_final_gate(request: VerifyFinalGateRequest):
             }
 
         # 3. Synchronize IDs so bus_XX, gen_XX, load_XX match bus numbers 1:1!
+        confirmed_nodes = propagate_bus_numbers_to_devices(confirmed_nodes, accepted_lines)
         confirmed_nodes, accepted_lines = synchronize_node_and_line_ids(confirmed_nodes, accepted_lines)
 
         # 4. Deterministic Graph Validation

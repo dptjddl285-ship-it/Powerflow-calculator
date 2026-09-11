@@ -536,6 +536,52 @@ def validate_graph(
                 "Bus has no traced electrical connection",
                 (node_id,),
             ))
+
+    # Check pairwise spatial overlap and nested containment for buses
+    buses = [node for node in node_list if classes.get(str(node.get("id"))) == "bus"]
+    for i in range(len(buses)):
+        b1 = buses[i]
+        b1_id = str(b1.get("id"))
+        b1_box = b1.get("bbox")
+        if not (isinstance(b1_box, (list, tuple)) and len(b1_box) == 4):
+            continue
+        cx1, cy1, w1, h1 = (float(v) for v in b1_box)
+        x1_min, x1_max = cx1 - w1 / 2.0, cx1 + w1 / 2.0
+        y1_min, y1_max = cy1 - h1 / 2.0, cy1 + h1 / 2.0
+        area1 = max(1.0, w1 * h1)
+        for j in range(i + 1, len(buses)):
+            b2 = buses[j]
+            b2_id = str(b2.get("id"))
+            b2_box = b2.get("bbox")
+            if not (isinstance(b2_box, (list, tuple)) and len(b2_box) == 4):
+                continue
+            cx2, cy2, w2, h2 = (float(v) for v in b2_box)
+            x2_min, x2_max = cx2 - w2 / 2.0, cx2 + w2 / 2.0
+            y2_min, y2_max = cy2 - h2 / 2.0, cy2 + h2 / 2.0
+            area2 = max(1.0, w2 * h2)
+
+            inter_w = max(0.0, min(x1_max, x2_max) - max(x1_min, x2_min))
+            inter_h = max(0.0, min(y1_max, y2_max) - max(y1_min, y2_min))
+            inter_area = inter_w * inter_h
+
+            if inter_area <= 0:
+                continue
+
+            iou = inter_area / max(1.0, area1 + area2 - inter_area)
+            containment = inter_area / min(area1, area2)
+            is_nested = (
+                (x1_min <= cx2 <= x1_max and y1_min <= cy2 <= y1_max)
+                or (x2_min <= cx1 <= x2_max and y2_min <= cy1 <= y2_max)
+            )
+
+            if iou >= 0.20 or containment >= 0.40 or is_nested:
+                issues.append(GraphIssue(
+                    "error",
+                    "nested_bus_collision",
+                    f"모선 '{b1_id}'와 '{b2_id}'가 물리적으로 중복/포함되어 검출되었습니다 (동일 위치 모선 충돌 오류).",
+                    (b1_id, b2_id),
+                ))
+
     return issues
 
 

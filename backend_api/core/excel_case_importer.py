@@ -62,6 +62,7 @@ class ExcelCaseImporter:
                     
                 b_type_str = str(row[type_col]).strip() if type_col else 'PQ'
                 is_slack = 'swing' in b_type_str.lower() or 'slack' in b_type_str.lower() or b_type_str == '3'
+                is_pv = 'pv' in b_type_str.lower() or b_type_str == '2' or 'condenser' in b_type_str.lower() or 'syn' in b_type_str.lower() or 'sc' in b_type_str.lower()
                 if is_slack:
                     slack_bus_no = b_no
                     
@@ -74,7 +75,7 @@ class ExcelCaseImporter:
 
                 bus_info = {
                     'bus_number': b_no,
-                    'type': 'Swing' if is_slack else ('PV' if 'pv' in b_type_str.lower() else 'PQ'),
+                    'type': 'Swing' if is_slack else ('PV' if is_pv else 'PQ'),
                     'is_slack': is_slack,
                     'pload_mw': p_mw,
                     'qload_mvar': q_mvar,
@@ -119,8 +120,10 @@ class ExcelCaseImporter:
                         'voltage_setpoint': vset,
                         'gen_count': 0
                     }
-                gen_by_bus[s_b_no]['pg_mw'] += pg
-                gen_by_bus[s_b_no]['qg_mvar'] += qg
+                # For slack generator, P and Q are determined by power flow balance, not input constraints
+                if b_no != slack_bus_no:
+                    gen_by_bus[s_b_no]['pg_mw'] += pg
+                    gen_by_bus[s_b_no]['qg_mvar'] += qg
                 gen_by_bus[s_b_no]['gen_count'] += 1
                 gen_by_bus[s_b_no]['voltage_setpoint'] = vset
 
@@ -139,6 +142,7 @@ class ExcelCaseImporter:
             x_col = next((c for c in df_br.columns if c.strip().lower().startswith('x')), None)
             b_col = next((c for c in df_br.columns if c.strip().lower().startswith('b')), None)
 
+            pair_branches = {}
             for _, row in df_br.iterrows():
                 try:
                     f_b = int(row[from_col])
@@ -148,10 +152,26 @@ class ExcelCaseImporter:
                 r_val = float(row[r_col]) if r_col and pd.notna(row[r_col]) else 0.01
                 x_val = float(row[x_col]) if x_col and pd.notna(row[x_col]) else 0.05
                 b_val = float(row[b_col]) if b_col and pd.notna(row[b_col]) else 0.0
-                
-                br_info = {'from_bus': f_b, 'to_bus': t_b, 'r_pu': r_val, 'x_pu': x_val, 'b_pu': b_val}
-                branch_dict[f"{f_b}_{t_b}"] = br_info
-                branch_dict[f"{t_b}_{f_b}"] = br_info
+                pair_key = (min(f_b, t_b), max(f_b, t_b))
+                pair_branches.setdefault(pair_key, []).append({'r': r_val, 'x': x_val, 'b': b_val})
+
+            for (fb, tb), c_list in pair_branches.items():
+                if len(c_list) == 1:
+                    r_eq, x_eq, b_eq = c_list[0]['r'], c_list[0]['x'], c_list[0]['b']
+                else:
+                    y_tot = sum(1.0 / complex(c['r'], c['x']) for c in c_list)
+                    z_eq = 1.0 / y_tot
+                    r_eq = z_eq.real
+                    x_eq = z_eq.imag
+                    b_eq = sum(c['b'] for c in c_list)
+
+                br_info = {
+                    'from_bus': fb, 'to_bus': tb,
+                    'r_pu': r_eq, 'x_pu': x_eq, 'b_pu': b_eq,
+                    'circuit_count': len(c_list)
+                }
+                branch_dict[f"{fb}_{tb}"] = br_info
+                branch_dict[f"{tb}_{fb}"] = br_info
 
         # 5. Transformer Sheet
         trans_dict = {}
@@ -197,43 +217,68 @@ class ExcelCaseImporter:
         branch_dict = excel_data.get('branches', {})
         trans_dict = excel_data.get('transformers', {})
         slack_bus_no = excel_data.get('slack_bus_number')
+        sbase = float(excel_data.get('sbase_mva', 100.0))
 
         applied_counts = {'bus': 0, 'generator': 0, 'load': 0, 'line': 0, 'transformer': 0}
         
+        # Build ID lookup and type lookup
+        el_by_id = {str(el.get('id')): el for el in elements if el.get('id') is not None}
+
+        def get_el_type(e):
+            if not e:
+                return ''
+            return str(e.get('type') or e.get('class') or e.get('class_name') or '').lower()
+
+        def get_line_endpoints(l):
+            s_id = l.get('startElementId')
+            e_id = l.get('endElementId')
+            conns = l.get('connected_to') or []
+            if s_id is None and len(conns) > 0:
+                s_id = conns[0]
+            if e_id is None and len(conns) > 1:
+                e_id = conns[1]
+            return (str(s_id) if s_id is not None else None, str(e_id) if e_id is not None else None)
+
         el_id_to_bus_num = {}
         for el in elements:
-            el_type = str(el.get('type', '')).lower()
-            if 'bus' in el_type:
+            el_type = get_el_type(el)
+            if 'bus' in el_type and not any(k in el_type for k in ('gen', 'load', 'trans')):
                 b_num = el.get('bus_number')
                 if b_num is None and el.get('label'):
-                    digits = ''.join(c for c in str(el.get('label')) if c.isdigit())
-                    if digits:
-                        b_num = int(digits)
+                    import re
+                    m = re.search(r'(\d+)', str(el.get('label')))
+                    if m:
+                        b_num = int(m.group(1))
                 if b_num is None and el.get('id'):
-                    digits = ''.join(c for c in str(el.get('id')).split('_')[-1] if c.isdigit())
-                    if digits:
-                        b_num = int(digits)
-                if b_num is not None:
-                    el_id_to_bus_num[el['id']] = b_num
+                    import re
+                    m = re.search(r'bus_(\d+)', str(el.get('id')))
+                    if m:
+                        b_num = int(m.group(1))
+                    else:
+                        digits = ''.join(c for c in str(el.get('id')) if c.isdigit())
+                        if digits:
+                            b_num = int(digits)
+                if b_num is not None and el.get('id') is not None:
+                    el_id_to_bus_num[str(el['id'])] = b_num
 
         # Pre-resolve Transformers and their connecting lines
         trans_branch_map = {}
         trans_lead_line_ids = set()
 
         for tr in elements:
-            tr_type = str(tr.get('type', '')).lower()
+            tr_type = get_el_type(tr)
             if 'trans' in tr_type:
-                t_id = tr.get('id')
+                t_id = str(tr.get('id'))
                 conn_buses = []
                 conn_lines = []
 
                 for l in elements:
-                    if 'line' in str(l.get('type', '')).lower():
-                        s_id = l.get('startElementId')
-                        e_id = l.get('endElementId')
+                    if 'line' in get_el_type(l):
+                        s_id, e_id = get_line_endpoints(l)
                         if s_id == t_id or e_id == t_id:
                             conn_lines.append(l)
-                            trans_lead_line_ids.add(l.get('id'))
+                            if l.get('id') is not None:
+                                trans_lead_line_ids.add(str(l.get('id')))
                             other_id = e_id if s_id == t_id else s_id
                             b = el_id_to_bus_num.get(other_id)
                             if b is not None and b not in conn_buses:
@@ -261,12 +306,13 @@ class ExcelCaseImporter:
                     'conn_lines': conn_lines,
                 }
 
+        applied_gen_buses = set()
         for el in elements:
-            el_type = str(el.get('type', '')).lower()
+            el_type = get_el_type(el)
             
             # 1. Bus
-            if 'bus' in el_type and not ('gen' in el_type or 'load' in el_type or 'trans' in el_type):
-                b_num = el_id_to_bus_num.get(el['id'])
+            if 'bus' in el_type and not any(k in el_type for k in ('gen', 'load', 'trans')):
+                b_num = el_id_to_bus_num.get(str(el.get('id')))
                 b_info = bus_dict.get(str(b_num)) or bus_dict.get(b_num)
                 if b_info:
                     el['isSlack'] = b_info['is_slack']
@@ -281,21 +327,46 @@ class ExcelCaseImporter:
 
             # 2. Generator
             elif 'gen' in el_type:
-                parent_id = el.get('parentBusId')
+                parent_id = str(el.get('parentBusId') or '')
                 b_num = el.get('bus_number') or el.get('connected_bus_number') or el_id_to_bus_num.get(parent_id)
+                if b_num is None and el.get('label'):
+                    import re
+                    m = re.search(r'(\d+)', str(el.get('label')))
+                    if m: b_num = int(m.group(1))
+                if b_num is None and el.get('id'):
+                    import re
+                    m = re.search(r'(\d+)', str(el.get('id')))
+                    if m: b_num = int(m.group(1))
+
                 g_info = gen_by_bus.get(str(b_num)) or gen_by_bus.get(b_num)
                 if g_info:
                     el['isSlack'] = g_info['is_slack']
                     el['pPu'] = g_info['pg_pu']
                     el['qPu'] = g_info['qg_pu']
                     el['vPu'] = g_info['voltage_setpoint']
-                    el['label'] = f"G_{b_num}" + (" (Slack)" if g_info['is_slack'] else "")
+                    is_sc = (not g_info['is_slack']) and (g_info['pg_pu'] == 0 or abs(g_info['pg_pu']) < 1e-4)
+                    el['isSynchronousCondenser'] = is_sc
+                    if is_sc:
+                        el['label'] = f"SC_{b_num} (동기조상기)"
+                    else:
+                        el['label'] = f"G_{b_num}" + (" (Slack)" if g_info['is_slack'] else "")
                     applied_counts['generator'] += 1
+                    if b_num is not None:
+                        applied_gen_buses.add(int(b_num))
 
             # 3. Load
             elif 'load' in el_type:
-                parent_id = el.get('parentBusId')
+                parent_id = str(el.get('parentBusId') or '')
                 b_num = el.get('bus_number') or el.get('connected_bus_number') or el_id_to_bus_num.get(parent_id)
+                if b_num is None and el.get('label'):
+                    import re
+                    m = re.search(r'(\d+)', str(el.get('label')))
+                    if m: b_num = int(m.group(1))
+                if b_num is None and el.get('id'):
+                    import re
+                    m = re.search(r'(\d+)', str(el.get('id')))
+                    if m: b_num = int(m.group(1))
+
                 b_info = bus_dict.get(str(b_num)) or bus_dict.get(b_num)
                 if b_info:
                     el['pPu'] = b_info['pload_pu']
@@ -305,7 +376,7 @@ class ExcelCaseImporter:
 
             # 4. Transformer
             elif 'trans' in el_type:
-                t_id = el.get('id')
+                t_id = str(el.get('id'))
                 t_branch = trans_branch_map.get(t_id, {})
                 fb = t_branch.get('fb')
                 tb = t_branch.get('tb')
@@ -328,7 +399,7 @@ class ExcelCaseImporter:
                     el['label'] = f"T {fb}-{tb} (Tap: {tap})"
                 applied_counts['transformer'] += 1
 
-                # Apply to all connecting lines of this transformer
+                # Connecting lines to a transformer reflect the branch impedance
                 for l in conn_lines:
                     l['rPu'] = r_val
                     l['xPu'] = x_val
@@ -341,17 +412,123 @@ class ExcelCaseImporter:
 
             # 5. Normal Line (not connected to a transformer)
             elif 'line' in el_type:
-                if el.get('id') in trans_lead_line_ids:
+                if str(el.get('id')) in trans_lead_line_ids:
                     # Already updated via its transformer
                     continue
 
-                start_id = el.get('startElementId')
-                end_id = el.get('endElementId')
+                start_id, end_id = get_line_endpoints(el)
+                s_el = el_by_id.get(start_id)
+                e_el = el_by_id.get(end_id)
+                s_type = get_el_type(s_el)
+                e_type = get_el_type(e_el)
+                s_str = str(start_id or '').lower()
+                e_str = str(end_id or '').lower()
+                lbl_str = str(el.get('label') or '').lower()
+                id_str = str(el.get('id') or '').lower()
+
                 fb = el_id_to_bus_num.get(start_id)
                 tb = el_id_to_bus_num.get(end_id)
+
+                # Check if this line is a terminal connection lead to a Generator or Load
+                is_gen = 'gen' in s_type or 'gen' in e_type or 'gen' in s_str or 'gen' in e_str or 'g_' in s_str or 'g_' in e_str or 'gen' in lbl_str or 'gen' in id_str
+                is_load = 'load' in s_type or 'load' in e_type or 'load' in s_str or 'load' in e_str or 'load' in lbl_str or 'load' in id_str
+
+                if is_gen:
+                    gen_el = s_el if ('gen' in s_type or 'gen' in s_str or 'g_' in s_str) else e_el
+                    bus_el = e_el if gen_el == s_el else s_el
+                    b_num = el_id_to_bus_num.get(str(bus_el.get('id'))) if bus_el and bus_el.get('id') is not None else (fb if fb is not None else tb)
+                    if b_num is None and gen_el:
+                        b_num = gen_el.get('bus_number') or gen_el.get('connected_bus_number')
+                        if b_num is None and gen_el.get('parentBusId'):
+                            b_num = el_id_to_bus_num.get(str(gen_el.get('parentBusId')))
+                        if b_num is None and gen_el.get('label'):
+                            import re
+                            m = re.search(r'(\d+)', str(gen_el.get('label')))
+                            if m: b_num = int(m.group(1))
+                        if b_num is None and gen_el.get('id'):
+                            import re
+                            m = re.search(r'(\d+)', str(gen_el.get('id')))
+                            if m: b_num = int(m.group(1))
+                    if b_num is None and el.get('label'):
+                        import re
+                        m = re.search(r'(\d+)', str(el.get('label')))
+                        if m: b_num = int(m.group(1))
+
+                    el['rPu'] = 0.0
+                    el['xPu'] = 0.0
+                    el['bPu'] = 0.0
+                    el['tapRatio'] = 1.0
+                    if b_num is not None:
+                        g_info = gen_by_bus.get(str(b_num)) or gen_by_bus.get(b_num)
+                        if g_info:
+                            el['pPu'] = g_info.get('pg_pu', 0.0)
+                            el['qPu'] = g_info.get('qg_pu', 0.0)
+                            p_mw = g_info.get('pg_mw', round(el['pPu'] * sbase, 1))
+                            el['label'] = f"Line Bus {b_num} ↔ G_{b_num} ({p_mw:.1f} MW)"
+                        else:
+                            el['pPu'] = 0.0
+                            el['qPu'] = 0.0
+                            el['label'] = f"Line Bus {b_num} ↔ G_{b_num}"
+                    else:
+                        el['pPu'] = 0.0
+                        el['qPu'] = 0.0
+                    applied_counts['line'] += 1
+                    continue
+
+                if is_load:
+                    load_el = s_el if ('load' in s_type or 'load' in s_str) else e_el
+                    bus_el = e_el if load_el == s_el else s_el
+                    b_num = el_id_to_bus_num.get(str(bus_el.get('id'))) if bus_el and bus_el.get('id') is not None else (fb if fb is not None else tb)
+                    if b_num is None and load_el:
+                        b_num = load_el.get('bus_number') or load_el.get('connected_bus_number')
+                        if b_num is None and load_el.get('parentBusId'):
+                            b_num = el_id_to_bus_num.get(str(load_el.get('parentBusId')))
+                        if b_num is None and load_el.get('label'):
+                            import re
+                            m = re.search(r'(\d+)', str(load_el.get('label')))
+                            if m: b_num = int(m.group(1))
+                        if b_num is None and load_el.get('id'):
+                            import re
+                            m = re.search(r'(\d+)', str(load_el.get('id')))
+                            if m: b_num = int(m.group(1))
+                    if b_num is None and el.get('label'):
+                        import re
+                        m = re.search(r'(\d+)', str(el.get('label')))
+                        if m: b_num = int(m.group(1))
+
+                    el['rPu'] = 0.0
+                    el['xPu'] = 0.0
+                    el['bPu'] = 0.0
+                    el['tapRatio'] = 1.0
+                    if b_num is not None:
+                        b_info = bus_dict.get(str(b_num)) or bus_dict.get(b_num)
+                        if b_info:
+                            el['pPu'] = b_info.get('pload_pu', 0.0)
+                            el['qPu'] = b_info.get('qload_pu', 0.0)
+                            p_mw = b_info.get('pload_mw', round(el['pPu'] * sbase, 1))
+                            el['label'] = f"Line Bus {b_num} ↔ Load_{b_num} ({p_mw:.1f} MW)"
+                        else:
+                            el['pPu'] = 0.0
+                            el['qPu'] = 0.0
+                            el['label'] = f"Line Bus {b_num} ↔ Load_{b_num}"
+                    else:
+                        el['pPu'] = 0.0
+                        el['qPu'] = 0.0
+                    applied_counts['line'] += 1
+                    continue
+
+                # Also skip lead lines that have lead prefix or ↔ in name
+                is_lead = ('lead' in id_str or '↔' in str(el.get('label') or '') or 'lead' in lbl_str)
+                if is_lead:
+                    el['rPu'] = 0.0
+                    el['xPu'] = 0.0
+                    el['bPu'] = 0.0
+                    el['tapRatio'] = 1.0
+                    continue
+
                 if fb is None or tb is None:
                     import re
-                    m = re.search(r'(\d+)\s*[-~_↔]\s*(\d+)', str(el.get('label') or el.get('id') or ''))
+                    m = re.search(r'(\d+)\s*[-~_]\s*(\d+)', str(el.get('label') or el.get('id') or ''))
                     if m:
                         fb, tb = int(m.group(1)), int(m.group(2))
 
@@ -360,6 +537,11 @@ class ExcelCaseImporter:
                     el['rPu'] = br_info['r_pu']
                     el['xPu'] = br_info['x_pu']
                     el['bPu'] = br_info.get('b_pu', 0.0)
+                    c_count = br_info.get('circuit_count', 1)
+                    el['circuitCount'] = c_count
+                    if c_count > 1:
+                        el['isDoubleCircuit'] = True
+                        el['label'] = f"Line {fb}-{tb} ({c_count}회선 병렬 등가)"
                     applied_counts['line'] += 1
 
                 # Check if this branch is also a transformer with off-nominal tap
@@ -368,8 +550,29 @@ class ExcelCaseImporter:
                     el['tapRatio'] = tr_info['tap']
                     el['tap'] = tr_info['tap']
                     applied_counts['transformer'] += 1
-                elif 'tapRatio' not in el:
-                    el['tapRatio'] = 1.0
+        # Ensure all generators from Excel exist in elements (e.g. Bus 14 missing on diagram)
+        for b_str, g_info in gen_by_bus.items():
+            b_num = int(b_str)
+            if b_num not in applied_gen_buses:
+                target_bus_id = None
+                for bid, bno in el_id_to_bus_num.items():
+                    if bno == b_num:
+                        target_bus_id = bid
+                        break
+                if target_bus_id:
+                    auto_gen = {
+                        'id': f"gen_auto_{b_num}",
+                        'type': 'generator',
+                        'parentBusId': target_bus_id,
+                        'bus_number': b_num,
+                        'isSlack': g_info['is_slack'],
+                        'pPu': g_info['pg_pu'],
+                        'qPu': g_info['qg_pu'],
+                        'vPu': g_info['voltage_setpoint'],
+                        'label': f"G_{b_num}" + (" (Slack)" if g_info['is_slack'] else ""),
+                    }
+                    elements.append(auto_gen)
+                    applied_counts['generator'] += 1
 
         summary = {
             'slack_bus_number': slack_bus_no,

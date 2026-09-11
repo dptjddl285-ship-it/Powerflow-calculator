@@ -110,5 +110,36 @@ class TestExcelCaseImporter(unittest.TestCase):
         self.assertAlmostEqual(line2['xPu'], 0.0839)
         self.assertIn('3-24', line2['label'])
 
+    def test_apply_to_generator_and_load_leads(self):
+        if not os.path.exists(self.excel_path):
+            self.skipTest(f"Excel file not found at {self.excel_path}")
+
+        data = self.importer.parse_excel(self.excel_path)
+        dummy_elements = [
+            {'id': 'bus_1', 'type': 'bus', 'label': '1', 'bus_number': 1},
+            {'id': 'bus_2', 'type': 'bus', 'label': '2', 'bus_number': 2},
+            {'id': 'node_gen_1', 'type': 'generator', 'label': 'G_1', 'parentBusId': 'bus_1'},
+            {'id': 'node_load_2', 'type': 'load', 'label': 'Load_2', 'parentBusId': 'bus_2'},
+            # Line connected via connected_to
+            {'id': 'line_lead_g1', 'type': 'line', 'connected_to': ['bus_1', 'node_gen_1']},
+            # Line connected via startElementId and endElementId
+            {'id': 'line_lead_l2', 'type': 'line', 'startElementId': 'bus_2', 'endElementId': 'node_load_2'},
+        ]
+
+        updated, summary = self.importer.apply_to_elements(dummy_elements, data)
+
+        line_g1 = next(e for e in updated if e['id'] == 'line_lead_g1')
+        self.assertEqual(line_g1['rPu'], 0.0)
+        self.assertEqual(line_g1['xPu'], 0.0)
+        self.assertGreater(line_g1['pPu'], 0.0)
+        self.assertIn('Line Bus 1 ↔ G_1', line_g1['label'])
+
+        line_l2 = next(e for e in updated if e['id'] == 'line_lead_l2')
+        self.assertEqual(line_l2['rPu'], 0.0)
+        self.assertEqual(line_l2['xPu'], 0.0)
+        self.assertGreater(line_l2['pPu'], 0.0)
+        self.assertIn('Line Bus 2 ↔ Load_2', line_l2['label'])
+
 if __name__ == '__main__':
     unittest.main()
+

@@ -151,6 +151,9 @@ class ReviewNodeItem {
       'number_source': numberSource,
       'label_offset_dx': labelOffsetDx,
       'label_offset_dy': labelOffsetDy,
+      'bus_number': busNumber,
+      'connected_bus_number': connectedBusNumber,
+      'connected_bus_id': connectedBusId,
     };
   }
 

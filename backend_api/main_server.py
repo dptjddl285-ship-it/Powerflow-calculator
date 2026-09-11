@@ -140,14 +140,16 @@ async def upload_excel(file: UploadFile = File(...)):
 
 @app.get("/load_default_excel")
 async def load_default_excel():
-    sample_path = Path(__file__).parent / "sample_cases" / "ac_case25.xlsx"
+    sample_path = Path(__file__).parent / "sample_cases" / "case24_psse.xlsx"
     if not sample_path.exists():
-        return {"status": "error", "message": "기본 ac_case25 샘플 파일을 찾을 수 없습니다."}
+        sample_path = Path(__file__).parent / "sample_cases" / "ac_case25.xlsx"
+    if not sample_path.exists():
+        return {"status": "error", "message": "기본 샘플 파일을 찾을 수 없습니다."}
     try:
         with open(sample_path, "rb") as f:
             contents = f.read()
         parsed_case = excel_importer.parse_excel(contents)
-        print(f"✅ 기본 엑셀(ac_case25) 로드 성공! 슬랙 모선: #{parsed_case['slack_bus_number']}")
+        print(f"✅ 기본 엑셀 로드 성공! 슬랙 모선: #{parsed_case['slack_bus_number']}")
         return {"status": "success", "data": parsed_case}
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -260,9 +262,10 @@ async def download_result_excel():
 
     # Sheet 2: Line Flows
     ws_line = wb.create_sheet(title="Line Flows")
-    ws_line.append(["Line", "From Bus", "To Bus", "P From (MW)", "Q From (MVAR)", "P To (MW)", "Q To (MVAR)", "Loss P (MW)", "Loss Q (MVAR)"])
-    for r in last_simulation_result.get("line_results", []):
+    ws_line.append(["No.", "Line", "From Bus", "To Bus", "P From (MW)", "Q From (MVAR)", "P To (MW)", "Q To (MVAR)", "Loss P (MW)", "Loss Q (MVAR)"])
+    for idx, r in enumerate(last_simulation_result.get("line_results", []), 1):
         ws_line.append([
+            idx,
             r.get("label"),
             r.get("from_bus"),
             r.get("to_bus"),

@@ -1,9 +1,13 @@
-# -*- coding: utf-8 -*-
 import unittest
 import json
+import sys
+import os
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 import cv2
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.bus_number_linker import link_and_validate_bus_numbers
 from review.vision_adapter import build_graph_document
 from review.graph_document import ReviewState

@@ -51,15 +51,15 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   String _connFilterStatus =
       'ALL'; // ALL, AMBIGUOUS, AUTO_CONFIRMED, HUMAN_CONFIRMED, REJECTED, ERROR_ONLY
   String _connSortOption = 'SEVERITY'; // SEVERITY, ID_ASC
-  static const int _nodePageSize = 12;
+  static const int _nodePageSize = 8;
   int _nodePage = 0;
-  static const int _linePageSize = 16;
+  static const int _linePageSize = 10;
   int _linePage = 0;
 
   // Bus Number Mapping Review (Phase 3)
   String _busFilterStatus = 'ALL'; // ALL, UNCERTAIN, VERIFIED
   int _busPage = 0;
-  static const int _busPageSize = 12;
+  static const int _busPageSize = 7;
   final TextEditingController _busNumberEditController = TextEditingController();
   Map<String, dynamic>? _importedExcelData;
 
@@ -621,10 +621,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF252538),
+        backgroundColor: Colors.white,
         title: Text(
           "${node.id} 표시명 / 번호 수정",
-          style: const TextStyle(color: Colors.white, fontSize: 15),
+          style: const TextStyle(
+            color: Color(0xFF0F172A),
+            fontSize: 15,
+            fontWeight: FontWeight.bold,
+          ),
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -632,15 +636,15 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           children: [
             const Text(
               "도면의 실제 번호와 일치하도록 표시명을 수정하세요:",
-              style: TextStyle(color: Colors.grey, fontSize: 12),
+              style: TextStyle(color: Color(0xFF64748B), fontSize: 12),
             ),
             const SizedBox(height: 10),
             TextField(
               controller: controller,
-              style: const TextStyle(color: Colors.white),
+              style: const TextStyle(color: Color(0xFF0F172A)),
               decoration: const InputDecoration(
                 labelText: "표시 이름 (예: BUS 4, LOAD 2)",
-                labelStyle: TextStyle(color: Colors.blueAccent),
+                labelStyle: TextStyle(color: Color(0xFF2563EB)),
                 border: OutlineInputBorder(),
               ),
             ),
@@ -649,7 +653,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text("취소", style: TextStyle(color: Colors.grey)),
+            child: const Text("취소", style: TextStyle(color: Color(0xFF64748B))),
           ),
           ElevatedButton(
             onPressed: () {
@@ -661,8 +665,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               }
               Navigator.pop(ctx);
             },
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
-            child: const Text("저장", style: TextStyle(color: Colors.white)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2563EB),
+              foregroundColor: Colors.white,
+            ),
+            child: const Text("저장"),
           ),
         ],
       ),
@@ -804,9 +811,19 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       final parsedLines = rawLines
           .map((l) => ReviewLineItem.fromJson(l as Map<String, dynamic>))
           .toList();
+      final rawNodes = res['nodes'] as List?;
+      List<ReviewNodeItem>? parsedNodes;
+      if (rawNodes != null && rawNodes.isNotEmpty) {
+        parsedNodes = rawNodes
+            .map((n) => ReviewNodeItem.fromJson(n as Map<String, dynamic>))
+            .toList();
+      }
 
       setState(() {
         _currentPhase = ReviewPhase.connectionReview;
+        if (parsedNodes != null) {
+          _workingNodes = parsedNodes;
+        }
         _workingLines = parsedLines;
         _selectedLine = _workingLines.isNotEmpty ? _workingLines.first : null;
         _selectedNode = null;
@@ -1177,15 +1194,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1E1E2E),
+      backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
         toolbarHeight: 42,
+        elevation: 0,
+        shape: const Border(bottom: BorderSide(color: Color(0xFFE2E8F0), width: 1)),
         title: SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.bolt, color: Colors.blueAccent, size: 20),
+              const Icon(Icons.bolt, color: Color(0xFF2563EB), size: 20),
               const SizedBox(width: 6),
               Text(
                 _currentPhase == ReviewPhase.objectReview
@@ -1195,14 +1214,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     : _currentPhase == ReviewPhase.connectionReview
                     ? "PowerLens AI 도면 검수 · ③ 선로 결선 검수"
                     : "PowerLens AI 도면 검수 · ④ 최종 확인 & 엑셀",
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13.5),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13.5,
+                  color: Color(0xFF0F172A),
+                ),
               ),
             ],
           ),
         ),
-        backgroundColor: const Color(0xFF181825),
-        foregroundColor: Colors.white,
-        elevation: 1,
+        backgroundColor: Colors.white,
+        foregroundColor: const Color(0xFF0F172A),
         actions: [
           // Step Badges
           _buildPhaseBadge(
@@ -1210,19 +1232,19 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             _currentPhase == ReviewPhase.objectReview,
             _isObjectVerified,
           ),
-          const Icon(Icons.arrow_right, color: Colors.grey, size: 14),
+          const Icon(Icons.arrow_right, color: Color(0xFF94A3B8), size: 14),
           _buildPhaseBadge(
             "② 모선 매핑",
             _currentPhase == ReviewPhase.busMappingReview,
             _canVerifyBusGate,
           ),
-          const Icon(Icons.arrow_right, color: Colors.grey, size: 14),
+          const Icon(Icons.arrow_right, color: Color(0xFF94A3B8), size: 14),
           _buildPhaseBadge(
             "③ 결선 검수",
             _currentPhase == ReviewPhase.connectionReview,
             _workingLines.isNotEmpty && _lineAmbiguousCount == 0,
           ),
-          const Icon(Icons.arrow_right, color: Colors.grey, size: 14),
+          const Icon(Icons.arrow_right, color: Color(0xFF94A3B8), size: 14),
           _buildPhaseBadge(
             "④ 최종 & 엑셀",
             _currentPhase == ReviewPhase.verifiedFinal,
@@ -1231,14 +1253,16 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           const SizedBox(width: 8),
           ElevatedButton.icon(
             onPressed: _importExcelInReview,
-            icon: const Icon(Icons.table_chart, size: 14, color: Colors.greenAccent),
+            icon: const Icon(Icons.table_chart, size: 14, color: Color(0xFF0D9488)),
             label: Text(
               _importedExcelData != null ? "엑셀 적용됨 (#${_importedExcelData!['slack_bus_number']})" : "엑셀 불러오기",
-              style: const TextStyle(fontSize: 11, color: Colors.white),
+              style: const TextStyle(fontSize: 11, color: Color(0xFF0F172A), fontWeight: FontWeight.bold),
             ),
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.teal[800],
-              foregroundColor: Colors.white,
+              backgroundColor: const Color(0xFFF1F5F9),
+              foregroundColor: const Color(0xFF0F172A),
+              elevation: 0,
+              side: const BorderSide(color: Color(0xFFCBD5E1)),
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               visualDensity: VisualDensity.compact,
             ),
@@ -1247,9 +1271,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           ElevatedButton.icon(
             onPressed: _pickAndUploadImage,
             icon: const Icon(Icons.file_upload, size: 15),
-            label: const Text("도면 이미지 업로드", style: TextStyle(fontSize: 11)),
+            label: const Text("도면 이미지 업로드", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.blueAccent,
+              backgroundColor: const Color(0xFF2563EB),
               foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               visualDensity: VisualDensity.compact,
@@ -1267,24 +1291,27 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               : _buildMainReviewView(),
           if (_isLoading)
             Container(
-              color: Colors.black.withValues(alpha: 0.65),
+              color: Colors.black.withValues(alpha: 0.35),
               child: Center(
                 child: Card(
-                  color: const Color(0xFF252538),
+                  color: Colors.white,
+                  elevation: 6,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   child: Padding(
                     padding: const EdgeInsets.all(24.0),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         const CircularProgressIndicator(
-                          color: Colors.blueAccent,
+                          color: Color(0xFF2563EB),
                         ),
                         const SizedBox(height: 16),
                         Text(
                           _loadingMessage ?? "처리 중...",
                           style: const TextStyle(
-                            color: Colors.white,
+                            color: Color(0xFF0F172A),
                             fontSize: 14,
+                            fontWeight: FontWeight.bold,
                           ),
                         ),
                       ],
@@ -1299,14 +1326,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   Widget _buildPhaseBadge(String label, bool isCurrent, bool isCompleted) {
-    Color bg = const Color(0xFF252538);
-    Color text = Colors.grey;
+    Color bg = const Color(0xFFF1F5F9);
+    Color text = const Color(0xFF64748B);
+    Color border = const Color(0xFFE2E8F0);
     if (isCompleted) {
-      bg = Colors.green.withValues(alpha: 0.2);
-      text = Colors.greenAccent;
+      bg = const Color(0xFFDCFCE7);
+      text = const Color(0xFF16A34A);
+      border = const Color(0xFF86EFAC);
     } else if (isCurrent) {
-      bg = Colors.blueAccent.withValues(alpha: 0.25);
-      text = Colors.blueAccent;
+      bg = const Color(0xFFDBEAFE);
+      text = const Color(0xFF2563EB);
+      border = const Color(0xFF93C5FD);
     }
 
     return Container(
@@ -1314,6 +1344,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: border),
       ),
       child: Text(
         isCompleted ? "$label ✓" : label,
@@ -1334,12 +1365,19 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           width: 550,
           height: 320,
           decoration: BoxDecoration(
-            color: const Color(0xFF252538),
+            color: Colors.white,
             borderRadius: BorderRadius.circular(16),
             border: Border.all(
-              color: Colors.blueAccent.withValues(alpha: 0.5),
-              width: 2,
+              color: const Color(0xFFCBD5E1),
+              width: 1.5,
             ),
+            boxShadow: const [
+              BoxShadow(
+                color: Colors.black12,
+                blurRadius: 8,
+                offset: Offset(0, 3),
+              ),
+            ],
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -1347,21 +1385,21 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               const Icon(
                 Icons.cloud_upload_outlined,
                 size: 72,
-                color: Colors.blueAccent,
+                color: Color(0xFF2563EB),
               ),
               const SizedBox(height: 16),
               const Text(
                 "전력계통 단선도(SLD) 이미지를 업로드하세요",
                 style: TextStyle(
-                  color: Colors.white,
+                  color: Color(0xFF0F172A),
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
                 ),
               ),
               const SizedBox(height: 8),
-              Text(
+              const Text(
                 "객체 확인 → 결선 확인 → 전기 검증 → 회로도 생성",
-                style: TextStyle(color: Colors.grey.shade400, fontSize: 13),
+                style: TextStyle(color: Color(0xFF64748B), fontSize: 13),
               ),
               const SizedBox(height: 20),
               ElevatedButton.icon(
@@ -1369,7 +1407,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 icon: const Icon(Icons.add_photo_alternate),
                 label: const Text("도면 파일 선택"),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blueAccent,
+                  backgroundColor: const Color(0xFF2563EB),
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(
                     horizontal: 20,
@@ -1512,9 +1550,16 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       margin: const EdgeInsets.fromLTRB(8, 2, 8, 2),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: const Color(0xFF202437),
+        color: Colors.white,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.blueAccent.withValues(alpha: 0.3)),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black12,
+            blurRadius: 4,
+            offset: Offset(0, 1),
+          ),
+        ],
       ),
       child: Row(
         children: [
@@ -1522,12 +1567,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             width: 24,
             height: 24,
             decoration: BoxDecoration(
-              color: Colors.blueAccent.withValues(alpha: 0.16),
+              color: const Color(0xFFEFF6FF),
               borderRadius: BorderRadius.circular(6),
             ),
             child: const Icon(
               Icons.auto_awesome,
-              color: Colors.blueAccent,
+              color: Color(0xFF2563EB),
               size: 14,
             ),
           ),
@@ -1541,32 +1586,32 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 const Text(
                   'AI 검토 현황',
                   style: TextStyle(
-                    color: Colors.white,
+                    color: Color(0xFF0F172A),
                     fontSize: 11,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
                 Text(
                   isObjectPhase ? '객체 인식 검수' : '결선 및 전기 검수',
-                  style: const TextStyle(color: Colors.white54, fontSize: 8.5),
+                  style: const TextStyle(color: Color(0xFF64748B), fontSize: 8.5),
                 ),
               ],
             ),
           ),
           const SizedBox(width: 6),
-          _buildAiMetric('자동 승인', autoConfirmedCount, Colors.greenAccent),
+          _buildAiMetric('자동 승인', autoConfirmedCount, const Color(0xFF16A34A)),
           const SizedBox(width: 4),
           _buildAiMetric(
             '검토 필요',
             isObjectPhase ? _objSuspiciousCount : _lineAmbiguousCount,
-            Colors.orangeAccent,
+            const Color(0xFFD97706),
             icon: Icons.warning_amber_rounded,
           ),
           const SizedBox(width: 4),
           _buildAiMetric(
             isObjectPhase ? '누락 후보' : '전기 오류',
             isObjectPhase ? _unresolvedCandidatesCount : _criticalIssuesCount,
-            isObjectPhase ? Colors.purpleAccent : Colors.redAccent,
+            isObjectPhase ? const Color(0xFF9333EA) : const Color(0xFFDC2626),
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -1574,7 +1619,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               _nextReviewActionText,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: Colors.white70, fontSize: 10.5),
+              style: const TextStyle(color: Color(0xFF334155), fontSize: 10.5),
             ),
           ),
           const SizedBox(width: 6),
@@ -1584,10 +1629,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               hasNextTask ? Icons.arrow_forward_rounded : Icons.check_rounded,
               size: 13,
             ),
-            label: Text(hasNextTask ? '다음 검토' : '정리 완료', style: const TextStyle(fontSize: 10.5)),
+            label: Text(hasNextTask ? '다음 검토' : '정리 완료', style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold)),
             style: OutlinedButton.styleFrom(
-              foregroundColor: Colors.blueAccent,
-              side: BorderSide(color: Colors.blueAccent.withValues(alpha: 0.5)),
+              foregroundColor: const Color(0xFF2563EB),
+              side: const BorderSide(color: Color(0xFF3B82F6)),
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               visualDensity: VisualDensity.compact,
             ),
@@ -1620,7 +1665,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                         horizontal: 8,
                         vertical: 2,
                       ),
-                      color: const Color(0xFF181825),
+                      decoration: const BoxDecoration(
+                        color: Colors.white,
+                        border: Border(
+                          bottom: BorderSide(color: Color(0xFFE2E8F0), width: 1),
+                        ),
+                      ),
                       child: SingleChildScrollView(
                         scrollDirection: Axis.horizontal,
                         child: Row(
@@ -1628,7 +1678,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                             Text(
                               "도면 해상도: ${_document!.image.width} × ${_document!.image.height} px",
                               style: const TextStyle(
-                                color: Colors.grey,
+                                color: Color(0xFF64748B),
                                 fontSize: 11,
                               ),
                             ),
@@ -1640,29 +1690,28 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                     : Icons.visibility_off,
                                 size: 13,
                                 color: _showCanvasLabels
-                                    ? Colors.white
-                                    : Colors.grey,
+                                    ? const Color(0xFF2563EB)
+                                    : const Color(0xFF64748B),
                               ),
                               label: Text(
                                 _showCanvasLabels ? "라벨 표시" : "라벨 숨김",
                                 style: TextStyle(
                                   color: _showCanvasLabels
-                                      ? Colors.white
-                                      : Colors.grey,
+                                      ? const Color(0xFF2563EB)
+                                      : const Color(0xFF64748B),
                                   fontSize: 10.5,
+                                  fontWeight: _showCanvasLabels ? FontWeight.bold : FontWeight.normal,
                                 ),
                               ),
                               selected: _showCanvasLabels,
                               onSelected: (val) =>
                                   setState(() => _showCanvasLabels = val),
-                              selectedColor: Colors.blueAccent.withValues(
-                                alpha: 0.35,
-                              ),
-                              backgroundColor: const Color(0xFF252538),
+                              selectedColor: const Color(0xFFEFF6FF),
+                              backgroundColor: const Color(0xFFF1F5F9),
                               side: BorderSide(
                                 color: _showCanvasLabels
-                                    ? Colors.blueAccent
-                                    : Colors.grey.withValues(alpha: 0.4),
+                                    ? const Color(0xFF3B82F6)
+                                    : const Color(0xFFCBD5E1),
                                 width: 1.0,
                               ),
                               visualDensity: VisualDensity.compact,
@@ -1674,7 +1723,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                 icon: const Icon(
                                   Icons.arrow_back,
                                   size: 15,
-                                  color: Colors.grey,
+                                  color: Color(0xFF64748B),
                                 ),
                                 tooltip: "이전 객체",
                                 visualDensity: VisualDensity.compact,
@@ -1686,7 +1735,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                 icon: const Icon(
                                   Icons.arrow_forward,
                                   size: 15,
-                                  color: Colors.grey,
+                                  color: Color(0xFF64748B),
                                 ),
                                 tooltip: "다음 객체",
                                 visualDensity: VisualDensity.compact,
@@ -1699,7 +1748,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                 icon: const Icon(
                                   Icons.history_toggle_off,
                                   size: 15,
-                                  color: Colors.orangeAccent,
+                                  color: Color(0xFFD97706),
                                 ),
                                 tooltip: "이전 의심 객체",
                                 visualDensity: VisualDensity.compact,
@@ -1711,7 +1760,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                 icon: const Icon(
                                   Icons.warning_amber_rounded,
                                   size: 15,
-                                  color: Colors.orangeAccent,
+                                  color: Color(0xFFD97706),
                                 ),
                                 tooltip: "다음 의심 객체",
                                 visualDensity: VisualDensity.compact,
@@ -1726,10 +1775,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                   icon: const Icon(Icons.done_all, size: 13),
                                   label: Text(
                                     "정상 객체 승인 ($_objDetectedCount)",
-                                    style: const TextStyle(fontSize: 10.5),
+                                    style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold),
                                   ),
                                   style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.teal.shade800,
+                                    backgroundColor: const Color(0xFF0D9488),
                                     foregroundColor: Colors.white,
                                     padding: const EdgeInsets.symmetric(
                                       horizontal: 8,
@@ -1749,8 +1798,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                 selected: _isManualAddMode,
                                 onSelected: (val) =>
                                     setState(() => _isManualAddMode = val),
-                                selectedColor: Colors.purpleAccent.withValues(
-                                  alpha: 0.35,
+                                selectedColor: const Color(0xFFF3E8FF),
+                                backgroundColor: const Color(0xFFF1F5F9),
+                                side: BorderSide(
+                                  color: _isManualAddMode
+                                      ? const Color(0xFF9333EA)
+                                      : const Color(0xFFCBD5E1),
                                 ),
                                 visualDensity: VisualDensity.compact,
                               ),
@@ -1759,17 +1812,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                 Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 6),
                                   decoration: BoxDecoration(
-                                    color: const Color(0xFF252538),
+                                    color: const Color(0xFFF8FAFC),
                                     borderRadius: BorderRadius.circular(4),
-                                    border: Border.all(color: Colors.purpleAccent.withValues(alpha: 0.5)),
+                                    border: Border.all(color: const Color(0xFFCBD5E1)),
                                   ),
                                   child: DropdownButton<String>(
                                     value: _manualAddClass,
-                                    dropdownColor: const Color(0xFF252538),
+                                    dropdownColor: Colors.white,
                                     isDense: true,
                                     underline: const SizedBox.shrink(),
                                     style: const TextStyle(
-                                      color: Colors.white,
+                                      color: Color(0xFF0F172A),
                                       fontSize: 11,
                                     ),
                                     items: const [
@@ -1803,10 +1856,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                   icon: const Icon(Icons.done_all, size: 13),
                                   label: Text(
                                     "정상 결선 승인 ($_lineDetectedCount)",
-                                    style: const TextStyle(fontSize: 10.5),
+                                    style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold),
                                   ),
                                   style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.teal.shade800,
+                                    backgroundColor: const Color(0xFF0D9488),
                                     foregroundColor: Colors.white,
                                     padding: const EdgeInsets.symmetric(
                                       horizontal: 8,
@@ -1832,8 +1885,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                     _manualLineStartNode = null;
                                   });
                                 },
-                                selectedColor: Colors.purpleAccent.withValues(
-                                  alpha: 0.35,
+                                selectedColor: const Color(0xFFF3E8FF),
+                                backgroundColor: const Color(0xFFF1F5F9),
+                                side: BorderSide(
+                                  color: _isManualAddLineMode
+                                      ? const Color(0xFF9333EA)
+                                      : const Color(0xFFCBD5E1),
                                 ),
                                 visualDensity: VisualDensity.compact,
                               ),
@@ -1846,7 +1903,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     // Canvas View with Draggable Labels and Leader Lines
                     Expanded(
                       child: Container(
-                        color: Colors.black,
+                        color: const Color(0xFFF1F5F9),
                         child: Stack(
                           children: [
                             Positioned.fill(
@@ -1955,15 +2012,15 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                   child: Container(
                                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                                     decoration: BoxDecoration(
-                                      color: const Color(0xFF1E1E2E).withValues(alpha: 0.9),
+                                      color: Colors.white.withValues(alpha: 0.95),
                                       borderRadius: BorderRadius.circular(6),
                                       border: Border.all(
-                                        color: _showCanvasLabels ? Colors.blueAccent : Colors.orangeAccent,
+                                        color: _showCanvasLabels ? const Color(0xFF3B82F6) : const Color(0xFFF59E0B),
                                         width: 1.2,
                                       ),
                                       boxShadow: const [
                                         BoxShadow(
-                                          color: Colors.black54,
+                                          color: Colors.black12,
                                           blurRadius: 4,
                                           offset: Offset(0, 2),
                                         ),
@@ -1975,13 +2032,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                         Icon(
                                           _showCanvasLabels ? Icons.visibility : Icons.visibility_off,
                                           size: 14,
-                                          color: _showCanvasLabels ? Colors.blueAccent : Colors.orangeAccent,
+                                          color: _showCanvasLabels ? const Color(0xFF2563EB) : const Color(0xFFD97706),
                                         ),
                                         const SizedBox(width: 5),
                                         Text(
                                           _showCanvasLabels ? "라벨 숨기기" : "라벨 보이기",
                                           style: TextStyle(
-                                            color: _showCanvasLabels ? Colors.white : Colors.orangeAccent,
+                                            color: _showCanvasLabels ? const Color(0xFF0F172A) : const Color(0xFFD97706),
                                             fontSize: 11,
                                             fontWeight: FontWeight.bold,
                                           ),
@@ -2000,33 +2057,34 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 ),
               ),
 
-              const VerticalDivider(width: 1, color: Colors.black),
+              const VerticalDivider(width: 1, color: Color(0xFFE2E8F0)),
 
               // Right Column: Tabbed Panel (Detail Review vs Agent Chat)
               Expanded(
                 flex: 35,
                 child: Container(
-                  color: const Color(0xFF181825),
+                  color: Colors.white,
                   child: Column(
                     children: [
                       // Panel Tab Header
                       _buildRightPanelHeader(),
                       Expanded(
                         child: _activeRightTab == RightPanelTab.detailReview
-                            ? SingleChildScrollView(
-                                padding: const EdgeInsets.all(12),
-                                child: Column(
-                                  children: [
-                                    _currentPhase == ReviewPhase.busMappingReview
-                                        ? _buildBusMappingReviewSidePanel()
-                                        : isConnectionPhase
-                                        ? _buildConnectionReviewSidePanel()
-                                        : _buildObjectReviewSidePanel(),
-                                    const SizedBox(height: 12),
-                                    const Divider(color: Colors.white24, height: 1),
-                                    _buildBottomGateFooter(),
-                                  ],
-                                ),
+                            ? Column(
+                                children: [
+                                  Expanded(
+                                    child: SingleChildScrollView(
+                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                      child: _currentPhase == ReviewPhase.busMappingReview
+                                          ? _buildBusMappingReviewSidePanel()
+                                          : isConnectionPhase
+                                          ? _buildConnectionReviewSidePanel()
+                                          : _buildObjectReviewSidePanel(),
+                                    ),
+                                  ),
+                                  const Divider(color: Color(0xFFE2E8F0), height: 1),
+                                  _buildBottomGateFooter(),
+                                ],
                               )
                             : (_activeRightTab == RightPanelTab.agentActivity
                                 ? _buildAgentActivitySidePanel()
@@ -2045,7 +2103,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   Widget _buildRightPanelHeader() {
     return Container(
-      color: const Color(0xFF1E1E2E),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(
+          bottom: BorderSide(color: Color(0xFFE2E8F0), width: 1),
+        ),
+      ),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       child: Row(
         children: [
@@ -2054,17 +2117,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               segments: const [
                 ButtonSegment(
                   value: RightPanelTab.detailReview,
-                  label: Text("검수", style: TextStyle(fontSize: 11)),
+                  label: Text("검수", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
                   icon: Icon(Icons.fact_check_outlined, size: 14),
                 ),
                 ButtonSegment(
                   value: RightPanelTab.agentActivity,
-                  label: Text("활동기록", style: TextStyle(fontSize: 11)),
+                  label: Text("활동기록", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
                   icon: Icon(Icons.history_edu, size: 14),
                 ),
                 ButtonSegment(
                   value: RightPanelTab.agentChat,
-                  label: Text("AI도우미", style: TextStyle(fontSize: 11)),
+                  label: Text("AI도우미", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
                   icon: Icon(Icons.chat_bubble_outline, size: 14),
                 ),
               ],
@@ -2077,11 +2140,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 }
               },
               style: SegmentedButton.styleFrom(
-                selectedBackgroundColor: Colors.blueAccent.withValues(
-                  alpha: 0.3,
-                ),
-                selectedForegroundColor: Colors.white,
-                foregroundColor: Colors.grey,
+                selectedBackgroundColor: const Color(0xFFEFF6FF),
+                selectedForegroundColor: const Color(0xFF2563EB),
+                foregroundColor: const Color(0xFF64748B),
+                side: const BorderSide(color: Color(0xFFE2E8F0)),
               ),
             ),
           ),
@@ -2104,7 +2166,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               const Text(
                 "객체 검수",
                 style: TextStyle(
-                  color: Colors.white,
+                  color: Color(0xFF0F172A),
                   fontWeight: FontWeight.bold,
                   fontSize: 14,
                 ),
@@ -2112,8 +2174,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               // Sort dropdown
               DropdownButton<String>(
                 value: _objSortOption,
-                dropdownColor: const Color(0xFF252538),
-                style: const TextStyle(color: Colors.white70, fontSize: 11),
+                dropdownColor: Colors.white,
+                style: const TextStyle(color: Color(0xFF334155), fontSize: 11),
                 underline: const SizedBox.shrink(),
                 items: const [
                   DropdownMenuItem(value: 'SEVERITY', child: Text("정렬: 위험도순")),
@@ -2136,14 +2198,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 _buildFilterableStatBadge(
                   "전체 보기",
                   _workingNodes.length,
-                  Colors.white70,
+                  const Color(0xFF475569),
                   'ALL',
                 ),
                 const SizedBox(width: 4),
                 _buildFilterableStatBadge(
                   "검토 필요",
                   _objSuspiciousCount,
-                  Colors.orangeAccent,
+                  const Color(0xFFD97706),
                   'SUSPICIOUS',
                 ),
                 const SizedBox(width: 4),
@@ -2156,7 +2218,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                             !n.source.contains('human'),
                       )
                       .length,
-                  Colors.tealAccent,
+                  const Color(0xFF0D9488),
                   'AUTO_CONFIRMED',
                 ),
                 const SizedBox(width: 4),
@@ -2169,21 +2231,21 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                             n.source.contains('human'),
                       )
                       .length,
-                  Colors.greenAccent,
+                  const Color(0xFF16A34A),
                   'HUMAN_CONFIRMED',
                 ),
                 const SizedBox(width: 4),
                 _buildFilterableStatBadge(
                   "미검수",
                   _objDetectedCount,
-                  Colors.lightBlueAccent,
+                  const Color(0xFF2563EB),
                   'DETECTED',
                 ),
                 const SizedBox(width: 4),
                 _buildFilterableStatBadge(
                   "제외",
                   _objRejectedCount,
-                  Colors.grey,
+                  const Color(0xFF64748B),
                   'REJECTED',
                 ),
                 const SizedBox(width: 4),
@@ -2191,8 +2253,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   "누락 후보",
                   _unresolvedCandidatesCount,
                   _unresolvedCandidatesCount > 0
-                      ? Colors.purpleAccent
-                      : Colors.grey,
+                      ? const Color(0xFF9333EA)
+                      : const Color(0xFF64748B),
                 ),
               ],
             ),
@@ -2204,7 +2266,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             children: [
               const Text(
                 "도면 표시:",
-                style: TextStyle(color: Colors.grey, fontSize: 9.5),
+                style: TextStyle(color: Color(0xFF64748B), fontSize: 9.5),
               ),
               _buildObjectClassFilter("전체", 'ALL'),
               _buildObjectClassFilter("Bus", 'bus'),
@@ -2242,7 +2304,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _buildObjectQueueHeader(),
-        const Divider(color: Colors.grey, height: 1),
+        const Divider(color: Color(0xFFE2E8F0), height: 1),
         const SizedBox(height: 12),
 
         // 1. Global Completeness Review Section
@@ -2252,7 +2314,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         // 2. Quick Node Selection Carousel / Chip Row
         _buildNodeSelectionChips(),
         const SizedBox(height: 14),
-        const Divider(color: Colors.grey, height: 1),
+        const Divider(color: Color(0xFFE2E8F0), height: 1),
         const SizedBox(height: 14),
 
         // 3. Selected Node Details Panel
@@ -2282,12 +2344,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           children: [
             Row(
               children: [
-                const Icon(Icons.list_alt, size: 14, color: Colors.grey),
+                const Icon(Icons.list_alt, size: 14, color: Color(0xFF64748B)),
                 const SizedBox(width: 4),
                 Text(
                   "객체 목록 (${list.length}개) · ${currentPage + 1}/$pageCount 페이지",
                   style: const TextStyle(
-                    color: Colors.grey,
+                    color: Color(0xFF475569),
                     fontSize: 11,
                     fontWeight: FontWeight.bold,
                   ),
@@ -2310,7 +2372,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   ),
                   Text(
                     '${currentPage + 1}/$pageCount',
-                    style: const TextStyle(color: Colors.grey, fontSize: 11),
+                    style: const TextStyle(color: Color(0xFF64748B), fontSize: 11),
                   ),
                   IconButton(
                     tooltip: '다음 페이지',
@@ -2354,14 +2416,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 ),
                 decoration: BoxDecoration(
                   color: isSelected
-                      ? classColor.withValues(alpha: 0.35)
-                      : const Color(0xFF252538),
+                      ? classColor.withValues(alpha: 0.22)
+                      : const Color(0xFFF8FAFC),
                   border: Border.all(
                     color: isSelected
-                        ? Colors.yellowAccent
+                        ? const Color(0xFFF59E0B)
                         : (isSuspicious
-                            ? Colors.orangeAccent
-                            : classColor.withValues(alpha: 0.85)),
+                            ? const Color(0xFFF97316)
+                            : classColor.withValues(alpha: 0.6)),
                     width: isSelected ? 1.8 : 1.2,
                   ),
                   borderRadius: BorderRadius.circular(5),
@@ -2374,7 +2436,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     Text(
                       n.effectiveDisplayLabel,
                       style: TextStyle(
-                        color: isSelected ? Colors.white : Colors.white70,
+                        color: isSelected ? const Color(0xFF0F172A) : const Color(0xFF334155),
                         fontSize: 10.5,
                         fontWeight: isSelected
                             ? FontWeight.bold
@@ -2387,7 +2449,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                       const Text("⚠️", style: TextStyle(fontSize: 8)),
                     ] else if (isConfirmed) ...[
                       const SizedBox(width: 2.5),
-                      const Icon(Icons.check, size: 10, color: Colors.greenAccent),
+                      const Icon(Icons.check, size: 10, color: Color(0xFF16A34A)),
                     ],
                   ],
                 ),
@@ -2437,12 +2499,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFF252538),
+        color: const Color(0xFFF8FAFC),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
           color: _unresolvedCandidatesCount > 0
-              ? Colors.purpleAccent.withValues(alpha: 0.6)
-              : Colors.blueAccent.withValues(alpha: 0.3),
+              ? const Color(0xFFC084FC)
+              : const Color(0xFFE2E8F0),
         ),
       ),
       child: Column(
@@ -2456,14 +2518,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     : Icons.verified_outlined,
                 size: 18,
                 color: _unresolvedCandidatesCount > 0
-                    ? Colors.purpleAccent
-                    : Colors.blueAccent,
+                    ? const Color(0xFF9333EA)
+                    : const Color(0xFF2563EB),
               ),
               const SizedBox(width: 6),
               const Text(
                 "전체 도면 완결성 검사",
                 style: TextStyle(
-                  color: Colors.white,
+                  color: Color(0xFF0F172A),
                   fontWeight: FontWeight.bold,
                   fontSize: 13,
                 ),
@@ -2477,16 +2539,16 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   ),
                   decoration: BoxDecoration(
                     color: _completenessAssessment == 'ALL_EXPECTED_PRESENT'
-                        ? Colors.green.withValues(alpha: 0.2)
-                        : Colors.purple.withValues(alpha: 0.2),
+                        ? const Color(0xFFDCFCE7)
+                        : const Color(0xFFF3E8FF),
                     borderRadius: BorderRadius.circular(3),
                   ),
                   child: Text(
                     _completenessAssessmentKo(_completenessAssessment!),
                     style: TextStyle(
                       color: _completenessAssessment == 'ALL_EXPECTED_PRESENT'
-                          ? Colors.greenAccent
-                          : Colors.purpleAccent,
+                          ? const Color(0xFF16A34A)
+                          : const Color(0xFF9333EA),
                       fontSize: 9,
                       fontWeight: FontWeight.bold,
                     ),
@@ -2495,7 +2557,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               ],
               const Spacer(),
               IconButton(
-                icon: const Icon(Icons.refresh, size: 16, color: Colors.grey),
+                icon: const Icon(Icons.refresh, size: 16, color: Color(0xFF64748B)),
                 tooltip: "완결성 재검사",
                 onPressed: _triggerCompletenessReview,
               ),
@@ -2505,7 +2567,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           Text(
             _completenessMessageKo ?? "전체 도면 내 미검출 설비 누락 가능성을 점검 중입니다...",
             style: const TextStyle(
-              color: Colors.white70,
+              color: Color(0xFF475569),
               fontSize: 11,
               height: 1.3,
             ),
@@ -2521,13 +2583,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
                   color: isOpen
-                      ? Colors.purple.withValues(alpha: 0.15)
-                      : const Color(0xFF181825),
+                      ? const Color(0xFFFAF5FF)
+                      : const Color(0xFFF1F5F9),
                   borderRadius: BorderRadius.circular(6),
                   border: Border.all(
                     color: isOpen
-                        ? Colors.purpleAccent.withValues(alpha: 0.5)
-                        : Colors.grey.withValues(alpha: 0.3),
+                        ? const Color(0xFFD8B4FE)
+                        : const Color(0xFFCBD5E1),
                   ),
                 ),
                 child: Column(
@@ -2538,7 +2600,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                         Text(
                           "⚠️ ${_classNameKo(c.suspectedClass)} 누락 후보",
                           style: TextStyle(
-                            color: isOpen ? Colors.purpleAccent : Colors.grey,
+                            color: isOpen ? const Color(0xFF9333EA) : const Color(0xFF64748B),
                             fontWeight: FontWeight.bold,
                             fontSize: 11,
                           ),
@@ -2550,7 +2612,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                             vertical: 1,
                           ),
                           decoration: BoxDecoration(
-                            color: isOpen ? Colors.purpleAccent : Colors.grey,
+                            color: isOpen ? const Color(0xFF9333EA) : const Color(0xFF94A3B8),
                             borderRadius: BorderRadius.circular(3),
                           ),
                           child: Text(
@@ -2567,7 +2629,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     const SizedBox(height: 4),
                     Text(
                       c.descriptionKo,
-                      style: const TextStyle(color: Colors.white, fontSize: 11),
+                      style: const TextStyle(color: Color(0xFF1E293B), fontSize: 11),
                     ),
                     if (isOpen) ...[
                       const SizedBox(height: 6),
@@ -2584,12 +2646,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                   content: Text(
                                     "도면에서 ${_classNameKo(c.suspectedClass)} 영역을 드래그하여 추가하세요.",
                                   ),
-                                  backgroundColor: Colors.purple,
+                                  backgroundColor: const Color(0xFF9333EA),
                                 ),
                               );
                             },
                             style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.purpleAccent,
+                              backgroundColor: const Color(0xFF9333EA),
                               foregroundColor: Colors.white,
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 8,
@@ -2606,8 +2668,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                           OutlinedButton(
                             onPressed: () => _dismissCandidate(c),
                             style: OutlinedButton.styleFrom(
-                              foregroundColor: Colors.grey.shade300,
-                              side: const BorderSide(color: Colors.grey),
+                              foregroundColor: const Color(0xFF475569),
+                              side: const BorderSide(color: Color(0xFFCBD5E1)),
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 8,
                                 vertical: 4,
@@ -2659,7 +2721,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 Text(
                   node.effectiveDisplayLabel,
                   style: const TextStyle(
-                    color: Colors.white,
+                    color: Color(0xFF0F172A),
                     fontWeight: FontWeight.bold,
                     fontSize: 16,
                   ),
@@ -2669,7 +2731,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   icon: const Icon(
                     Icons.edit,
                     size: 14,
-                    color: Colors.blueAccent,
+                    color: Color(0xFF2563EB),
                   ),
                   tooltip: "표시명 / 번호 수정",
                   onPressed: () => _editNodeDisplayLabel(node),
@@ -2680,10 +2742,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               decoration: BoxDecoration(
                 color: isSuspicious
-                    ? Colors.orangeAccent
+                    ? const Color(0xFFD97706)
                     : (node.reviewStatus == 'CONFIRMED'
-                          ? Colors.green
-                          : Colors.blue),
+                          ? const Color(0xFF16A34A)
+                          : const Color(0xFF2563EB)),
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
@@ -2699,13 +2761,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         ),
         Text(
           "내부 ID: ${node.id}  |  클래스: ${node.className.toUpperCase()}  |  신뢰도: ${(node.confidence * 100).toInt()}%",
-          style: const TextStyle(color: Colors.grey, fontSize: 11),
+          style: const TextStyle(color: Color(0xFF64748B), fontSize: 11),
         ),
         if (bboxStr.isNotEmpty) ...[
           const SizedBox(height: 2),
           Text(
             bboxStr,
-            style: const TextStyle(color: Colors.grey, fontSize: 10),
+            style: const TextStyle(color: Color(0xFF64748B), fontSize: 10),
           ),
         ],
         const SizedBox(height: 12),
@@ -2714,10 +2776,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: Colors.orangeAccent.withValues(alpha: 0.12),
+              color: const Color(0xFFFFFBEB),
               borderRadius: BorderRadius.circular(6),
               border: Border.all(
-                color: Colors.orangeAccent.withValues(alpha: 0.4),
+                color: const Color(0xFFFDE68A),
               ),
             ),
             child: Column(
@@ -2727,14 +2789,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   children: [
                     Icon(
                       Icons.info_outline,
-                      color: Colors.orangeAccent,
+                      color: Color(0xFFD97706),
                       size: 14,
                     ),
                     SizedBox(width: 4),
                     Text(
                       "검토 필요 사유:",
                       style: TextStyle(
-                        color: Colors.orangeAccent,
+                        color: Color(0xFFB45309),
                         fontSize: 11,
                         fontWeight: FontWeight.bold,
                       ),
@@ -2748,7 +2810,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     child: Text(
                       "• $r",
                       style: const TextStyle(
-                        color: Colors.white70,
+                        color: Color(0xFF78350F),
                         fontSize: 11,
                       ),
                     ),
@@ -2764,9 +2826,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: const Color(0xFF252538),
+            color: const Color(0xFFF8FAFC),
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.blueAccent.withValues(alpha: 0.3)),
+            border: Border.all(color: const Color(0xFFDBEAFE)),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2775,14 +2837,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 children: [
                   Icon(
                     Icons.smart_toy_outlined,
-                    color: Colors.blueAccent,
+                    color: Color(0xFF2563EB),
                     size: 16,
                   ),
                   SizedBox(width: 6),
                   Text(
                     "AI 검수 의견",
                     style: TextStyle(
-                      color: Colors.blueAccent,
+                      color: Color(0xFF1D4ED8),
                       fontWeight: FontWeight.bold,
                       fontSize: 12,
                     ),
@@ -2794,7 +2856,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 node.agentExplanation ??
                     (isSuspicious ? "의심 사유를 분석하고 있습니다..." : "정상 심볼로 인식되었습니다."),
                 style: const TextStyle(
-                  color: Colors.white,
+                  color: Color(0xFF1E293B),
                   fontSize: 12,
                   height: 1.4,
                 ),
@@ -2804,7 +2866,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 Text(
                   "추천 조치: ${_recommendedActionKo(node.recommendedAction)}",
                   style: const TextStyle(
-                    color: Colors.greenAccent,
+                    color: Color(0xFF15803D),
                     fontSize: 11,
                     fontWeight: FontWeight.bold,
                   ),
@@ -2819,7 +2881,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         const Text(
           "사용자 검수 액션",
           style: TextStyle(
-            color: Colors.grey,
+            color: Color(0xFF475569),
             fontSize: 12,
             fontWeight: FontWeight.bold,
           ),
@@ -2833,7 +2895,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 icon: const Icon(Icons.check, size: 16),
                 label: const Text("승인"),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green,
+                  backgroundColor: const Color(0xFF16A34A),
                   foregroundColor: Colors.white,
                 ),
               ),
@@ -2845,7 +2907,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 icon: const Icon(Icons.close, size: 16),
                 label: const Text("제외·삭제"),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.red.shade800,
+                  backgroundColor: const Color(0xFFDC2626),
                   foregroundColor: Colors.white,
                 ),
               ),
@@ -2857,7 +2919,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         // Class Change Chips
         const Text(
           "클래스 변경:",
-          style: TextStyle(color: Colors.grey, fontSize: 11),
+          style: TextStyle(color: Color(0xFF475569), fontSize: 11),
         ),
         const SizedBox(height: 6),
         Wrap(
@@ -2874,7 +2936,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               onSelected: (selected) {
                 if (selected) _changeNodeClass(node, cls);
               },
-              selectedColor: _getClassColor(cls).withValues(alpha: 0.35),
+              selectedColor: _getClassColor(cls).withValues(alpha: 0.25),
+              backgroundColor: const Color(0xFFF1F5F9),
+              side: BorderSide(
+                color: isCurrent ? _getClassColor(cls) : const Color(0xFFCBD5E1),
+              ),
             );
           }).toList(),
         ),
@@ -2896,7 +2962,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               const Text(
                 "결선 검수",
                 style: TextStyle(
-                  color: Colors.white,
+                  color: Color(0xFF0F172A),
                   fontWeight: FontWeight.bold,
                   fontSize: 14,
                 ),
@@ -2904,8 +2970,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               // Sort dropdown
               DropdownButton<String>(
                 value: _connSortOption,
-                dropdownColor: const Color(0xFF252538),
-                style: const TextStyle(color: Colors.white70, fontSize: 11),
+                dropdownColor: Colors.white,
+                style: const TextStyle(color: Color(0xFF334155), fontSize: 11),
                 underline: const SizedBox.shrink(),
                 items: const [
                   DropdownMenuItem(value: 'SEVERITY', child: Text("정렬: 위험도순")),
@@ -2929,21 +2995,21 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 _buildFilterableConnStatBadge(
                   "전체 보기",
                   _workingLines.length,
-                  Colors.white70,
+                  const Color(0xFF475569),
                   'ALL',
                 ),
                 const SizedBox(width: 6),
                 _buildFilterableConnStatBadge(
                   "오류만 보기",
                   _criticalIssuesCount,
-                  Colors.redAccent,
+                  const Color(0xFFDC2626),
                   'ERROR_ONLY',
                 ),
                 const SizedBox(width: 6),
                 _buildFilterableConnStatBadge(
                   "검토 필요",
                   _lineAmbiguousCount,
-                  Colors.orangeAccent,
+                  const Color(0xFFD97706),
                   'AMBIGUOUS',
                 ),
                 const SizedBox(width: 6),
@@ -2956,7 +3022,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                             !l.source.contains('human'),
                       )
                       .length,
-                  Colors.tealAccent,
+                  const Color(0xFF0D9488),
                   'AUTO_CONFIRMED',
                 ),
                 const SizedBox(width: 6),
@@ -2969,21 +3035,21 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                             l.source.contains('human'),
                       )
                       .length,
-                  Colors.greenAccent,
+                  const Color(0xFF16A34A),
                   'HUMAN_CONFIRMED',
                 ),
                 const SizedBox(width: 6),
                 _buildFilterableConnStatBadge(
                   "미검수",
                   _lineDetectedCount,
-                  Colors.lightBlueAccent,
+                  const Color(0xFF2563EB),
                   'DETECTED',
                 ),
                 const SizedBox(width: 6),
                 _buildFilterableConnStatBadge(
                   "제외",
                   _lineRejectedCount,
-                  Colors.grey,
+                  const Color(0xFF64748B),
                   'REJECTED',
                 ),
               ],
@@ -2999,7 +3065,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _buildConnectionQueueHeader(),
-        const Divider(color: Colors.grey, height: 1),
+        const Divider(color: Color(0xFFE2E8F0), height: 1),
         const SizedBox(height: 12),
 
         // 1. Topology Validation Issues Summary
@@ -3010,14 +3076,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         if (_selectedTopologyIssue != null && _selectedNode != null) ...[
           _buildTopologyIssueDetailPanel(),
           const SizedBox(height: 14),
-          const Divider(color: Colors.grey, height: 1),
+          const Divider(color: Color(0xFFE2E8F0), height: 1),
           const SizedBox(height: 14),
         ],
 
         // 3. Line Selection Chips
         _buildLineSelectionChips(),
         const SizedBox(height: 14),
-        const Divider(color: Colors.grey, height: 1),
+        const Divider(color: Color(0xFFE2E8F0), height: 1),
         const SizedBox(height: 14),
 
         // 4. Selected Line Panel
@@ -3033,12 +3099,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFF252538),
+        color: const Color(0xFFF8FAFC),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
           color: _criticalIssuesCount > 0
-              ? Colors.redAccent.withValues(alpha: 0.6)
-              : Colors.green.withValues(alpha: 0.3),
+              ? const Color(0xFFFCA5A5)
+              : const Color(0xFF86EFAC),
         ),
       ),
       child: Column(
@@ -3052,21 +3118,21 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     : Icons.check_circle_outline,
                 size: 18,
                 color: _criticalIssuesCount > 0
-                    ? Colors.redAccent
-                    : Colors.greenAccent,
+                    ? const Color(0xFFDC2626)
+                    : const Color(0xFF16A34A),
               ),
               const SizedBox(width: 6),
               const Text(
                 "토폴로지 전기적 무결성 검증",
                 style: TextStyle(
-                  color: Colors.white,
+                  color: Color(0xFF0F172A),
                   fontWeight: FontWeight.bold,
                   fontSize: 13,
                 ),
               ),
               const Spacer(),
               IconButton(
-                icon: const Icon(Icons.refresh, size: 16, color: Colors.grey),
+                icon: const Icon(Icons.refresh, size: 16, color: Color(0xFF64748B)),
                 tooltip: "토폴로지 재검증",
                 onPressed: _triggerTopologyValidation,
               ),
@@ -3079,9 +3145,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 : "모든 결선이 전기적 무결성 검증을 통과했습니다.",
             style: TextStyle(
               color: _criticalIssuesCount > 0
-                  ? Colors.redAccent
-                  : Colors.greenAccent,
+                  ? const Color(0xFFDC2626)
+                  : const Color(0xFF16A34A),
               fontSize: 11,
+              fontWeight: FontWeight.bold,
             ),
           ),
           if (_topologyIssues.isNotEmpty) ...[
@@ -3100,18 +3167,18 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     decoration: BoxDecoration(
                       color: isSelected
                           ? (isError
-                              ? Colors.red.withValues(alpha: 0.35)
-                              : Colors.orange.withValues(alpha: 0.35))
+                              ? const Color(0xFFFEE2E2)
+                              : const Color(0xFFFEF3C7))
                           : (isError
-                              ? Colors.red.withValues(alpha: 0.15)
-                              : Colors.orange.withValues(alpha: 0.15)),
+                              ? const Color(0xFFFFF1F2)
+                              : const Color(0xFFFFFBEB)),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
                         color: isSelected
-                            ? Colors.yellowAccent
+                            ? const Color(0xFFF59E0B)
                             : (isError
-                                ? Colors.redAccent.withValues(alpha: 0.5)
-                                : Colors.orangeAccent.withValues(alpha: 0.5)),
+                                ? const Color(0xFFFCA5A5)
+                                : const Color(0xFFFDE68A)),
                         width: isSelected ? 1.8 : 1.0,
                       ),
                     ),
@@ -3123,7 +3190,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                           child: Icon(
                             isError ? Icons.cancel : Icons.warning,
                             size: 13,
-                            color: isError ? Colors.redAccent : Colors.orangeAccent,
+                            color: isError ? const Color(0xFFDC2626) : const Color(0xFFD97706),
                           ),
                         ),
                         const SizedBox(width: 8),
@@ -3134,7 +3201,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                               Text(
                                 _formatTopologyIssueKo(iss),
                                 style: TextStyle(
-                                  color: Colors.white,
+                                  color: const Color(0xFF0F172A),
                                   fontSize: 10.5,
                                   fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                                 ),
@@ -3145,7 +3212,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                   Icon(
                                     Icons.touch_app,
                                     size: 10,
-                                    color: isSelected ? Colors.yellowAccent : Colors.grey.shade400,
+                                    color: isSelected ? const Color(0xFFB45309) : const Color(0xFF64748B),
                                   ),
                                   const SizedBox(width: 3),
                                   Text(
@@ -3153,7 +3220,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                         ? "캔버스 위치 강조됨 · 아래에서 바로 선로 연결"
                                         : "클릭하여 캔버스 위치 확인 및 선로 연결",
                                     style: TextStyle(
-                                      color: isSelected ? Colors.yellowAccent : Colors.grey.shade400,
+                                      color: isSelected ? const Color(0xFFB45309) : const Color(0xFF64748B),
                                       fontSize: 9.5,
                                     ),
                                   ),
@@ -3165,7 +3232,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                         if (isSelected)
                           const Padding(
                             padding: EdgeInsets.only(left: 4, top: 2),
-                            child: Icon(Icons.arrow_forward_ios, size: 11, color: Colors.yellowAccent),
+                            child: Icon(Icons.arrow_forward_ios, size: 11, color: Color(0xFFB45309)),
                           ),
                       ],
                     ),
@@ -3238,12 +3305,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFF232338),
+        color: const Color(0xFFF8FAFC),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
           color: isError
-              ? Colors.redAccent.withValues(alpha: 0.8)
-              : Colors.orangeAccent.withValues(alpha: 0.8),
+              ? const Color(0xFFDC2626)
+              : const Color(0xFFF59E0B),
           width: 1.5,
         ),
       ),
@@ -3255,7 +3322,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color: isError ? Colors.redAccent : Colors.orangeAccent,
+                  color: isError ? const Color(0xFFDC2626) : const Color(0xFFF59E0B),
                   borderRadius: BorderRadius.circular(4),
                 ),
                 child: Text(
@@ -3272,7 +3339,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 child: Text(
                   node.effectiveDisplayLabel,
                   style: const TextStyle(
-                    color: Colors.white,
+                    color: Color(0xFF0F172A),
                     fontSize: 13,
                     fontWeight: FontWeight.bold,
                   ),
@@ -3280,7 +3347,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 ),
               ),
               IconButton(
-                icon: const Icon(Icons.close, size: 16, color: Colors.grey),
+                icon: const Icon(Icons.close, size: 16, color: Color(0xFF64748B)),
                 tooltip: "닫기",
                 onPressed: () => setState(() => _selectedTopologyIssue = null),
                 visualDensity: VisualDensity.compact,
@@ -3292,7 +3359,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           const SizedBox(height: 8),
           Text(
             _getTopologyIssueExplanation(iss, node),
-            style: const TextStyle(color: Colors.white70, fontSize: 11, height: 1.4),
+            style: const TextStyle(color: Color(0xFF334155), fontSize: 11, height: 1.4),
           ),
           const SizedBox(height: 12),
           Row(
@@ -3354,6 +3421,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       return "이 부품이 속한 영역이 주 전력 계통망과 단절되어 고립되어 있습니다. 계통 간 연계 선로를 확인해주세요.";
     } else if (code == 'invalid_device_pair') {
       return "발전기나 부하 간에 모선 없이 직접 연결되었습니다. 실제 계통에서는 모선을 거쳐 연결되어야 합니다.";
+    } else if (code == 'nested_bus_collision') {
+      return "동일한 전력 모선(Bus) 위치에 2개 이상의 모선 바가 물리적으로 겹쳐 검출되었습니다. 중복 검출된 모선 오류이므로 하나의 올바른 모선만 남기고 중복 모선을 제거하세요.";
     }
     return iss['message']?.toString() ?? "전기적 규칙 위반이 감지되었습니다.";
   }
@@ -3372,12 +3441,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       children: [
         Row(
           children: [
-            const Icon(Icons.timeline, size: 14, color: Colors.grey),
+            const Icon(Icons.timeline, size: 14, color: Color(0xFF64748B)),
             const SizedBox(width: 4),
             Text(
               "선로 목록 (${list.length}개) · ${currentPage + 1}/$pageCount 페이지",
               style: const TextStyle(
-                color: Colors.grey,
+                color: Color(0xFF475569),
                 fontSize: 11,
                 fontWeight: FontWeight.bold,
               ),
@@ -3392,10 +3461,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             final isSelected = _selectedLine?.lineId == l.lineId;
             final isAmbiguous = l.reviewStatus == 'AMBIGUOUS';
             final color = isAmbiguous
-                ? Colors.orangeAccent
+                ? const Color(0xFFD97706)
                 : (l.reviewStatus == 'CONFIRMED'
-                      ? Colors.greenAccent
-                      : Colors.cyanAccent);
+                      ? const Color(0xFF16A34A)
+                      : const Color(0xFF0284C7));
 
             return GestureDetector(
               onTap: () => setState(() {
@@ -3406,12 +3475,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: isSelected
-                      ? color.withValues(alpha: 0.3)
-                      : const Color(0xFF252538),
+                      ? color.withValues(alpha: 0.15)
+                      : const Color(0xFFF8FAFC),
                   border: Border.all(
                     color: isSelected
                         ? color
-                        : Colors.grey.withValues(alpha: 0.4),
+                        : const Color(0xFFCBD5E1),
                     width: isSelected ? 1.8 : 1.0,
                   ),
                   borderRadius: BorderRadius.circular(6),
@@ -3419,7 +3488,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 child: Text(
                   l.effectiveDisplayLabel,
                   style: TextStyle(
-                    color: isSelected ? Colors.white : Colors.white70,
+                    color: isSelected ? const Color(0xFF0F172A) : const Color(0xFF334155),
                     fontSize: 11,
                     fontWeight: isSelected
                         ? FontWeight.bold
@@ -3483,12 +3552,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           children: [
             Row(
               children: [
-                const Icon(Icons.timeline, color: Colors.cyanAccent, size: 20),
+                const Icon(Icons.timeline, color: Color(0xFF0284C7), size: 20),
                 const SizedBox(width: 6),
                 Text(
                   line.effectiveDisplayLabel,
                   style: const TextStyle(
-                    color: Colors.white,
+                    color: Color(0xFF0F172A),
                     fontWeight: FontWeight.bold,
                     fontSize: 16,
                   ),
@@ -3499,10 +3568,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               decoration: BoxDecoration(
                 color: isAmbiguous
-                    ? Colors.orangeAccent
+                    ? const Color(0xFFD97706)
                     : (line.reviewStatus == 'CONFIRMED'
-                          ? Colors.green
-                          : Colors.cyan),
+                          ? const Color(0xFF16A34A)
+                          : const Color(0xFF0284C7)),
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
@@ -3520,14 +3589,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         Text(
           "내부 ID: ${line.lineId}  |  연결: $connStr",
           style: const TextStyle(
-            color: Colors.white70,
+            color: Color(0xFF334155),
             fontSize: 12,
             fontWeight: FontWeight.bold,
           ),
         ),
         Text(
           "추적 방식: ${line.traceMethod}  |  단자: ${line.sourcePort} ➔ ${line.targetPort}",
-          style: const TextStyle(color: Colors.grey, fontSize: 11),
+          style: const TextStyle(color: Color(0xFF64748B), fontSize: 11),
         ),
         const SizedBox(height: 12),
 
@@ -3540,7 +3609,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 icon: const Icon(Icons.check, size: 16),
                 label: const Text("선로 승인"),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green,
+                  backgroundColor: const Color(0xFF16A34A),
                   foregroundColor: Colors.white,
                 ),
               ),
@@ -3552,7 +3621,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 icon: const Icon(Icons.close, size: 16),
                 label: const Text("선로 제외·삭제"),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.red.shade800,
+                  backgroundColor: const Color(0xFFDC2626),
                   foregroundColor: Colors.white,
                 ),
               ),
@@ -3565,7 +3634,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         if (line.candidateTargets.isNotEmpty) ...[
           const Text(
             "연결 대상 Bus 재지정:",
-            style: TextStyle(color: Colors.grey, fontSize: 11),
+            style: TextStyle(color: Color(0xFF475569), fontSize: 11),
           ),
           const SizedBox(height: 6),
           Wrap(
@@ -3602,15 +3671,20 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         // Mode Header Banner
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          color: const Color(0xFF1E2640),
+          decoration: const BoxDecoration(
+            color: Color(0xFFF1F5F9),
+            border: Border(
+              bottom: BorderSide(color: Color(0xFFE2E8F0), width: 1),
+            ),
+          ),
           child: Row(
             children: [
-              const Icon(Icons.bolt, color: Colors.blueAccent, size: 16),
+              const Icon(Icons.bolt, color: Color(0xFF2563EB), size: 16),
               const SizedBox(width: 6),
               const Text(
                 "AI 도면 검토 도우미 · 로컬 분석",
                 style: TextStyle(
-                  color: Colors.blueAccent,
+                  color: Color(0xFF1D4ED8),
                   fontSize: 11,
                   fontWeight: FontWeight.bold,
                 ),
@@ -3619,12 +3693,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               if (_selectedNode != null)
                 Text(
                   "선택: ${_selectedNode!.effectiveDisplayLabel}",
-                  style: const TextStyle(color: Colors.white70, fontSize: 10),
+                  style: const TextStyle(color: Color(0xFF475569), fontSize: 10),
                 ),
               if (_selectedLine != null)
                 Text(
                   "선택: ${_selectedLine!.effectiveDisplayLabel}",
-                  style: const TextStyle(color: Colors.white70, fontSize: 10),
+                  style: const TextStyle(color: Color(0xFF475569), fontSize: 10),
                 ),
             ],
           ),
@@ -3651,14 +3725,21 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   ),
                   decoration: BoxDecoration(
                     color: isUser
-                        ? Colors.blueAccent.withValues(alpha: 0.85)
-                        : const Color(0xFF252538),
+                        ? const Color(0xFF2563EB)
+                        : const Color(0xFFF8FAFC),
                     borderRadius: BorderRadius.circular(8),
                     border: Border.all(
                       color: isUser
-                          ? Colors.blueAccent
-                          : Colors.grey.withValues(alpha: 0.3),
+                          ? const Color(0xFF2563EB)
+                          : const Color(0xFFE2E8F0),
                     ),
+                    boxShadow: const [
+                      BoxShadow(
+                        color: Colors.black12,
+                        blurRadius: 3,
+                        offset: Offset(0, 1),
+                      ),
+                    ],
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -3669,7 +3750,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                           Icon(
                             isUser ? Icons.person : Icons.smart_toy,
                             size: 13,
-                            color: isUser ? Colors.white70 : Colors.blueAccent,
+                            color: isUser ? Colors.white70 : const Color(0xFF2563EB),
                           ),
                           const SizedBox(width: 4),
                           Text(
@@ -3677,7 +3758,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                             style: TextStyle(
                               color: isUser
                                   ? Colors.white70
-                                  : Colors.blueAccent,
+                                  : const Color(0xFF1D4ED8),
                               fontSize: 10,
                               fontWeight: FontWeight.bold,
                             ),
@@ -3687,8 +3768,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                       const SizedBox(height: 4),
                       Text(
                         msg.text,
-                        style: const TextStyle(
-                          color: Colors.white,
+                        style: TextStyle(
+                          color: isUser ? Colors.white : const Color(0xFF0F172A),
                           fontSize: 12,
                           height: 1.4,
                         ),
@@ -3704,7 +3785,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         // Interactive Suggestion Chips
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          color: const Color(0xFF1E1E2E),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            border: Border(
+              top: BorderSide(color: Color(0xFFE2E8F0), width: 1),
+            ),
+          ),
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
@@ -3732,28 +3818,37 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         // Chat Input Box
         Container(
           padding: const EdgeInsets.all(8),
-          color: const Color(0xFF181825),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            border: Border(
+              top: BorderSide(color: Color(0xFFE2E8F0), width: 1),
+            ),
+          ),
           child: Row(
             children: [
               Expanded(
                 child: TextField(
                   controller: _chatInputController,
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
+                  style: const TextStyle(color: Color(0xFF0F172A), fontSize: 12),
                   decoration: InputDecoration(
                     hintText: "도면, 선택 객체/선로에 대해 질문하세요...",
                     hintStyle: const TextStyle(
-                      color: Colors.grey,
+                      color: Color(0xFF94A3B8),
                       fontSize: 12,
                     ),
                     filled: true,
-                    fillColor: const Color(0xFF252538),
+                    fillColor: const Color(0xFFF8FAFC),
                     contentPadding: const EdgeInsets.symmetric(
                       horizontal: 12,
                       vertical: 10,
                     ),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(6),
-                      borderSide: BorderSide.none,
+                      borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(6),
+                      borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
                     ),
                   ),
                   onSubmitted: _sendChatMessage,
@@ -3767,10 +3862,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                         height: 16,
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
-                          color: Colors.blueAccent,
+                          color: Color(0xFF2563EB),
                         ),
                       )
-                    : const Icon(Icons.send, color: Colors.blueAccent),
+                    : const Icon(Icons.send, color: Color(0xFF2563EB)),
                 onPressed: _isChatLoading
                     ? null
                     : () => _sendChatMessage(_chatInputController.text),
@@ -3788,9 +3883,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       child: ActionChip(
         label: Text(
           prompt,
-          style: const TextStyle(fontSize: 10, color: Colors.white70),
+          style: const TextStyle(fontSize: 10, color: Color(0xFF334155)),
         ),
-        backgroundColor: const Color(0xFF252538),
+        backgroundColor: const Color(0xFFF1F5F9),
+        side: const BorderSide(color: Color(0xFFE2E8F0)),
         onPressed: () => _sendChatMessage(prompt),
       ),
     );
@@ -3818,6 +3914,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         return compsStr.isNotEmpty
             ? "[고립 모선] '$compsStr' 모선에 연결된 선로가 없습니다."
             : "[고립 모선] 모선에 연결된 선로가 없습니다.";
+      case 'nested_bus_collision':
+        return compsStr.isNotEmpty
+            ? "[모선 중복/충돌] '$compsStr' 모선이 물리적으로 겹쳐 검출되었습니다 (도면상 동일 위치 중복 모선 오류)"
+            : "[모선 중복/충돌] 물리적으로 겹치거나 포함된 모선이 검출되었습니다.";
       case 'isolated_subgraph':
         return "[망 분리/고립] 독립된 전력망 서브그래프가 감지되었습니다. 주 전력망과의 연계 선로를 확인하세요.";
       case 'duplicate_edge':
@@ -3935,7 +4035,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   Widget _buildAgentActivitySidePanel() {
     if (_isLoadingAgentRuns) {
       return const Center(
-        child: CircularProgressIndicator(color: Colors.blueAccent),
+        child: CircularProgressIndicator(color: Color(0xFF2563EB)),
       );
     }
 
@@ -3946,26 +4046,27 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.history_edu, size: 48, color: Colors.grey),
+              const Icon(Icons.history_edu, size: 48, color: Color(0xFF94A3B8)),
               const SizedBox(height: 12),
               const Text(
                 '기록된 Agent 활동 이력이 없습니다.',
-                style: TextStyle(color: Colors.white70, fontSize: 13),
+                style: TextStyle(color: Color(0xFF0F172A), fontSize: 13, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 6),
               const Text(
                 '이슈 자동 재분석 또는 도구 실행 시 이곳에 사고 과정이 기록됩니다.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey, fontSize: 11),
+                style: TextStyle(color: Color(0xFF64748B), fontSize: 11),
               ),
               const SizedBox(height: 16),
-              ElevatedButton.icon(
+              OutlinedButton.icon(
                 onPressed: _fetchAgentRuns,
                 icon: const Icon(Icons.refresh, size: 16),
                 label: const Text('활동 기록 새로고침'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF252538),
-                  foregroundColor: Colors.white,
+                style: OutlinedButton.styleFrom(
+                  backgroundColor: const Color(0xFFF8FAFC),
+                  foregroundColor: const Color(0xFF334155),
+                  side: const BorderSide(color: Color(0xFFCBD5E1)),
                 ),
               ),
             ],
@@ -3991,12 +4092,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           return Container(
             margin: const EdgeInsets.only(bottom: 12),
             decoration: BoxDecoration(
-              color: const Color(0xFF252538),
+              color: const Color(0xFFF8FAFC),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(
                 color: isAwaiting
-                    ? Colors.green.withValues(alpha: 0.5)
-                    : Colors.blueGrey.withValues(alpha: 0.3),
+                    ? const Color(0xFF86EFAC)
+                    : const Color(0xFFE2E8F0),
               ),
             ),
             child: Theme(
@@ -4009,12 +4110,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   isAwaiting
                       ? Icons.check_circle_outline
                       : Icons.smart_toy_outlined,
-                  color: isAwaiting ? Colors.greenAccent : Colors.blueAccent,
+                  color: isAwaiting ? const Color(0xFF16A34A) : const Color(0xFF2563EB),
                 ),
                 title: Text(
                   'Agent 실행 #${_agentRuns.length - runIdx} (${run['issue_id'] ?? runId})',
                   style: const TextStyle(
-                    color: Colors.white,
+                    color: Color(0xFF0F172A),
                     fontSize: 13,
                     fontWeight: FontWeight.bold,
                   ),
@@ -4022,17 +4123,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 subtitle: Text(
                   '최종 판단: ${isAwaiting ? '수정안 승인 대기' : (status == 'NO_IMPROVEMENT' ? '개선 없음' : status)} · Patch: $patchId',
                   style: TextStyle(
-                    color: isAwaiting ? Colors.greenAccent : Colors.white70,
+                    color: isAwaiting ? const Color(0xFF16A34A) : const Color(0xFF64748B),
                     fontSize: 11,
                   ),
                 ),
                 childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                 children: [
-                  const Divider(color: Colors.black26),
+                  const Divider(color: Color(0xFFE2E8F0)),
                   if (activityLog.isEmpty)
                     const Text(
                       '상세 활동 로그가 없습니다.',
-                      style: TextStyle(color: Colors.grey, fontSize: 11),
+                      style: TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
                     )
                   else
                     ...activityLog.asMap().entries.map((entry) {
@@ -4057,15 +4158,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                               margin: const EdgeInsets.only(top: 2, right: 8),
                               padding: const EdgeInsets.all(3),
                               decoration: BoxDecoration(
-                                color: Colors.blueAccent.withValues(
-                                  alpha: 0.2,
-                                ),
+                                color: const Color(0xFFEFF6FF),
                                 shape: BoxShape.circle,
+                                border: Border.all(color: const Color(0xFFBFDBFE)),
                               ),
                               child: Icon(
                                 _agentEventIcon(event),
                                 size: 12,
-                                color: Colors.blueAccent,
+                                color: const Color(0xFF2563EB),
                               ),
                             ),
                             Expanded(
@@ -4075,7 +4175,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                   Text(
                                     '${idx + 1}. [${_agentEventTitleKo(event)}]',
                                     style: const TextStyle(
-                                      color: Colors.white,
+                                      color: Color(0xFF0F172A),
                                       fontWeight: FontWeight.bold,
                                       fontSize: 11,
                                     ),
@@ -4086,7 +4186,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                       child: Text(
                                         msg,
                                         style: const TextStyle(
-                                          color: Colors.white70,
+                                          color: Color(0xFF334155),
                                           fontSize: 11,
                                         ),
                                       ),
@@ -4097,7 +4197,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                       child: Text(
                                         '• 도구: ${_reviewToolNameKo(tool)}${reason != null && reason.isNotEmpty ? ' (사유: $reason)' : ''}',
                                         style: const TextStyle(
-                                          color: Colors.amberAccent,
+                                          color: Color(0xFFB45309),
                                           fontSize: 10,
                                         ),
                                       ),
@@ -4111,8 +4211,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                         ' (${details['improved'] == true ? '개선됨' : '유지'})',
                                         style: TextStyle(
                                           color: details['improved'] == true
-                                              ? Colors.greenAccent
-                                              : Colors.grey,
+                                              ? const Color(0xFF16A34A)
+                                              : const Color(0xFF64748B),
                                           fontSize: 10,
                                           fontWeight: FontWeight.bold,
                                         ),
@@ -4257,6 +4357,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   for (int i = 0; i < l.connectedTo.length; i++) {
                     if (l.connectedTo[i] == oldOtherId) l.connectedTo[i] = newGenId;
                   }
+                  if (l.connectedTo.contains(newBusId) && l.connectedTo.contains(newGenId)) {
+                    l.lineId = "lead_${newBusId}_$newGenId";
+                    l.displayLabel = "Line Bus $newBusNo ↔ G_$newBusNo";
+                  }
                 }
               } else if (cls.contains('load')) {
                 final newLoadId = "load_$newBusNo";
@@ -4269,6 +4373,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 for (final l in _workingLines) {
                   for (int i = 0; i < l.connectedTo.length; i++) {
                     if (l.connectedTo[i] == oldOtherId) l.connectedTo[i] = newLoadId;
+                  }
+                  if (l.connectedTo.contains(newBusId) && l.connectedTo.contains(newLoadId)) {
+                    l.lineId = "lead_${newBusId}_$newLoadId";
+                    l.displayLabel = "Line Bus $newBusNo ↔ Load_$newBusNo";
                   }
                 }
               }
@@ -4299,7 +4407,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           _buildNoSelectionPrompt("모선(Bus)"),
 
         const SizedBox(height: 14),
-        const Divider(color: Colors.white24, height: 1),
+        const Divider(color: Color(0xFFE2E8F0), height: 1),
         const SizedBox(height: 10),
 
         // 3. Bus Queue List
@@ -4309,7 +4417,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             Text(
               "모선 목록 (${buses.length}개) · ${currentPage + 1}/$totalPages 페이지",
               style: const TextStyle(
-                color: Colors.white70,
+                color: Color(0xFF475569),
                 fontSize: 12,
                 fontWeight: FontWeight.bold,
               ),
@@ -4318,13 +4426,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               Row(
                 children: [
                   IconButton(
-                    icon: const Icon(Icons.chevron_left, size: 18, color: Colors.white70),
+                    icon: const Icon(Icons.chevron_left, size: 18, color: Color(0xFF64748B)),
                     onPressed: currentPage > 0
                         ? () => setState(() => _busPage--)
                         : null,
                   ),
                   IconButton(
-                    icon: const Icon(Icons.chevron_right, size: 18, color: Colors.white70),
+                    icon: const Icon(Icons.chevron_right, size: 18, color: Color(0xFF64748B)),
                     onPressed: currentPage < totalPages - 1
                         ? () => setState(() => _busPage++)
                         : null,
@@ -4348,12 +4456,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           children: [
             const Row(
               children: [
-                Icon(Icons.numbers, color: Colors.amberAccent, size: 18),
+                Icon(Icons.numbers, color: Color(0xFFD97706), size: 18),
                 SizedBox(width: 6),
                 Text(
                   "모선 번호 & 기기 매핑",
                   style: TextStyle(
-                    color: Colors.white,
+                    color: Color(0xFF0F172A),
                     fontSize: 13.5,
                     fontWeight: FontWeight.bold,
                   ),
@@ -4368,15 +4476,16 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                       ? const SizedBox(
                           width: 10,
                           height: 10,
-                          child: CircularProgressIndicator(strokeWidth: 1.5, color: Colors.amberAccent),
+                          child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFFD97706)),
                         )
-                      : const Icon(Icons.refresh, size: 12, color: Colors.amberAccent),
+                      : const Icon(Icons.refresh, size: 12, color: Color(0xFFD97706)),
                   label: Text(
                     _isLinkingBusNumbers ? "판독 중..." : "AI 번호 판독",
-                    style: const TextStyle(fontSize: 10, color: Colors.amberAccent),
+                    style: const TextStyle(fontSize: 10, color: Color(0xFFD97706), fontWeight: FontWeight.bold),
                   ),
                   style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Colors.amberAccent, width: 0.8),
+                    backgroundColor: Colors.white,
+                    side: const BorderSide(color: Color(0xFFCBD5E1), width: 1.0),
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                     visualDensity: VisualDensity.compact,
                   ),
@@ -4425,7 +4534,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   icon: const Icon(Icons.done_all, size: 12),
                   label: const Text("전체 승인", style: TextStyle(fontSize: 10)),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blueAccent[700],
+                    backgroundColor: const Color(0xFF2563EB),
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
                     visualDensity: VisualDensity.compact,
@@ -4438,11 +4547,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         const SizedBox(height: 8),
         Row(
           children: [
-            _buildBusFilterBadge("전체", _busNodes.length, Colors.blueGrey, 'ALL'),
+            _buildBusFilterBadge("전체", _busNodes.length, const Color(0xFF475569), 'ALL'),
             const SizedBox(width: 6),
-            _buildBusFilterBadge("검토 필요", _busUncertainCount, Colors.orangeAccent, 'UNCERTAIN'),
+            _buildBusFilterBadge("검토 필요", _busUncertainCount, const Color(0xFFD97706), 'UNCERTAIN'),
             const SizedBox(width: 6),
-            _buildBusFilterBadge("승인 완료", _busVerifiedCount, Colors.greenAccent, 'VERIFIED'),
+            _buildBusFilterBadge("승인 완료", _busVerifiedCount, const Color(0xFF16A34A), 'VERIFIED'),
           ],
         ),
       ],
@@ -4468,10 +4577,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
-          color: isSelected ? color.withValues(alpha: 0.3) : const Color(0xFF252538),
+          color: isSelected ? color.withValues(alpha: 0.12) : const Color(0xFFF1F5F9),
           borderRadius: BorderRadius.circular(6),
           border: Border.all(
-            color: isSelected ? color : Colors.white12,
+            color: isSelected ? color : const Color(0xFFCBD5E1),
             width: isSelected ? 1.5 : 1.0,
           ),
         ),
@@ -4481,7 +4590,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             Text(
               label,
               style: TextStyle(
-                color: isSelected ? Colors.white : Colors.white70,
+                color: isSelected ? color : const Color(0xFF475569),
                 fontSize: 11,
                 fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
               ),
@@ -4490,7 +4599,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
               decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.3),
+                color: color.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
@@ -4531,10 +4640,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFF252538),
+        color: const Color(0xFFF8FAFC),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color: isVerified ? Colors.greenAccent.withValues(alpha: 0.6) : Colors.orangeAccent,
+          color: isVerified ? const Color(0xFF86EFAC) : const Color(0xFFFCD34D),
           width: 1.5,
         ),
       ),
@@ -4549,31 +4658,35 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
-                      color: Colors.blueAccent.withValues(alpha: 0.2),
+                      color: const Color(0xFFEFF6FF),
                       borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: const Color(0xFFBFDBFE)),
                     ),
                     child: Text(
                       busNode.id,
-                      style: const TextStyle(color: Colors.blueAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                      style: const TextStyle(color: Color(0xFF2563EB), fontSize: 11, fontWeight: FontWeight.bold),
                     ),
                   ),
                   const SizedBox(width: 8),
                   Text(
                     busNode.busNumber != null ? "Bus #${busNode.busNumber}" : "Bus (미지정)",
-                    style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                    style: const TextStyle(color: Color(0xFF0F172A), fontSize: 14, fontWeight: FontWeight.bold),
                   ),
                 ],
               ),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color: isVerified ? Colors.green.withValues(alpha: 0.2) : Colors.orange.withValues(alpha: 0.2),
+                  color: isVerified ? const Color(0xFFDCFCE7) : const Color(0xFFFEF3C7),
                   borderRadius: BorderRadius.circular(4),
+                  border: Border.all(
+                    color: isVerified ? const Color(0xFF86EFAC) : const Color(0xFFFDE68A),
+                  ),
                 ),
                 child: Text(
                   isVerified ? "✓ 검증 완료" : "⚠️ 확인 필요",
                   style: TextStyle(
-                    color: isVerified ? Colors.greenAccent : Colors.orangeAccent,
+                    color: isVerified ? const Color(0xFF16A34A) : const Color(0xFFB45309),
                     fontSize: 10,
                     fontWeight: FontWeight.bold,
                   ),
@@ -4593,14 +4706,21 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   child: TextField(
                     controller: _busNumberEditController,
                     keyboardType: TextInputType.number,
-                    style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                    style: const TextStyle(color: Color(0xFF0F172A), fontSize: 13, fontWeight: FontWeight.bold),
                     decoration: InputDecoration(
                       labelText: "모선 번호 지정 (Bus Number)",
-                      labelStyle: const TextStyle(color: Colors.white60, fontSize: 10),
+                      labelStyle: const TextStyle(color: Color(0xFF64748B), fontSize: 10),
                       filled: true,
-                      fillColor: const Color(0xFF181825),
+                      fillColor: Colors.white,
                       contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                        borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                        borderSide: const BorderSide(color: Color(0xFF2563EB), width: 1.5),
+                      ),
                     ),
                   ),
                 ),
@@ -4651,7 +4771,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     }
                   },
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.amber[700],
+                    backgroundColor: const Color(0xFFD97706),
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 8),
                   ),
@@ -4666,26 +4786,27 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: const Color(0xFF1E1E2E),
+              color: const Color(0xFFF1F5F9),
               borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: const Color(0xFFE2E8F0)),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text("⚡ 연결된 기기 자동 명명 현황:", style: TextStyle(color: Colors.white70, fontSize: 10.5)),
+                const Text("⚡ 연결된 기기 자동 명명 현황:", style: TextStyle(color: Color(0xFF334155), fontSize: 10.5, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 4),
                 if (connectedGens.isEmpty && connectedLoads.isEmpty)
-                  const Text("• 직결된 발전기/부하 없음 (단독 모선)", style: TextStyle(color: Colors.grey, fontSize: 10))
+                  const Text("• 직결된 발전기/부하 없음 (단독 모선)", style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10))
                 else ...[
                   if (connectedGens.isNotEmpty)
                     Text(
                       "• 발전기: ${connectedGens.map((g) => g.effectiveDisplayLabel).join(', ')}",
-                      style: const TextStyle(color: Colors.greenAccent, fontSize: 10.5, fontWeight: FontWeight.bold),
+                      style: const TextStyle(color: Color(0xFF16A34A), fontSize: 10.5, fontWeight: FontWeight.bold),
                     ),
                   if (connectedLoads.isNotEmpty)
                     Text(
                       "• 부하: ${connectedLoads.map((l) => l.effectiveDisplayLabel).join(', ')}",
-                      style: const TextStyle(color: Colors.cyanAccent, fontSize: 10.5, fontWeight: FontWeight.bold),
+                      style: const TextStyle(color: Color(0xFF0284C7), fontSize: 10.5, fontWeight: FontWeight.bold),
                     ),
                 ],
               ],
@@ -4717,15 +4838,15 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
           color: isSelected
-              ? Colors.amber.withValues(alpha: 0.15)
-              : const Color(0xFF252538),
+              ? const Color(0xFFFEF3C7)
+              : const Color(0xFFF8FAFC),
           borderRadius: BorderRadius.circular(6),
           border: Border.all(
             color: isSelected
-                ? Colors.amberAccent
+                ? const Color(0xFFD97706)
                 : (isDuplicate
-                    ? Colors.redAccent.withValues(alpha: 0.8)
-                    : (isVerified ? Colors.green.withValues(alpha: 0.3) : Colors.orangeAccent.withValues(alpha: 0.5))),
+                    ? const Color(0xFFEF4444)
+                    : (isVerified ? const Color(0xFF86EFAC) : const Color(0xFFCBD5E1))),
             width: isSelected || isDuplicate ? 1.5 : 1.0,
           ),
         ),
@@ -4739,15 +4860,15 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                       ? Icons.warning_amber_rounded
                       : (isVerified ? Icons.check_circle : Icons.help_outline),
                   color: isDuplicate
-                      ? Colors.redAccent
-                      : (isVerified ? Colors.greenAccent : Colors.orangeAccent),
+                      ? const Color(0xFFEF4444)
+                      : (isVerified ? const Color(0xFF16A34A) : const Color(0xFFD97706)),
                   size: 16,
                 ),
                 const SizedBox(width: 8),
                 Text(
                   busNode.busNumber != null ? "Bus #${busNode.busNumber}" : "Bus ? (미인식)",
                   style: TextStyle(
-                    color: Colors.white,
+                    color: const Color(0xFF0F172A),
                     fontSize: 12,
                     fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                   ),
@@ -4755,7 +4876,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 const SizedBox(width: 6),
                 Text(
                   "(${busNode.id})",
-                  style: const TextStyle(color: Colors.grey, fontSize: 10),
+                  style: const TextStyle(color: Color(0xFF64748B), fontSize: 10),
                 ),
               ],
             ),
@@ -4763,16 +4884,21 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
               decoration: BoxDecoration(
                 color: isDuplicate
-                    ? Colors.redAccent.withValues(alpha: 0.25)
-                    : (isVerified ? Colors.green.withValues(alpha: 0.2) : Colors.orange.withValues(alpha: 0.2)),
+                    ? const Color(0xFFFEE2E2)
+                    : (isVerified ? const Color(0xFFDCFCE7) : const Color(0xFFFEF3C7)),
                 borderRadius: BorderRadius.circular(4),
+                border: Border.all(
+                  color: isDuplicate
+                      ? const Color(0xFFFCA5A5)
+                      : (isVerified ? const Color(0xFF86EFAC) : const Color(0xFFFDE68A)),
+                ),
               ),
               child: Text(
                 isDuplicate ? "중복 번호" : (isVerified ? "승인됨" : "검토필요"),
                 style: TextStyle(
                   color: isDuplicate
-                      ? Colors.redAccent
-                      : (isVerified ? Colors.greenAccent : Colors.orangeAccent),
+                      ? const Color(0xFFDC2626)
+                      : (isVerified ? const Color(0xFF16A34A) : const Color(0xFFB45309)),
                   fontSize: 9.5,
                   fontWeight: FontWeight.bold,
                 ),
@@ -4879,7 +5005,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       // Step 1: Object Review
       return Container(
         padding: const EdgeInsets.all(12),
-        color: const Color(0xFF181825),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(top: BorderSide(color: Color(0xFFE2E8F0))),
+        ),
         child: Column(
           children: [
             CheckboxListTile(
@@ -4888,11 +5017,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   setState(() => _humanCompletenessConfirmed = val ?? false),
               title: const Text(
                 "원본 회로도 전체와의 대조 확인 완료 (Completeness Confirmed)",
-                style: TextStyle(color: Colors.white, fontSize: 11),
+                style: TextStyle(color: Color(0xFF0F172A), fontSize: 11, fontWeight: FontWeight.w600),
               ),
               controlAffinity: ListTileControlAffinity.leading,
               contentPadding: EdgeInsets.zero,
-              activeColor: Colors.blueAccent,
+              activeColor: const Color(0xFF2563EB),
             ),
             if (_objectGateBlockers.isNotEmpty)
               Container(
@@ -4900,14 +5029,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 margin: const EdgeInsets.only(bottom: 8),
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: Colors.orange.withValues(alpha: 0.12),
-                  border: Border.all(color: Colors.orangeAccent),
+                  color: const Color(0xFFFFFBEB),
+                  border: Border.all(color: const Color(0xFFFDE68A)),
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
                   '결선 단계로 가려면:\n• ${_objectGateBlockers.join('\n• ')}',
                   style: const TextStyle(
-                    color: Colors.orangeAccent,
+                    color: Color(0xFFB45309),
                     fontSize: 10,
                     height: 1.35,
                   ),
@@ -4933,7 +5062,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     icon: const Icon(Icons.check_circle_outline, size: 16),
                     label: const Text("객체 검수 완료"),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blueAccent,
+                      backgroundColor: const Color(0xFF2563EB),
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 12),
                     ),
@@ -4946,7 +5075,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     icon: const Icon(Icons.arrow_forward, size: 16),
                     label: const Text("다음: 모선 번호 매핑 ➔"),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
+                      backgroundColor: const Color(0xFF16A34A),
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 12),
                     ),
@@ -4961,7 +5090,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       // Step 2: Bus Mapping Review -> Go to Step 3: Connection Review
       return Container(
         padding: const EdgeInsets.all(12),
-        color: const Color(0xFF181825),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(top: BorderSide(color: Color(0xFFE2E8F0))),
+        ),
         child: Column(
           children: [
             if (_busGateBlockers.isNotEmpty)
@@ -4970,14 +5102,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 margin: const EdgeInsets.only(bottom: 8),
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: Colors.orange.withValues(alpha: 0.12),
-                  border: Border.all(color: Colors.orangeAccent),
+                  color: const Color(0xFFFFFBEB),
+                  border: Border.all(color: const Color(0xFFFDE68A)),
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
                   '선로 결선 단계로 가려면:\n• ${_busGateBlockers.join('\n• ')}',
                   style: const TextStyle(
-                    color: Colors.orangeAccent,
+                    color: Color(0xFFB45309),
                     fontSize: 10,
                     height: 1.35,
                   ),
@@ -4991,7 +5123,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     icon: const Icon(Icons.arrow_forward, size: 16),
                     label: const Text("모선 번호 승인 ➔ 다음: 선로 결선 인식 및 검수"),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.indigoAccent,
+                      backgroundColor: const Color(0xFF2563EB),
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 12),
                     ),
@@ -5006,7 +5138,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       // Step 3: Connection Review -> Go to Step 4: Final Verification & Excel
       return Container(
         padding: const EdgeInsets.all(12),
-        color: const Color(0xFF181825),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(top: BorderSide(color: Color(0xFFE2E8F0))),
+        ),
         child: Row(
           children: [
             Expanded(
@@ -5015,7 +5150,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 icon: const Icon(Icons.verified, size: 16),
                 label: const Text("결선 검수 완료 ➔ 다음: 최종 확인 & 엑셀"),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green,
+                  backgroundColor: const Color(0xFF16A34A),
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 12),
                 ),
@@ -5039,16 +5174,16 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           width: 680,
           padding: const EdgeInsets.all(24),
           decoration: BoxDecoration(
-            color: const Color(0xFF252538),
+            color: Colors.white,
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: Colors.greenAccent.withValues(alpha: 0.5),
+              color: const Color(0xFF86EFAC),
               width: 2,
             ),
             boxShadow: const [
               BoxShadow(
-                color: Colors.black45,
-                blurRadius: 10,
+                color: Color(0x0F000000),
+                blurRadius: 16,
                 offset: Offset(0, 4),
               ),
             ],
@@ -5058,14 +5193,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             children: [
               const Icon(
                 Icons.verified_user,
-                color: Colors.greenAccent,
+                color: Color(0xFF16A34A),
                 size: 56,
               ),
               const SizedBox(height: 12),
               const Text(
                 "Verified SLD 회로도 검증 완료! 🎉",
                 style: TextStyle(
-                  color: Colors.white,
+                  color: Color(0xFF0F172A),
                   fontSize: 20,
                   fontWeight: FontWeight.bold,
                 ),
@@ -5073,24 +5208,25 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               const SizedBox(height: 6),
               Text(
                 "문서 ID: ${sld.documentId}  |  상태: ${sld.status}",
-                style: const TextStyle(color: Colors.grey, fontSize: 12),
+                style: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
               ),
               const SizedBox(height: 14),
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF1E1E2E),
+                  color: const Color(0xFFF8FAFC),
                   borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFFE2E8F0)),
                 ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
-                    _buildFinalSummaryItem("확정 모선", "${_busNodes.length}개", Colors.blueAccent),
-                    _buildFinalSummaryItem("확정 결선", "${sld.lines.length}개", Colors.orangeAccent),
+                    _buildFinalSummaryItem("확정 모선", "${_busNodes.length}개", const Color(0xFF2563EB)),
+                    _buildFinalSummaryItem("확정 결선", "${sld.lines.length}개", const Color(0xFFEA580C)),
                     _buildFinalSummaryItem(
                       "발전기/부하",
                       "${_workingNodes.where((n) => n.className.contains('gen') || n.className.contains('load')).length}개",
-                      Colors.cyanAccent,
+                      const Color(0xFF0284C7),
                     ),
                   ],
                 ),
@@ -5102,10 +5238,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF1E1E2E),
+                  color: const Color(0xFFF8FAFC),
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(
-                    color: _importedExcelData != null ? Colors.greenAccent : Colors.tealAccent.withValues(alpha: 0.4),
+                    color: _importedExcelData != null ? const Color(0xFF86EFAC) : const Color(0xFFCBD5E1),
                     width: 1.5,
                   ),
                 ),
@@ -5117,11 +5253,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                       children: [
                         const Row(
                           children: [
-                            Icon(Icons.table_chart, color: Colors.tealAccent, size: 20),
+                            Icon(Icons.table_chart, color: Color(0xFF0D9488), size: 20),
                             SizedBox(width: 8),
                             Text(
                               "계통 엑셀 데이터 (.xlsx) 매칭",
-                              style: TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.bold),
+                              style: TextStyle(color: Color(0xFF0F172A), fontSize: 13.5, fontWeight: FontWeight.bold),
                             ),
                           ],
                         ),
@@ -5129,16 +5265,16 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                           spacing: 6,
                           runSpacing: 4,
                           children: [
-                            ElevatedButton.icon(
+                            OutlinedButton.icon(
                               onPressed: _loadDefaultExcelInReview,
-                              icon: const Icon(Icons.bolt, size: 14, color: Colors.amberAccent),
+                              icon: const Icon(Icons.bolt, size: 14, color: Color(0xFFD97706)),
                               label: const Text(
                                 "⚡ ac_case25 기본값 바로 적용",
-                                style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                                style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFFB45309)),
                               ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.amber[900]?.withValues(alpha: 0.7),
-                                foregroundColor: Colors.white,
+                              style: OutlinedButton.styleFrom(
+                                backgroundColor: const Color(0xFFFFFBEB),
+                                side: const BorderSide(color: Color(0xFFFDE68A)),
                                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                               ),
                             ),
@@ -5150,7 +5286,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                 style: const TextStyle(fontSize: 11),
                               ),
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.teal[700],
+                                backgroundColor: const Color(0xFF0D9488),
                                 foregroundColor: Colors.white,
                                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                               ),
@@ -5164,27 +5300,27 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                       Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: Colors.green.withValues(alpha: 0.12),
+                          color: const Color(0xFFF0FDF4),
                           borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.4)),
+                          border: Border.all(color: const Color(0xFF86EFAC)),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Row(
                               children: [
-                                const Icon(Icons.stars, color: Colors.amberAccent, size: 18),
+                                const Icon(Icons.stars, color: Color(0xFFD97706), size: 18),
                                 const SizedBox(width: 6),
                                 Text(
                                   "⭐️ 슬랙 모선: #${_importedExcelData!['slack_bus_number']} (Swing Bus 자동 지정)",
-                                  style: const TextStyle(color: Colors.amberAccent, fontSize: 12.5, fontWeight: FontWeight.bold),
+                                  style: const TextStyle(color: Color(0xFF15803D), fontSize: 12.5, fontWeight: FontWeight.bold),
                                 ),
                               ],
                             ),
                             const SizedBox(height: 6),
                             Text(
                               "• 발전기 ${_importedExcelData!['total_generators']}개 파라미터 (PG, 목표전압 Vset)\n• 부하 ${_importedExcelData!['total_buses']}개 모선 유효/무효전력 (Pload, Qload)\n• 선로 ${_importedExcelData!['total_branches']}개 임피던스 (R, X, B, Tap) 자동 바인딩 완료!",
-                              style: const TextStyle(color: Colors.white70, fontSize: 11.5, height: 1.4),
+                              style: const TextStyle(color: Color(0xFF334155), fontSize: 11.5, height: 1.4),
                             ),
                           ],
                         ),
@@ -5192,7 +5328,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     ] else ...[
                       const Text(
                         "💡 'ac_case25 - 복사본.xlsx' 등의 엑셀 파일을 불러오면 13번 슬랙 모선과 발전기/부하/선로 파라미터가 캔버스에 자동 반영됩니다.",
-                        style: TextStyle(color: Colors.white60, fontSize: 11.5),
+                        style: TextStyle(color: Color(0xFF64748B), fontSize: 11.5),
                       ),
                     ],
                   ],
@@ -5211,7 +5347,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                       style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
                     ),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
+                      backgroundColor: const Color(0xFF16A34A),
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(
                         horizontal: 28,
@@ -5231,7 +5367,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   Widget _buildFinalSummaryItem(String label, String value, Color color) {
     return Column(
       children: [
-        Text(label, style: const TextStyle(color: Colors.white60, fontSize: 11)),
+        Text(label, style: const TextStyle(color: Color(0xFF64748B), fontSize: 11)),
         const SizedBox(height: 4),
         Text(
           value,
@@ -5273,18 +5409,18 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
         decoration: BoxDecoration(
           color: isSelected
-              ? color.withValues(alpha: 0.3)
-              : const Color(0xFF252538),
+              ? color.withValues(alpha: 0.15)
+              : const Color(0xFFF1F5F9),
           borderRadius: BorderRadius.circular(3),
           border: Border.all(
-            color: isSelected ? color : color.withValues(alpha: 0.4),
+            color: isSelected ? color : const Color(0xFFCBD5E1),
             width: isSelected ? 1.4 : 0.8,
           ),
         ),
         child: Text(
           "$label: $count",
           style: TextStyle(
-            color: color,
+            color: isSelected ? color : const Color(0xFF334155),
             fontSize: 9.2,
             fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
           ),
@@ -5318,7 +5454,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         : statusFiltered
               .where((node) => node.className.toLowerCase() == classKey)
               .length;
-    final chipColor = classKey == 'ALL' ? Colors.blueAccent : _getClassColor(classKey);
+    final chipColor = classKey == 'ALL' ? const Color(0xFF2563EB) : _getClassColor(classKey);
     return GestureDetector(
       onTap: () {
         setState(() {
@@ -5331,11 +5467,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2.5),
         decoration: BoxDecoration(
           color: selected
-              ? chipColor.withValues(alpha: 0.35)
-              : const Color(0xFF252538),
+              ? chipColor.withValues(alpha: 0.15)
+              : const Color(0xFFF1F5F9),
           borderRadius: BorderRadius.circular(4),
           border: Border.all(
-            color: selected ? chipColor : chipColor.withValues(alpha: 0.4),
+            color: selected ? chipColor : const Color(0xFFCBD5E1),
             width: selected ? 1.4 : 0.8,
           ),
         ),
@@ -5346,14 +5482,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               Icon(
                 _getClassIcon(classKey),
                 size: 9.5,
-                color: selected ? Colors.white : chipColor,
+                color: selected ? chipColor : const Color(0xFF64748B),
               ),
               const SizedBox(width: 2.5),
             ],
             Text(
               '$label $count',
               style: TextStyle(
-                color: selected ? Colors.white : Colors.white70,
+                color: selected ? chipColor : const Color(0xFF334155),
                 fontSize: 9.2,
                 fontWeight: selected ? FontWeight.bold : FontWeight.normal,
               ),
@@ -5387,18 +5523,18 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
         decoration: BoxDecoration(
           color: isSelected
-              ? color.withValues(alpha: 0.3)
-              : const Color(0xFF252538),
+              ? color.withValues(alpha: 0.15)
+              : const Color(0xFFF1F5F9),
           borderRadius: BorderRadius.circular(3),
           border: Border.all(
-            color: isSelected ? color : color.withValues(alpha: 0.4),
+            color: isSelected ? color : const Color(0xFFCBD5E1),
             width: isSelected ? 1.4 : 0.8,
           ),
         ),
         child: Text(
           "$label: $count",
           style: TextStyle(
-            color: color,
+            color: isSelected ? color : const Color(0xFF334155),
             fontSize: 9.2,
             fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
           ),
@@ -5411,13 +5547,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
       decoration: BoxDecoration(
-        color: const Color(0xFF252538),
+        color: const Color(0xFFF1F5F9),
         borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: color.withValues(alpha: 0.4), width: 1.0),
+        border: Border.all(color: color.withValues(alpha: 0.5), width: 1.0),
       ),
       child: Text(
         "$label: $count",
-        style: TextStyle(color: color, fontSize: 10),
+        style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold),
       ),
     );
   }

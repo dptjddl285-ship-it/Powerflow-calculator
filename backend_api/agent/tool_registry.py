@@ -44,6 +44,7 @@ class ReviewToolRegistry:
         "bus_fragmentation",
         "fragmented_bus",
         "duplicate_component",
+        "nested_bus_collision",
         "low_confidence_component",
         "abnormal_geometry",
         "multiple_connection_candidates",

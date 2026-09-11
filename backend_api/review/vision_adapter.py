@@ -226,9 +226,9 @@ def build_graph_document(
             })
             continue
         path = [_point(item) for item in path_raw]
-        edge_id = source_line_id
-        source_port_id = _stable_id("port", document_id, f"{source_line_id}:source")
-        target_port_id = _stable_id("port", document_id, f"{source_line_id}:target")
+        edge_id = f"{source_line_id}_{index}" if any(e.internal_id == source_line_id for e in edges) else source_line_id
+        source_port_id = _stable_id("port", document_id, f"{edge_id}_{index}:source")
+        target_port_id = _stable_id("port", document_id, f"{edge_id}_{index}:target")
         raw_source_port = raw_line.get("source_port")
         raw_target_port = raw_line.get("target_port")
         ports.extend([

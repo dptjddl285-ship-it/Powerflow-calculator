@@ -371,12 +371,14 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       var buses = excelData['buses'] as Map<String, dynamic>? ?? {};
       var gens = excelData['generators'] as Map<String, dynamic>? ?? {};
       var branches = excelData['branches'] as Map<String, dynamic>? ?? {};
+      var transformers = excelData['transformers'] as Map<String, dynamic>? ?? {};
       int? slackBus = excelData['slack_bus_number'];
 
       int updatedBuses = 0;
       int updatedGens = 0;
       int updatedLoads = 0;
       int updatedLines = 0;
+      int updatedTransformers = 0;
 
       // 1. Bus ID -> Bus Number Mapping
       Map<String, int> elIdToBusNum = {};
@@ -444,14 +446,37 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         } else if (el.type == Tool.line) {
           int? fb = el.startElementId != null ? elIdToBusNum[el.startElementId] : null;
           int? tb = el.endElementId != null ? elIdToBusNum[el.endElementId] : null;
+          if (fb == null || tb == null) {
+            final match = RegExp(r'(\d+)\s*[-~_]\s*(\d+)').firstMatch(el.label.isNotEmpty ? el.label : el.id);
+            if (match != null) {
+              fb ??= int.tryParse(match.group(1)!);
+              tb ??= int.tryParse(match.group(2)!);
+            }
+          }
           if (fb != null && tb != null) {
-            String key1 = "($fb, $tb)";
-            String key2 = "($tb, $fb)";
-            var brInfo = branches[key1] ?? branches[key2];
+            var brInfo = branches["${fb}_${tb}"] ??
+                         branches["${tb}_${fb}"] ??
+                         branches["($fb, $tb)"] ??
+                         branches["($tb, $fb)"] ??
+                         branches["$fb-$tb"] ??
+                         branches["$tb-$fb"];
             if (brInfo != null) {
               el.rPu = (brInfo['r_pu'] as num?)?.toDouble() ?? 0.01;
               el.xPu = (brInfo['x_pu'] as num?)?.toDouble() ?? 0.05;
+              el.bPu = (brInfo['b_pu'] as num?)?.toDouble() ?? 0.0;
+              el.label = "Line $fb-$tb";
               updatedLines++;
+            }
+            var trInfo = transformers["${fb}_${tb}"] ??
+                         transformers["${tb}_${fb}"] ??
+                         transformers["($fb, $tb)"] ??
+                         transformers["($tb, $fb)"] ??
+                         transformers["$fb-$tb"] ??
+                         transformers["$tb-$fb"];
+            if (trInfo != null) {
+              el.tapRatio = (trInfo['tap'] as num?)?.toDouble() ?? 1.0;
+              el.label = "Line $fb-$tb (T: ${el.tapRatio})";
+              updatedTransformers++;
             }
           }
         }
@@ -460,7 +485,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            "✅ 엑셀 데이터 매칭 완료!\n• 슬랙 모선: #${slackBus ?? '자동지정'}\n• 모선: $updatedBuses개 | 발전기: $updatedGens개 | 부하: $updatedLoads개 | 선로: $updatedLines개",
+            "✅ 엑셀 데이터 매칭 완료!\n• 슬랙 모선: #${slackBus ?? '자동지정'}\n• 모선: $updatedBuses개 | 발전기: $updatedGens개 | 부하: $updatedLoads개 | 선로: $updatedLines개 | 변압기: $updatedTransformers개",
           ),
           backgroundColor: Colors.green,
           duration: const Duration(seconds: 4),
