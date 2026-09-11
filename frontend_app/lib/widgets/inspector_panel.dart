@@ -131,11 +131,39 @@ class _InspectorPanelState extends State<InspectorPanel> {
     return _buildElementEditor();
   }
 
+  bool _isActualTransmissionLine(DrawingElement el) {
+    if (el.type != Tool.line) return false;
+    DrawingElement? startEl;
+    DrawingElement? endEl;
+    try { startEl = widget.elements.firstWhere((e) => e.id == el.startElementId); } catch (_) {}
+    try { endEl = widget.elements.firstWhere((e) => e.id == el.endElementId); } catch (_) {}
+
+    final bool isGenLead = startEl?.type == Tool.generator || endEl?.type == Tool.generator ||
+        el.label.contains("↔ G_") || el.label.contains("G_") || (el.id.startsWith("lead_") && el.id.contains("gen"));
+    if (isGenLead) return false;
+
+    final bool isLoadLead = startEl?.type == Tool.load || endEl?.type == Tool.load ||
+        el.label.contains("↔ Load_") || el.label.contains("Load_") || (el.id.startsWith("lead_") && el.id.contains("load"));
+    if (isLoadLead) return false;
+
+    final bool isTransLead = (startEl?.type == Tool.transformer || endEl?.type == Tool.transformer) &&
+        (startEl?.type != Tool.bus || endEl?.type != Tool.bus);
+    if (isTransLead) return false;
+
+    if (el.id.startsWith("lead_") || el.label.contains("↔")) return false;
+
+    return true;
+  }
+
   Widget _buildSystemOverview() {
     final busCount = widget.elements.where((e) => e.type == Tool.bus).length;
     final genCount = widget.elements.where((e) => e.type == Tool.generator).length;
     final loadCount = widget.elements.where((e) => e.type == Tool.load).length;
-    final lineCount = widget.elements.where((e) => e.type == Tool.line).length;
+    final lineCount = (widget.simulationResult != null &&
+            widget.simulationResult!['line_results'] is List &&
+            (widget.simulationResult!['line_results'] as List).isNotEmpty)
+        ? (widget.simulationResult!['line_results'] as List).length
+        : widget.elements.where(_isActualTransmissionLine).length;
     final transCount = widget.elements.where((e) => e.type == Tool.transformer).length;
 
     return SingleChildScrollView(
