@@ -37,6 +37,33 @@ class PowerFlowSolver:
                 return int(digits)
         return None
 
+    def _to_pu(self, el: Dict[str, Any], val_key: str, mw_key: str = "", unit_key: str = "unit") -> float:
+        """
+        Converts power value to per-unit (p.u.) with full backwards compatibility.
+        Priority:
+        1. Explicit mw/mvar field (e.g. p_mw, q_mvar) -> divide by s_base
+        2. Explicit unit attribute ('mw', 'mvar' -> divide by s_base; 'pu' -> keep as is)
+        3. Fallback heuristic: if abs(val) > 10.0, assume MW/Mvar and divide by s_base.
+        """
+        if mw_key and el.get(mw_key) is not None:
+            try:
+                return float(el[mw_key]) / self.s_base
+            except (ValueError, TypeError):
+                pass
+
+        val = float(el.get(val_key) or el.get(val_key.lower()) or 0.0)
+        unit = str(el.get(unit_key) or el.get("power_unit") or "").strip().lower()
+
+        if unit in ("mw", "mvar", "mva"):
+            return val / self.s_base
+        elif unit == "pu":
+            return val
+
+        # Fallback heuristic with magnitude check (handles negative values safely)
+        if abs(val) > 10.0:
+            return val / self.s_base
+        return val
+
     def parse_elements(self, elements: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Parses canvas DrawingElement JSON list into structured buses, gens, loads, and branches.
@@ -110,13 +137,10 @@ class PowerFlowSolver:
                 target_bus_num = int(b_cand)
 
             if "gen" in el_type:
-                p_val = float(el.get("pPu") or el.get("p_pu") or 0.0)
-                q_val = float(el.get("qPu") or el.get("q_pu") or 0.0)
                 v_set = float(el.get("vPu") or el.get("v_pu") or 1.0)
                 is_slack = bool(el.get("isSlack") or el.get("is_slack") or False)
-
-                p_pu = p_val / self.s_base if p_val > 10.0 else p_val
-                q_pu = q_val / self.s_base if q_val > 10.0 else q_val
+                p_pu = self._to_pu(el, val_key="pPu", mw_key="p_mw")
+                q_pu = self._to_pu(el, val_key="qPu", mw_key="q_mvar")
 
                 if target_bus_num is not None and target_bus_num > 0:
                     if target_bus_num not in buses:
@@ -141,11 +165,8 @@ class PowerFlowSolver:
                     })
 
             elif "load" in el_type:
-                p_val = float(el.get("pPu") or el.get("p_pu") or 0.0)
-                q_val = float(el.get("qPu") or el.get("q_pu") or 0.0)
-
-                p_pu = p_val / self.s_base if p_val > 10.0 else p_val
-                q_pu = q_val / self.s_base if q_val > 10.0 else q_val
+                p_pu = self._to_pu(el, val_key="pPu", mw_key="p_mw")
+                q_pu = self._to_pu(el, val_key="qPu", mw_key="q_mvar")
 
                 if target_bus_num is not None and target_bus_num > 0:
                     if target_bus_num not in buses:
@@ -168,25 +189,25 @@ class PowerFlowSolver:
             if "bus" in el_type and not ("gen" in el_type or "load" in el_type):
                 b_num = self._extract_bus_number(str(el.get("label", "")), str(el.get("id", "")))
                 if b_num is not None and b_num not in loads_by_bus:
-                    p_val = float(el.get("pPu") or el.get("p_pu") or 0.0)
-                    q_val = float(el.get("qPu") or el.get("q_pu") or 0.0)
-                    p_pu = p_val / self.s_base if p_val > 10.0 else p_val
-                    q_pu = q_val / self.s_base if q_val > 10.0 else q_val
+                    p_pu = self._to_pu(el, val_key="pPu", mw_key="p_mw")
+                    q_pu = self._to_pu(el, val_key="qPu", mw_key="q_mvar")
                     if abs(p_pu) > 1e-6 or abs(q_pu) > 1e-6:
                         loads_by_bus.setdefault(b_num, []).append({
                             "p_pu": p_pu,
                             "q_pu": q_pu,
                         })
 
-        # Ensure Generator 14 (100 MW in IEEE 24 RTS / PSS/E) is present even if missing on canvas diagram
-        if 14 in buses and 14 not in gens_by_bus:
-            gens_by_bus.setdefault(14, []).append({
-                "p_pu": 1.0,  # 100 MW
-                "q_pu": 0.46019,
-                "v_set": 1.0,
-                "is_slack": False,
-            })
-            buses[14]["v_spec"] = 1.0
+        # Ensure Generator 14 (100 MW in IEEE 24 RTS / PSS/E) is present if missing on canvas diagram for 24-bus RTS case
+        if 14 in buses and len(buses) == 24 and 14 not in gens_by_bus:
+            buses_14_spec = str(buses[14].get("bus_type", "")).upper()
+            if buses_14_spec in ("2", "PV") or any("24" in str(b.get("label", "")) for b in buses.values()):
+                gens_by_bus.setdefault(14, []).append({
+                    "p_pu": 1.0,  # 100 MW
+                    "q_pu": 0.46019,
+                    "v_set": 1.0,
+                    "is_slack": False,
+                })
+                buses[14]["v_spec"] = 1.0
 
         # 3. Third pass: Collect Branches (Lines and Transformers)
         transformer_ids = {

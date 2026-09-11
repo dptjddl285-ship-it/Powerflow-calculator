@@ -30,6 +30,16 @@ class DrawingElement {
   double xPu = 0.05;
   double bPu = 0.0;
   double tapRatio = 1.0;
+  int? circuitCount;
+  String? busType;
+
+  bool get isDoubleCircuit =>
+      (circuitCount != null && circuitCount! > 1) ||
+      label.contains("회선") ||
+      label.contains("병렬");
+
+  bool get isSynchronousCondenser =>
+      !isSlack && type == Tool.generator && (pPu == 0 || pPu.abs() < 1e-4);
 
   DrawingElement({
     required this.id,
@@ -48,27 +58,31 @@ class DrawingElement {
     this.label = "",
     this.infoOffset = const Offset(40, -40),
     this.aiPath,
+    this.circuitCount,
+    this.busType,
   });
 
   DrawingElement copy() {
     return DrawingElement(
-        id: id,
-        type: type,
-        position: position,
-        midPosition: midPosition,
-        endPosition: endPosition,
-        width: width,
-        height: height,
-        angle: angle,
-        parentBusId: parentBusId,
-        startElementId: startElementId,
-        endElementId: endElementId,
-        startAnchor: startAnchor,
-        endAnchor: endAnchor,
-        label: label,
-        infoOffset: infoOffset,
-        aiPath: aiPath != null ? List.from(aiPath!) : null,
-      )
+      id: id,
+      type: type,
+      position: position,
+      midPosition: midPosition,
+      endPosition: endPosition,
+      width: width,
+      height: height,
+      angle: angle,
+      parentBusId: parentBusId,
+      startElementId: startElementId,
+      endElementId: endElementId,
+      startAnchor: startAnchor,
+      endAnchor: endAnchor,
+      label: label,
+      infoOffset: infoOffset,
+      aiPath: aiPath != null ? List.from(aiPath!) : null,
+      circuitCount: circuitCount,
+      busType: busType,
+    )
       ..showInfo = showInfo
       ..isSlack = isSlack
       ..vPu = vPu
@@ -84,6 +98,7 @@ class DrawingElement {
   Map<String, dynamic> toJson() {
     return {
       'id': id,
+      'label': label,
       'type': type.name,
       'parentBusId': parentBusId,
       'startElementId': startElementId,
@@ -97,6 +112,8 @@ class DrawingElement {
       'xPu': xPu,
       'bPu': bPu,
       'tapRatio': tapRatio,
+      'circuitCount': circuitCount,
+      'bus_type': busType,
     };
   }
 }
