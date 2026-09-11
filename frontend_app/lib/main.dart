@@ -48,6 +48,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
   String? pendingStartId; Offset? pendingStartAnchor; DrawingElement? snapTarget; 
 
   Map<String, dynamic>? lastSimulationResult;
+  int? excelBranchCount;
   bool showResultOverlay = false;
   bool isInspectorOpen = true;
   bool isSimulating = false;
@@ -446,6 +447,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         if (result['data'] != null && (result['status'] == 'success' || result['status'] == 'warning')) {
           setState(() {
             lastSimulationResult = result['data'];
+            if (result['data']['total_branches'] is num) {
+              excelBranchCount = (result['data']['total_branches'] as num).toInt();
+            }
             final busResults = result['data']['bus_results'] as List<dynamic>? ?? [];
             for (var br in busResults) {
               int bNum = (br['bus'] as num).toInt();
@@ -1029,6 +1033,12 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     var branches = excelData['branches'] as Map<String, dynamic>? ?? {};
     var transformers = excelData['transformers'] as Map<String, dynamic>? ?? {};
 
+    if (excelData['total_branches'] is num) {
+      setState(() {
+        excelBranchCount = (excelData['total_branches'] as num).toInt();
+      });
+    }
+
     // 0. If canvas is empty, auto-generate single-line diagram in circle layout
     if (elements.isEmpty && buses.isNotEmpty) {
       setState(() {
@@ -1477,37 +1487,42 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     );
   }
 
-  bool _isActualTransmissionLine(DrawingElement el) {
+  bool _isActualTransmissionOrTransformerLine(DrawingElement el) {
     if (el.type != Tool.line) return false;
     DrawingElement? startEl;
     DrawingElement? endEl;
     try { startEl = elements.firstWhere((e) => e.id == el.startElementId); } catch (_) {}
     try { endEl = elements.firstWhere((e) => e.id == el.endElementId); } catch (_) {}
 
+    // Exclude generator feeder leads
     final bool isGenLead = startEl?.type == Tool.generator || endEl?.type == Tool.generator ||
         el.label.contains("↔ G_") || el.label.contains("G_") || (el.id.startsWith("lead_") && el.id.contains("gen"));
     if (isGenLead) return false;
 
+    // Exclude load feeder leads
     final bool isLoadLead = startEl?.type == Tool.load || endEl?.type == Tool.load ||
         el.label.contains("↔ Load_") || el.label.contains("Load_") || (el.id.startsWith("lead_") && el.id.contains("load"));
     if (isLoadLead) return false;
 
-    final bool isTransLead = (startEl?.type == Tool.transformer || endEl?.type == Tool.transformer) &&
-        (startEl?.type != Tool.bus || endEl?.type != Tool.bus);
-    if (isTransLead) return false;
+    if (el.id.startsWith("lead_") || el.label.contains("↔ Load_") || el.label.contains("↔ G_")) return false;
 
-    if (el.id.startsWith("lead_") || el.label.contains("↔")) return false;
-
+    // Transformer branches and AC transmission lines are both included
     return true;
   }
 
   PreferredSizeWidget _buildTopAppBar() {
     final int busCount = elements.where((e) => e.type == Tool.bus).length;
-    final int lineCount = (lastSimulationResult != null &&
-            lastSimulationResult!['line_results'] is List &&
-            (lastSimulationResult!['line_results'] as List).isNotEmpty)
-        ? (lastSimulationResult!['line_results'] as List).length
-        : elements.where(_isActualTransmissionLine).length;
+    int lineCount = excelBranchCount ?? 0;
+    if (lineCount == 0 && lastSimulationResult != null) {
+      if (lastSimulationResult!['total_branches'] is num) {
+        lineCount = (lastSimulationResult!['total_branches'] as num).toInt();
+      } else if (lastSimulationResult!['line_results'] is List && (lastSimulationResult!['line_results'] as List).isNotEmpty) {
+        lineCount = (lastSimulationResult!['line_results'] as List).length;
+      }
+    }
+    if (lineCount == 0) {
+      lineCount = elements.where(_isActualTransmissionOrTransformerLine).length;
+    }
     final bool hasResults = lastSimulationResult != null;
 
     return AppBar(
