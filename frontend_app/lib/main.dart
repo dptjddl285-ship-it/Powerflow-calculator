@@ -177,6 +177,28 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     // Only allow element deletion when Delete key is pressed on the canvas (Backspace is strictly reserved for text editing)
     if (event.logicalKey == LogicalKeyboardKey.delete && _canvasFocusNode.hasFocus) {
       _deleteSelectedElement();
+    } else if (selectedElement != null && _canvasFocusNode.hasFocus && (
+        event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+        event.logicalKey == LogicalKeyboardKey.arrowRight ||
+        event.logicalKey == LogicalKeyboardKey.arrowUp ||
+        event.logicalKey == LogicalKeyboardKey.arrowDown)) {
+      final double step = isShift ? 10.0 : 1.0;
+      if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+        _moveElement(selectedElement!, Offset(-step, 0));
+      } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+        _moveElement(selectedElement!, Offset(step, 0));
+      } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+        _moveElement(selectedElement!, Offset(0, -step));
+      } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+        _moveElement(selectedElement!, Offset(0, step));
+      }
+      return;
+    } else if (selectedElement != null && _canvasFocusNode.hasFocus && event.logicalKey == LogicalKeyboardKey.keyR) {
+      _saveState();
+      setState(() {
+        selectedElement!.angle = (selectedElement!.angle + math.pi / 2) % (math.pi * 2);
+      });
+      return;
     } else if (event.logicalKey == LogicalKeyboardKey.escape) {
       setState(() {
         selectedTool = Tool.move;
@@ -1789,7 +1811,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         ),
         InteractiveViewer(
           transformationController: _transformationController,
-          panEnabled: selectedTool == Tool.move && selectedElement == null,
+          panEnabled: selectedTool == Tool.move,
           boundaryMargin: const EdgeInsets.all(10000), 
           minScale: 0.1,
           maxScale: 3.0,
@@ -2188,17 +2210,37 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
   Widget _buildBusGenLoadWidget(DrawingElement e) {
     bool isSelected = (selectedElement == e && selectedTool == Tool.move);
     if (e.type == Tool.text) {
-      return Positioned(left: e.position.dx, top: e.position.dy, child: GestureDetector(onTap: () => setState(() => selectedElement = e), child: Text(e.label.isEmpty ? e.id : e.label, style: const TextStyle(fontWeight: FontWeight.bold))));
+      return Positioned(
+        left: e.position.dx,
+        top: e.position.dy,
+        child: GestureDetector(
+          onTap: () => setState(() => selectedElement = e),
+          onPanStart: (_) => _saveState(),
+          onPanUpdate: (d) => _moveElement(e, d.delta),
+          child: MouseRegion(
+            cursor: SystemMouseCursors.move,
+            child: Text(
+              e.label.isEmpty ? e.id : e.label,
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: isSelected ? const Color(0xFF2563EB) : Colors.black,
+              ),
+            ),
+          ),
+        ),
+      );
     }
+
     Color baseColor = e.type == Tool.bus 
-        ? Colors.black
+        ? const Color(0xFF1E293B)
         : (e.type == Tool.generator 
-            ? (e.isSlack ? Colors.redAccent : Colors.black)
-            : Colors.black);
-    Color drawColor = isSelected ? Colors.cyanAccent : baseColor;
+            ? (e.isSlack ? const Color(0xFFDC2626) : const Color(0xFF2563EB))
+            : (e.type == Tool.load ? const Color(0xFF059669) : const Color(0xFF7C3AED)));
+    Color drawColor = isSelected ? const Color(0xFF2563EB) : baseColor;
     
     Widget shapeContent;
     if (e.type == Tool.generator) {
+      final isSC = e.isSynchronousCondenser;
       shapeContent = Stack(
         clipBehavior: Clip.none,
         alignment: Alignment.center,
@@ -2208,22 +2250,46 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
             height: e.height, 
             decoration: BoxDecoration(
               color: Colors.white, 
-              border: Border.all(color: drawColor, width: 2.0), 
+              border: Border.all(
+                color: isSelected ? const Color(0xFF2563EB) : drawColor, 
+                width: isSelected ? 2.5 : 2.0,
+              ), 
               shape: BoxShape.circle,
-              boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 3)],
+              boxShadow: [
+                BoxShadow(
+                  color: isSelected ? const Color(0x332563EB) : Colors.black12, 
+                  blurRadius: isSelected ? 8 : 3,
+                ),
+              ],
             ), 
             child: Center(
               child: Text(
-                "G", 
-                style: TextStyle(color: drawColor, fontWeight: FontWeight.bold, fontSize: e.height * 0.45)
-              )
-            )
+                isSC ? "SC" : (e.isSlack ? "S" : "G"), 
+                style: TextStyle(
+                  color: drawColor, 
+                  fontWeight: FontWeight.bold, 
+                  fontSize: isSC ? e.height * 0.35 : e.height * 0.45,
+                ),
+              ),
+            ),
           ),
           Positioned(
-            top: -16,
-            child: Text(
-              e.label.isNotEmpty ? e.label : e.id,
-              style: TextStyle(fontWeight: FontWeight.bold, color: drawColor, fontSize: 10)
+            top: -18,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.9),
+                borderRadius: BorderRadius.circular(3),
+                border: Border.all(color: isSelected ? const Color(0xFF2563EB) : Colors.black12),
+              ),
+              child: Text(
+                e.label.isNotEmpty ? e.label : e.id,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold, 
+                  color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF0F172A), 
+                  fontSize: 10,
+                ),
+              ),
             ),
           ),
         ],
@@ -2235,13 +2301,25 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         children: [
           CustomPaint(
             size: Size(e.width, e.height), 
-            painter: LoadArrowPainter(color: drawColor)
+            painter: LoadArrowPainter(color: isSelected ? const Color(0xFF2563EB) : drawColor),
           ),
           Positioned(
-            bottom: -16,
-            child: Text(
-              e.label.isNotEmpty ? e.label : e.id,
-              style: TextStyle(fontWeight: FontWeight.bold, color: drawColor, fontSize: 10)
+            bottom: -18,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.9),
+                borderRadius: BorderRadius.circular(3),
+                border: Border.all(color: isSelected ? const Color(0xFF2563EB) : Colors.black12),
+              ),
+              child: Text(
+                e.label.isNotEmpty ? e.label : e.id,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold, 
+                  color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF0F172A), 
+                  fontSize: 10,
+                ),
+              ),
             ),
           ),
         ],
@@ -2254,18 +2332,31 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         children: [
           CustomPaint(
             size: Size(e.width, e.height),
-            painter: TransformerPainter(color: drawColor, isVertical: isVert),
+            painter: TransformerPainter(color: isSelected ? const Color(0xFF2563EB) : drawColor, isVertical: isVert),
           ),
           Positioned(
-            top: -16,
-            child: Text(
-              e.label.isNotEmpty ? e.label : e.id,
-              style: TextStyle(fontWeight: FontWeight.bold, color: drawColor, fontSize: 10)
+            top: -18,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.9),
+                borderRadius: BorderRadius.circular(3),
+                border: Border.all(color: isSelected ? const Color(0xFF2563EB) : Colors.black12),
+              ),
+              child: Text(
+                e.label.isNotEmpty ? e.label : e.id,
+                style: TextStyle(
+                  fontWeight: FontWeight.bold, 
+                  color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF0F172A), 
+                  fontSize: 10,
+                ),
+              ),
             ),
           ),
         ],
       );
     } else {
+      // BUS BAR
       shapeContent = Stack(
         clipBehavior: Clip.none,
         alignment: Alignment.center,
@@ -2274,33 +2365,145 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
             width: e.width, 
             height: e.height, 
             decoration: BoxDecoration(
-              color: isSelected ? Colors.cyanAccent : Colors.black, 
-              borderRadius: BorderRadius.circular(1.5),
-            )
+              color: isSelected 
+                  ? const Color(0xFF2563EB) 
+                  : (e.isSlack ? const Color(0xFFDC2626) : const Color(0xFF0F172A)), 
+              borderRadius: BorderRadius.circular(2.0),
+              boxShadow: [
+                if (isSelected)
+                  const BoxShadow(color: Color(0x662563EB), blurRadius: 8, spreadRadius: 1),
+              ],
+            ),
           ),
           Positioned(
-            top: -18,
-            child: Text(
-              e.label.isNotEmpty ? (e.label.toLowerCase().startsWith('bus') ? e.label : "Bus ${e.label}") : e.id, 
-              style: TextStyle(fontWeight: FontWeight.bold, color: drawColor, fontSize: 11)
+            top: -20,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.95),
+                borderRadius: BorderRadius.circular(3),
+                border: Border.all(color: isSelected ? const Color(0xFF2563EB) : Colors.black12),
+              ),
+              child: Text(
+                e.label.isNotEmpty ? (e.label.toLowerCase().startsWith('bus') ? e.label : "Bus ${e.label}") : e.id, 
+                style: TextStyle(
+                  fontWeight: FontWeight.bold, 
+                  color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF0F172A), 
+                  fontSize: 11,
+                ),
+              ),
             ),
-          )
+          ),
         ],
       );
     }
 
+    // Precise hit bounds with slight padding only when selected for control points
+    const double pad = 12.0;
+    final double boxWidth = e.width + (isSelected ? pad * 2 : 0);
+    final double boxHeight = e.height + (isSelected ? pad * 2 : 0);
+    final double leftOffset = e.position.dx - (e.width / 2) - (isSelected ? pad : 0);
+    final double topOffset = e.position.dy - (e.height / 2) - (isSelected ? pad : 0);
+
     return Positioned(
-      left: e.position.dx - (e.width / 2) - 100, top: e.position.dy - (e.height / 2) - 100,
+      left: leftOffset,
+      top: topOffset,
       child: SizedBox(
-        width: e.width + 200, height: e.height + 200,
-        child: Stack(alignment: Alignment.center, children: [
-          Transform.rotate(angle: e.angle, child: shapeContent),
-          if (isSelected) ...[
-            Positioned(left: 30, child: _handle(Icons.open_with, Colors.orange, onPanStart: (_) => _saveState(), onPanUpdate: (d) => _moveElement(e, d.delta))),
-            Positioned(top: 30, child: _handle(Icons.rotate_right, Colors.green, onTap: () { _saveState(); setState(() => e.angle = (e.angle + math.pi / 2) % (math.pi * 2)); })),
-            Positioned(right: 30, child: _handle(Icons.unfold_more, Colors.blue, onPanStart: (_) => _saveState(), onPanUpdate: (d) { setState(() { e.width = (e.width + d.delta.dx).clamp(10, 600); if (e.type != Tool.bus) e.height = e.width; }); })),
+        width: boxWidth,
+        height: boxHeight,
+        child: Stack(
+          alignment: Alignment.center,
+          clipBehavior: Clip.none,
+          children: [
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () {
+                setState(() => selectedElement = e);
+              },
+              onDoubleTap: () {
+                setState(() {
+                  selectedElement = e;
+                  isInspectorOpen = true;
+                });
+              },
+              onPanStart: (d) {
+                if (selectedTool == Tool.move) {
+                  _saveState();
+                  setState(() => selectedElement = e);
+                }
+              },
+              onPanUpdate: (d) {
+                if (selectedTool == Tool.move) {
+                  _moveElement(e, d.delta);
+                }
+              },
+              child: MouseRegion(
+                cursor: selectedTool == Tool.move ? SystemMouseCursors.move : SystemMouseCursors.click,
+                child: Transform.rotate(angle: e.angle, child: shapeContent),
+              ),
+            ),
+
+            if (isSelected) ...[
+              IgnorePointer(
+                child: Container(
+                  width: e.width + 8,
+                  height: e.height + 8,
+                  decoration: BoxDecoration(
+                    border: Border.all(color: const Color(0xFF2563EB), width: 1.5),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                ),
+              ),
+              Positioned(
+                top: -8,
+                child: GestureDetector(
+                  onTap: () {
+                    _saveState();
+                    setState(() => e.angle = (e.angle + math.pi / 2) % (math.pi * 2));
+                  },
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: Container(
+                      width: 18,
+                      height: 18,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF2563EB),
+                        shape: BoxShape.circle,
+                        boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 3)],
+                      ),
+                      child: const Icon(Icons.rotate_right, size: 12, color: Colors.white),
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                right: -6,
+                child: GestureDetector(
+                  onPanStart: (_) => _saveState(),
+                  onPanUpdate: (d) {
+                    setState(() {
+                      e.width = (e.width + d.delta.dx).clamp(20, 800);
+                      if (e.type != Tool.bus) e.height = e.width;
+                    });
+                  },
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.resizeLeftRight,
+                    child: Container(
+                      width: 12,
+                      height: 12,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        border: Border.all(color: const Color(0xFF2563EB), width: 2),
+                        borderRadius: BorderRadius.circular(2),
+                        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 2)],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ],
-        ]),
+        ),
       ),
     );
   }
@@ -2330,248 +2533,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     });
   }
 
-  Widget _handle(IconData icon, Color color, {Function(DragUpdateDetails)? onPanUpdate, Function(DragStartDetails)? onPanStart, VoidCallback? onTap}) => GestureDetector(onPanStart: onPanStart, onPanUpdate: onPanUpdate, onTap: onTap, child: CircleAvatar(radius: 14, backgroundColor: color, child: Icon(icon, size: 14, color: Colors.white)));
 
   void _checkSelection(Offset pos) { setState(() => selectedElement = _findElementAt(pos)); }
 
-  void _showPropertiesDialog(DrawingElement e) {
-    final lCtrl = TextEditingController(text: e.label); 
-    final vCtrl = TextEditingController(text: e.vPu.toString());
-    final pCtrl = TextEditingController(text: e.pPu.toString()); 
-    final qCtrl = TextEditingController(text: e.qPu.toString());
-    final rCtrl = TextEditingController(text: e.rPu.toString()); 
-    final xCtrl = TextEditingController(text: e.xPu.toString());
-    final bCtrl = TextEditingController(text: e.bPu.toString());
-    final aCtrl = TextEditingController(text: e.thetaDeg.toString());
-    final tapCtrl = TextEditingController(text: e.tapRatio.toString());
-    
-    bool tempShowInfo = e.showInfo;
-    bool tempIsSlack = e.isSlack;
-
-    DrawingElement? lineStartEl;
-    DrawingElement? lineEndEl;
-    if (e.type == Tool.line) {
-      try { lineStartEl = elements.firstWhere((el) => el.id == e.startElementId); } catch (_) {}
-      try { lineEndEl = elements.firstWhere((el) => el.id == e.endElementId); } catch (_) {}
-    }
-    final bool isBothBuses = e.type == Tool.line &&
-        (lineStartEl?.type == Tool.bus && lineEndEl?.type == Tool.bus);
-    final bool isGenLead = !isBothBuses && e.type == Tool.line &&
-        (lineStartEl?.type == Tool.generator || lineEndEl?.type == Tool.generator || e.label.contains("↔ G_") || e.id.contains("gen"));
-    final bool isLoadLead = !isBothBuses && !isGenLead && e.type == Tool.line &&
-        (lineStartEl?.type == Tool.load || lineEndEl?.type == Tool.load || e.label.contains("↔ Load_") || e.id.contains("load"));
-
-    showDialog(
-      context: context, 
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          return AlertDialog(
-            title: Text(e.label.isNotEmpty ? "${e.label} 제원 설정" : "${e.id} 제원 설정"),
-            content: SingleChildScrollView(
-              child: Column(mainAxisSize: MainAxisSize.min, children: [
-                SwitchListTile(
-                  title: const Text("화면에 값 표시", style: TextStyle(fontWeight: FontWeight.bold)),
-                  value: tempShowInfo,
-                  activeColor: Colors.blue,
-                  onChanged: (v) => setDialogState(() => tempShowInfo = v),
-                ),
-                const Divider(),
-                // ✅ [수정완료] 모선(bus)일 때는 '버스 번호', 그 외 부품은 '라벨 (이름)'으로 표시
-                TextField(
-                  controller: lCtrl, 
-                  decoration: InputDecoration(labelText: e.type == Tool.bus ? "버스 번호" : "라벨 (이름)")
-                ),
-                if (e.type == Tool.generator) ...[
-                  SwitchListTile(
-                    title: const Text("슬랙 모선 (Slack/Swing)"),
-                    subtitle: Text(tempIsSlack ? "기준 모선 (위상 θ=0° 고정)" : "PV 모선 (유효전력 P, 전압 V 지정)"),
-                    value: tempIsSlack,
-                    activeColor: Colors.redAccent,
-                    onChanged: (v) => setDialogState(() => tempIsSlack = v),
-                  ),
-                  TextField(controller: vCtrl, decoration: const InputDecoration(labelText: "목표 전압 V (pu)")),
-                  TextField(
-                    controller: pCtrl,
-                    decoration: InputDecoration(
-                      labelText: tempIsSlack ? "발전 출력 P (pu) [슬랙 분담]" : "발전 출력 P (pu)",
-                    ),
-                  ),
-                  TextField(controller: qCtrl, decoration: const InputDecoration(labelText: "무효 전력 Q (pu)")),
-                  if (tempIsSlack)
-                    TextField(controller: aCtrl, decoration: const InputDecoration(labelText: "기준 위상각 θ (deg)")),
-                ],
-                if (e.type == Tool.bus) ...[
-                  TextField(controller: vCtrl, decoration: const InputDecoration(labelText: "전압 V (pu)")),
-                  TextField(controller: aCtrl, decoration: const InputDecoration(labelText: "위상 θ (deg)")),
-                ],
-                if (e.type == Tool.load) ...[ 
-                  TextField(controller: pCtrl, decoration: const InputDecoration(labelText: "부하 P (pu)")), 
-                  TextField(controller: qCtrl, decoration: const InputDecoration(labelText: "부하 Q (pu)")) 
-                ],
-                if (isGenLead) ...[
-                  TextField(
-                    controller: pCtrl,
-                    decoration: const InputDecoration(labelText: "발전 주입 유효전력 P (pu)", helperText: "발전기 단자에서 모선으로 유입되는 전력"),
-                  ),
-                  TextField(
-                    controller: qCtrl,
-                    decoration: const InputDecoration(labelText: "발전 무효전력 Q (pu)"),
-                  ),
-                  TextField(
-                    controller: rCtrl,
-                    decoration: const InputDecoration(labelText: "인입선 저항 R (pu)", helperText: "발전기 단자 직결 (기본 0.0)"),
-                  ),
-                  TextField(
-                    controller: xCtrl,
-                    decoration: const InputDecoration(labelText: "인입선 리액턴스 X (pu)", helperText: "발전기 단자 직결 (기본 0.0)"),
-                  ),
-                ] else if (isLoadLead) ...[
-                  TextField(
-                    controller: pCtrl,
-                    decoration: const InputDecoration(labelText: "부하 소비 유효전력 P (pu)", helperText: "모선에서 부하로 소비되는 전력"),
-                  ),
-                  TextField(
-                    controller: qCtrl,
-                    decoration: const InputDecoration(labelText: "부하 소비 무효전력 Q (pu)"),
-                  ),
-                  TextField(
-                    controller: rCtrl,
-                    decoration: const InputDecoration(labelText: "인입선 저항 R (pu)", helperText: "부하 단자 직결 (기본 0.0)"),
-                  ),
-                  TextField(
-                    controller: xCtrl,
-                    decoration: const InputDecoration(labelText: "인입선 리액턴스 X (pu)", helperText: "부하 단자 직결 (기본 0.0)"),
-                  ),
-                ] else if (e.type == Tool.line) ...[ 
-                  TextField(controller: rCtrl, decoration: const InputDecoration(labelText: "저항 R (pu)")), 
-                  TextField(controller: xCtrl, decoration: const InputDecoration(labelText: "리액턴스 X (pu)")), 
-                  TextField(controller: bCtrl, decoration: const InputDecoration(labelText: "서셉턴스 B (pu)")), 
-                  TextField(
-                    controller: tapCtrl,
-                    decoration: const InputDecoration(
-                      labelText: "변압기 탭비 Tap (pu)",
-                      helperText: "변압기 선로인 경우 탭비 입력 (일반 송전선로는 1.0)",
-                    ),
-                  ),
-                ],
-                if (e.type == Tool.transformer) ...[ 
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    margin: const EdgeInsets.only(top: 8, bottom: 8),
-                    decoration: BoxDecoration(
-                      color: Colors.amber.shade50,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.amber.shade300),
-                    ),
-                    child: const Row(
-                      children: [
-                        Icon(Icons.electrical_services, color: Colors.orange),
-                        SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            "변압기 제원 (권선비 / 탭비)",
-                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  TextField(
-                    controller: tapCtrl,
-                    decoration: const InputDecoration(
-                      labelText: "권선비 / 탭비 Tap (pu)",
-                      hintText: "1.0 (예: 1.03 = 103%)",
-                      helperText: "공칭 변압비 대비 탭 비율 (기본: 1.0, 엑셀 transformer 시트)",
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.blue.shade50,
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(color: Colors.blue.shade200),
-                    ),
-                    child: const Text(
-                      "※ 변압기 임피던스(저항 R, 리액턴스 X)는 엑셀 branch 규격에 맞춰 연결된 선로(Line)에서 관리됩니다.",
-                      style: TextStyle(fontSize: 11, color: Color(0xFF1E293B)),
-                    ),
-                  ),
-                ],
-              ])
-            ),
-            actions: [
-              ElevatedButton(
-                onPressed: () { 
-                  _saveState(); 
-                  setState(() { 
-                    e.label = lCtrl.text; 
-                    e.vPu = double.tryParse(vCtrl.text) ?? 1.0; 
-                    e.pPu = double.tryParse(pCtrl.text) ?? 0; 
-                    e.qPu = double.tryParse(qCtrl.text) ?? 0; 
-                    e.rPu = double.tryParse(rCtrl.text) ?? 0.01; 
-                    e.xPu = double.tryParse(xCtrl.text) ?? 0.05; 
-                    e.bPu = double.tryParse(bCtrl.text) ?? 0.0; 
-                    e.thetaDeg = double.tryParse(aCtrl.text) ?? 0; 
-                    e.tapRatio = double.tryParse(tapCtrl.text) ?? 1.0; 
-                    
-                    e.showInfo = tempShowInfo; 
-                    
-                    if (e.type == Tool.generator && tempIsSlack != e.isSlack) {
-                      if (tempIsSlack) {
-                        for (var el in elements.where((el) => el.type == Tool.generator)) { 
-                          el.isSlack = false; 
-                        }
-                      }
-                      e.isSlack = tempIsSlack;
-                    }
-
-                    if (isGenLead) {
-                      if (lineStartEl?.type == Tool.generator) {
-                        lineStartEl!.pPu = e.pPu; lineStartEl!.qPu = e.qPu;
-                      } else if (lineEndEl?.type == Tool.generator) {
-                        lineEndEl!.pPu = e.pPu; lineEndEl!.qPu = e.qPu;
-                      }
-                    } else if (isLoadLead) {
-                      if (lineStartEl?.type == Tool.load) {
-                        lineStartEl!.pPu = e.pPu; lineStartEl!.qPu = e.qPu;
-                      } else if (lineEndEl?.type == Tool.load) {
-                        lineEndEl!.pPu = e.pPu; lineEndEl!.qPu = e.qPu;
-                      }
-                    }
-
-                    // ✅ [수정완료] 버스 번호 입력 시 ID 자체를 bus_번호로 변경하고 연결 끊김 방지
-                    if (e.type == Tool.bus && e.label.isNotEmpty) {
-                      String oldId = e.id;
-                      String newBusNum = _getBusNum(e.label);
-                      String newId = "bus_$newBusNum"; // 새로운 ID로 변경!
-                      
-                      if (oldId != newId) {
-                        e.id = newId;
-                        // 기존 ID를 바라보던 부품/선로들의 참조 ID도 모두 새 ID로 갈아끼움
-                        for (var el in elements) {
-                          if (el.parentBusId == oldId) el.parentBusId = newId;
-                          if (el.startElementId == oldId) el.startElementId = newId;
-                          if (el.endElementId == oldId) el.endElementId = newId;
-                        }
-                      }
-                      _updateConnectedElementsId(e);
-                    }
-                  }); 
-                  Navigator.pop(context); 
-                }, 
-                child: const Text("저장")
-              )
-            ],
-          );
-        }
-      )
-    );
-  }
-
-  Widget _buildQuickDeleteButton() {
-    return const SizedBox.shrink();
-  }
 }
 
 class LoadArrowPainter extends CustomPainter {
