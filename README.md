@@ -165,16 +165,6 @@ python backend_api/tests/test_power_flow_solver.py
 
 ---
 
-## 💡 취업 포트폴리오 및 자기소개서(Resume) 핵심 키워드
-
-- **직무 역량**: 전력계통 해석(Power System Analysis), 풀스택 엔지니어링, 알고리즘 수치해석, 컴퓨터 비전(CV), 반응형 웹 CAD UI/UX
-- **문제 해결 경험**:
-  1. *비선형 연립방정식 수렴성 개선*: 초기 전압 평탄 기동(Flat Start) 및 적응형 감쇠 계수를 도입하여 고임피던스 변압기 및 복회선 계통의 발산 문제 해결.
-  2. *웹 캔버스 조작성 혁신*: 모바일 터치 기반의 뭉툭한 조작계를 데스크톱 정밀 벡터 CAD(Direct Drag, 1px Keyboard Nudge, Label Counter-Rotation)로 전면 개편하여 작업 효율 300% 이상 향상.
-  3. *모듈화 리팩토링*: 프론트-백엔드 간 Dual Mapping을 해소하고 4,700줄의 모놀리식 코드를 역할별 컴포넌트로 분리하여 결합도(Coupling)를 획기적으로 낮춤.
-
----
-
 ## 📄 라이선스 (License)
 
 This project is licensed under the MIT License.
