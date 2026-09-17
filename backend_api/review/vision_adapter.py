@@ -158,6 +158,10 @@ def build_graph_document(
                 display_bus_no = None
 
         parameters = dict(raw_node.get("parameters") or {})
+        if "orientation" in raw_node:
+            parameters["orientation"] = raw_node["orientation"]
+        if "direction" in raw_node:
+            parameters["direction"] = raw_node["direction"]
         if "bus_number_status" in raw_node:
             parameters["bus_number_status"] = raw_node["bus_number_status"]
         if "bus_number_reasons" in raw_node:

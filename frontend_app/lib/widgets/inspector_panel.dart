@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/drawing_element.dart';
@@ -851,6 +852,113 @@ class _InspectorPanelState extends State<InspectorPanel> {
               controller: qCtrl,
               helperText: useMw ? "(= ${e.qPu.toStringAsFixed(3)} pu)" : "(= ${(e.qPu * widget.sBase).toStringAsFixed(1)} MVAR)",
               onChanged: (val) => e.qPu = useMw ? (val / widget.sBase) : val,
+            ),
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.explore, size: 14, color: Color(0xFF059669)),
+                      const SizedBox(width: 4),
+                      const Text(
+                        "부하 화살표 방향",
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Color(0xFF334155)),
+                      ),
+                      const Spacer(),
+                      InkWell(
+                        onTap: () {
+                          setState(() {
+                            e.angle = (e.angle + math.pi / 2) % (math.pi * 2);
+                          });
+                          widget.onStateChanged();
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE2E8F0),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.rotate_right, size: 12, color: Color(0xFF475569)),
+                              SizedBox(width: 2),
+                              Text("90° 회전", style: TextStyle(fontSize: 10, color: Color(0xFF475569))),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Builder(
+                    builder: (context) {
+                      final int qTurns = ((e.angle / (math.pi / 2)).round() % 4 + 4) % 4;
+                      // 0: down, 1: left, 2: up, 3: right
+                      Widget dirBtn(String label, IconData icon, int targetTurns, double targetAngle) {
+                        final bool isCurrent = (qTurns == targetTurns);
+                        return Expanded(
+                          child: InkWell(
+                            onTap: () {
+                              setState(() {
+                                e.angle = targetAngle;
+                              });
+                              widget.onStateChanged();
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(vertical: 6),
+                              margin: const EdgeInsets.symmetric(horizontal: 2),
+                              decoration: BoxDecoration(
+                                color: isCurrent ? const Color(0xFF059669) : Colors.white,
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(
+                                  color: isCurrent ? const Color(0xFF059669) : const Color(0xFFCBD5E1),
+                                  width: isCurrent ? 1.5 : 1.0,
+                                ),
+                                boxShadow: isCurrent ? [
+                                  const BoxShadow(color: Color(0x33059669), blurRadius: 4, offset: Offset(0, 1))
+                                ] : null,
+                              ),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(icon, size: 16, color: isCurrent ? Colors.white : const Color(0xFF475569)),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    label,
+                                    style: TextStyle(
+                                      fontSize: 10,
+                                      fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
+                                      color: isCurrent ? Colors.white : const Color(0xFF475569),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+
+                      return Row(
+                        children: [
+                          dirBtn("아래 (↓)", Icons.arrow_downward, 0, 0.0),
+                          dirBtn("위 (↑)", Icons.arrow_upward, 2, math.pi),
+                          dirBtn("왼쪽 (←)", Icons.arrow_back, 1, math.pi / 2),
+                          dirBtn("오른쪽 (→)", Icons.arrow_forward, 3, -math.pi / 2),
+                        ],
+                      );
+                    },
+                  ),
+                ],
+              ),
             ),
           ],
 

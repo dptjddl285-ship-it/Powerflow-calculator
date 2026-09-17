@@ -1711,6 +1711,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       final double shiftY = CANVAS_CENTER - origCenterY;
 
       // 2. Parse nodes preserving original bbox width/height
+      final Set<String> elementsWithExplicitOrientation = {};
       for (var node in rawNodes) {
         String id = (node['id'] ?? node['node_id'] ?? '').toString();
         String aiClass = (node['class'] ?? node['className'] ?? 'bus').toString().toLowerCase();
@@ -1731,8 +1732,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           if (w > h) { h = math.max(h, 8.0); w = math.max(w, 40.0); } 
           else { w = math.max(w, 8.0); h = math.max(h, 40.0); }       
         } else if (type == Tool.load) {
-          w = math.max(w, 18.0);
-          h = math.max(h, 24.0);
+          w = 18.0;
+          h = 26.0;
         } else if (type == Tool.generator) {
           double size = math.max(math.max(w, h), 26.0);
           w = size; h = size;
@@ -1743,7 +1744,13 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
 
         // Calculate 90-degree snapped rotation angle from metadata orientation if available
         double angle = 0.0;
-        final orientationMeta = node['orientation'] ?? (node['metadata'] is Map ? node['metadata']['orientation'] : null);
+        final orientationMeta = node['orientation'] ?? 
+            (node['metadata'] is Map ? node['metadata']['orientation'] : null) ??
+            (node['parameters'] is Map ? node['parameters']['orientation'] : null);
+        final directionMeta = node['direction'] ?? 
+            (node['metadata'] is Map ? node['metadata']['direction'] : null) ??
+            (node['parameters'] is Map ? node['parameters']['direction'] : null);
+
         if (orientationMeta != null) {
           String orient = orientationMeta.toString().toLowerCase();
           if (orient == 'down' || orient == 'south' || orient == '90') {
@@ -1755,6 +1762,20 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           } else if (orient == 'right' || orient == 'east' || orient == '0') {
             angle = -math.pi / 2;
           }
+          elementsWithExplicitOrientation.add(id);
+        } else if (directionMeta is List && directionMeta.length >= 2) {
+          num dx = directionMeta[0] as num;
+          num dy = directionMeta[1] as num;
+          if (dy > 0) {
+            angle = 0.0;
+          } else if (dy < 0) {
+            angle = math.pi;
+          } else if (dx > 0) {
+            angle = -math.pi / 2;
+          } else if (dx < 0) {
+            angle = math.pi / 2;
+          }
+          elementsWithExplicitOrientation.add(id);
         }
 
         String label = (node['display_label'] ?? '').toString();
@@ -1854,32 +1875,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         }
       }
 
-      // 4. For Loads without explicit orientation metadata, compute snapped 90-deg angle from connected line endpoint
-      for (var el in elements.where((e) => e.type == Tool.load)) {
-        if (el.angle == 0.0) {
-          DrawingElement? connLine;
-          for (var l in elements.where((e) => e.type == Tool.line)) {
-            if (l.startElementId == el.id || l.endElementId == el.id) {
-              connLine = l;
-              break;
-            }
-          }
-          if (connLine != null && connLine.aiPath != null && connLine.aiPath!.isNotEmpty) {
-            Offset nearPt = connLine.startElementId == el.id
-                ? connLine.aiPath!.first
-                : connLine.aiPath!.last;
-            double dx = el.position.dx - nearPt.dx;
-            double dy = el.position.dy - nearPt.dy;
-            if (dx.abs() > dy.abs()) {
-              el.angle = dx > 0 ? -math.pi / 2 : math.pi / 2; // Pointing Right vs Left
-            } else {
-              el.angle = dy > 0 ? 0.0 : math.pi; // Pointing Down vs Up
-            }
-          }
-        }
-      }
-
-      // 5. Connect every Generator & Load to its parent Bus (via bus number, line, or spatial proximity)
+      // 4. Connect every Generator & Load to its parent Bus (via bus number, line, or spatial proximity)
       for (var dev in elements.where((e) => e.type == Tool.generator || e.type == Tool.load)) {
         if (dev.parentBusId == null || dev.parentBusId!.isEmpty) {
           int? bNum;
@@ -1925,6 +1921,46 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           }
           if (nearestBus != null && minDist < 200.0) {
             dev.parentBusId = nearestBus.id;
+          }
+        }
+      }
+
+      // 5. For Loads without explicit orientation metadata from AI, compute orientation pointing away from parent Bus
+      for (var el in elements.where((e) => e.type == Tool.load)) {
+        if (!elementsWithExplicitOrientation.contains(el.id)) {
+          DrawingElement? parentBus = elements.where((e) => e.type == Tool.bus && e.id == el.parentBusId).firstOrNull;
+          if (parentBus == null && elements.any((e) => e.type == Tool.bus)) {
+            double minDist = double.infinity;
+            for (var b in elements.where((e) => e.type == Tool.bus)) {
+              double d = (el.position - b.position).distance;
+              if (d < minDist) {
+                minDist = d;
+                parentBus = b;
+              }
+            }
+          }
+          if (parentBus != null) {
+            double dx = el.position.dx - parentBus.position.dx;
+            double dy = el.position.dy - parentBus.position.dy;
+            if (parentBus.width >= parentBus.height) {
+              // Horizontal bus: loads above point UP, loads below point DOWN
+              if (dy < -6) {
+                el.angle = math.pi; // Pointing UP
+              } else if (dy > 6) {
+                el.angle = 0.0; // Pointing DOWN
+              } else if (dx.abs() > 6) {
+                el.angle = dx > 0 ? -math.pi / 2 : math.pi / 2; // Right vs Left
+              }
+            } else {
+              // Vertical bus: loads to right point RIGHT, loads to left point LEFT
+              if (dx > 6) {
+                el.angle = -math.pi / 2; // Pointing RIGHT
+              } else if (dx < -6) {
+                el.angle = math.pi / 2; // Pointing LEFT
+              } else if (dy.abs() > 6) {
+                el.angle = dy > 0 ? 0.0 : math.pi; // Down vs Up
+              }
+            }
           }
         }
       }

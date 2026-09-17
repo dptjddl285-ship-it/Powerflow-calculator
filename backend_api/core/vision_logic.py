@@ -2714,6 +2714,42 @@ def analyze_circuit_image(
                 prediction["metadata"] = {
                     "transformer": serializable_transformer,
                 }
+        elif class_name == "load":
+            direction = None
+            load_candidate = (metadata or {}).get("load_candidate")
+            if load_candidate is not None:
+                direction = getattr(load_candidate, "direction", None)
+            
+            if direction is None or direction == (0, 0):
+                attached_bus_box = (metadata or {}).get("attached_bus_box")
+                if attached_bus_box is not None:
+                    bus_cx = float(attached_bus_box[0] + attached_bus_box[2] / 2) / LOAD_SCALE
+                    bus_cy = float(attached_bus_box[1] + attached_bus_box[3] / 2) / LOAD_SCALE
+                    dx = float(bbox[0]) - bus_cx
+                    dy = float(bbox[1]) - bus_cy
+                    if abs(dx) > abs(dy):
+                        direction = (1, 0) if dx > 0 else (-1, 0)
+                    else:
+                        direction = (0, 1) if dy > 0 else (0, -1)
+
+            if direction is not None:
+                dx, dy = direction
+                if dy > 0:
+                    orient = "down"
+                elif dy < 0:
+                    orient = "up"
+                elif dx > 0:
+                    orient = "right"
+                elif dx < 0:
+                    orient = "left"
+                else:
+                    orient = "down"
+                prediction["orientation"] = orient
+                prediction["direction"] = [int(dx), int(dy)]
+                if prediction.get("metadata") is None:
+                    prediction["metadata"] = {}
+                prediction["metadata"]["orientation"] = orient
+                prediction["metadata"]["direction"] = [int(dx), int(dy)]
         predictions.append(prediction)
         component_classes[comp_id] = class_name
         component_metadata[comp_id] = dict(metadata or {})
