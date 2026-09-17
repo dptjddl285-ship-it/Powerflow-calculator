@@ -8,8 +8,8 @@ import 'package:http/http.dart' as http;
 class ExcelMismatchDialog extends StatefulWidget {
   final Map<String, dynamic> mismatchReport;
   final Map<String, dynamic> excelData;
-  final List<dynamic> elements;
   final VoidCallback onAutoRecover;
+  final VoidCallback? onResetToStart;
   final VoidCallback? onCancel;
 
   const ExcelMismatchDialog({
@@ -18,6 +18,7 @@ class ExcelMismatchDialog extends StatefulWidget {
     required this.excelData,
     required this.elements,
     required this.onAutoRecover,
+    this.onResetToStart,
     this.onCancel,
   });
 
@@ -349,8 +350,23 @@ class _ExcelMismatchDialogState extends State<ExcelMismatchDialog> {
 
               // Action Buttons
               Row(
-                mainAxisAlignment: MainAxisAlignment.end,
                 children: [
+                  if (widget.onResetToStart != null) ...[
+                    OutlinedButton.icon(
+                      onPressed: widget.onResetToStart,
+                      icon: const Icon(Icons.restart_alt, size: 16, color: Colors.orangeAccent),
+                      label: const Text(
+                        "다시 검수 처음으로 돌아가기",
+                        style: TextStyle(color: Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.orangeAccent),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                    ),
+                  ],
+                  const Spacer(),
                   TextButton(
                     onPressed: () {
                       Navigator.of(context).pop();

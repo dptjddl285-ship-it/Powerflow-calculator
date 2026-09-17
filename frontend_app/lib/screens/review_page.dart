@@ -1068,6 +1068,91 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     }
   }
 
+  Future<void> _confirmResetToBeginning() async {
+    final bool? shouldReset = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: const Row(
+          children: [
+            Icon(Icons.restart_alt, color: Color(0xFFDC2626), size: 24),
+            SizedBox(width: 8),
+            Text(
+              "검수 처음으로 돌아가기",
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF0F172A)),
+            ),
+          ],
+        ),
+        content: const Text(
+          "검수를 처음 단계(① 객체 검수)로 되돌리시겠습니까?\n\n"
+          "• 적용된 엑셀 데이터 및 불일치 알림이 초기화됩니다.\n"
+          "• 선로 결선 및 최종 검증 상태가 리셋되며, 최초 도면 AI 인식 객체 목록으로 복원됩니다.",
+          style: TextStyle(fontSize: 13.5, height: 1.5, color: Color(0xFF334155)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text("취소", style: TextStyle(color: Color(0xFF64748B))),
+          ),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            icon: const Icon(Icons.restart_alt, size: 16),
+            label: const Text("처음으로 돌아가기"),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFDC2626),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (shouldReset == true) {
+      _resetToReviewBeginning();
+    }
+  }
+
+  void _resetToReviewBeginning() {
+    ScaffoldMessenger.of(context).clearSnackBars();
+    setState(() {
+      _importedExcelData = null;
+      _excelMismatchReport = null;
+      _currentPhase = ReviewPhase.objectReview;
+      _isObjectVerified = false;
+      _isFinalVerified = false;
+      _objectGateMessage = null;
+      _humanCompletenessConfirmed = false;
+      _workingLines.clear();
+      _verifiedSld = null;
+      _topologyIssues.clear();
+      _selectedTopologyIssue = null;
+      _selectedLine = null;
+      _missingCandidates.clear();
+      _completenessAssessment = null;
+      _completenessMessageKo = null;
+      _objFilterStatus = 'ALL';
+      _objFilterClass = 'ALL';
+
+      if (_document != null) {
+        _workingNodes = _document!.nodes.map((n) => ReviewNodeItem.fromJson(n.toJson())).toList();
+        _selectedNode = _workingNodes.isNotEmpty ? _workingNodes.first : null;
+      }
+      _busNumberEditController.clear();
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("🔄 검수 첫 단계(① 객체 검수)로 돌아왔습니다. 엑셀 연계가 초기화되었습니다."),
+        backgroundColor: Color(0xFF2563EB),
+        duration: Duration(seconds: 3),
+        showCloseIcon: true,
+        closeIconColor: Colors.white,
+      ),
+    );
+  }
+
   // --- Chat Assistant Logic ---
 
   Future<void> _sendChatMessage(String text) async {
@@ -1236,26 +1321,80 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             "① 객체 검수",
             _currentPhase == ReviewPhase.objectReview,
             _isObjectVerified,
+            onTap: () {
+              setState(() {
+                _currentPhase = ReviewPhase.objectReview;
+                _selectedLine = null;
+                _selectedNode = _workingNodes.isNotEmpty ? _workingNodes.first : null;
+              });
+            },
           ),
           const Icon(Icons.arrow_right, color: Color(0xFF94A3B8), size: 14),
           _buildPhaseBadge(
             "② 모선 매핑",
             _currentPhase == ReviewPhase.busMappingReview,
             _canVerifyBusGate,
+            onTap: _workingNodes.isNotEmpty
+                ? () {
+                    setState(() {
+                      _currentPhase = ReviewPhase.busMappingReview;
+                      _selectedLine = null;
+                      final buses = _filteredAndSortedBusNodes;
+                      _selectedNode = buses.isNotEmpty ? buses.first : null;
+                    });
+                  }
+                : null,
           ),
           const Icon(Icons.arrow_right, color: Color(0xFF94A3B8), size: 14),
           _buildPhaseBadge(
             "③ 결선 검수",
             _currentPhase == ReviewPhase.connectionReview,
             _workingLines.isNotEmpty && _lineAmbiguousCount == 0,
+            onTap: _workingLines.isNotEmpty
+                ? () {
+                    setState(() {
+                      _currentPhase = ReviewPhase.connectionReview;
+                      _selectedNode = null;
+                      _selectedLine = _workingLines.first;
+                    });
+                  }
+                : null,
           ),
           const Icon(Icons.arrow_right, color: Color(0xFF94A3B8), size: 14),
           _buildPhaseBadge(
             "④ 최종 & 엑셀",
             _currentPhase == ReviewPhase.verifiedFinal,
             _isFinalVerified,
+            onTap: _verifiedSld != null
+                ? () {
+                    setState(() {
+                      _currentPhase = ReviewPhase.verifiedFinal;
+                    });
+                  }
+                : null,
           ),
           const SizedBox(width: 8),
+          if (_document != null) ...[
+            OutlinedButton.icon(
+              onPressed: _confirmResetToBeginning,
+              icon: const Icon(Icons.restart_alt, size: 14, color: Color(0xFFDC2626)),
+              label: const Text(
+                "검수 처음으로",
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFFDC2626),
+                ),
+              ),
+              style: OutlinedButton.styleFrom(
+                backgroundColor: const Color(0xFFFEF2F2),
+                side: const BorderSide(color: Color(0xFFFCA5A5)),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
+            const SizedBox(width: 6),
+          ],
           ElevatedButton.icon(
             onPressed: _importExcelInReview,
             icon: Icon(
@@ -1352,7 +1491,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     );
   }
 
-  Widget _buildPhaseBadge(String label, bool isCurrent, bool isCompleted) {
+  Widget _buildPhaseBadge(String label, bool isCurrent, bool isCompleted, {VoidCallback? onTap}) {
     Color bg = const Color(0xFFF1F5F9);
     Color text = const Color(0xFF64748B);
     Color border = const Color(0xFFE2E8F0);
@@ -1366,7 +1505,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       border = const Color(0xFF93C5FD);
     }
 
-    return Container(
+    final badge = Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: bg,
@@ -1381,6 +1520,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
         ),
       ),
+    );
+
+    if (onTap == null) return badge;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(4),
+      child: badge,
     );
   }
 
@@ -5012,22 +5158,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     if (!mounted) return;
 
     if (mismatchReport != null && mismatchReport['is_matched'] == false) {
+      ScaffoldMessenger.of(context).clearSnackBars();
       _showReviewMismatchDialog();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            "⚠️ 도면과 엑셀 데이터가 일치하지 않습니다!\n• ${mismatchReport['summary'] ?? '모선/선로 구성 불일치'}",
-          ),
-          backgroundColor: Colors.orange.shade900,
-          duration: const Duration(seconds: 5),
-          action: SnackBarAction(
-            label: "AI 진단 보기",
-            textColor: Colors.amberAccent,
-            onPressed: _showReviewMismatchDialog,
-          ),
-        ),
-      );
     } else {
+      ScaffoldMessenger.of(context).clearSnackBars();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -5035,6 +5169,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           ),
           backgroundColor: Colors.green,
           duration: const Duration(seconds: 4),
+          showCloseIcon: true,
+          closeIconColor: Colors.white,
         ),
       );
     }
@@ -5042,6 +5178,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   void _showReviewMismatchDialog() {
     if (_excelMismatchReport == null || _importedExcelData == null) return;
+    ScaffoldMessenger.of(context).clearSnackBars();
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -5049,12 +5186,42 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         mismatchReport: _excelMismatchReport!,
         excelData: _importedExcelData!,
         elements: _collectCurrentReviewElements(),
+        onResetToStart: () {
+          Navigator.of(ctx).pop();
+          _confirmResetToBeginning();
+        },
+        onCancel: () {
+          ScaffoldMessenger.of(context).clearSnackBars();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                "⚠️ 도면과 엑셀 데이터가 일치하지 않습니다!\n• ${_excelMismatchReport!['summary'] ?? '모선/선로 구성 불일치'}",
+              ),
+              backgroundColor: Colors.orange.shade900,
+              duration: const Duration(seconds: 4),
+              showCloseIcon: true,
+              closeIconColor: Colors.white,
+              action: SnackBarAction(
+                label: "AI 진단 보기",
+                textColor: Colors.amberAccent,
+                onPressed: () {
+                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                  _showReviewMismatchDialog();
+                },
+              ),
+            ),
+          );
+        },
         onAutoRecover: () {
           Navigator.of(ctx).pop();
+          ScaffoldMessenger.of(context).clearSnackBars();
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text("캔버스 편집 화면으로 이동하여 누락 요소를 자동 동기화합니다."),
               backgroundColor: Colors.teal,
+              showCloseIcon: true,
+              closeIconColor: Colors.white,
+              duration: Duration(seconds: 3),
             ),
           );
           _handoffToFlutterCanvas();
@@ -5458,6 +5625,43 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                               Text(
                                 "• 도면: 모선 ${_busNodes.length}개, 결선 ${sld.lines.length}개  |  엑셀: 모선 ${_importedExcelData!['total_buses'] ?? 0}개, 선로 ${_importedExcelData!['total_branches'] ?? 0}개",
                                 style: const TextStyle(color: Color(0xFF7F1D1D), fontSize: 11),
+                              ),
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  OutlinedButton.icon(
+                                    onPressed: _confirmResetToBeginning,
+                                    icon: const Icon(Icons.restart_alt, size: 14, color: Color(0xFFDC2626)),
+                                    label: const Text(
+                                      "다시 검수 처음으로 돌아가기",
+                                      style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: Color(0xFFDC2626)),
+                                    ),
+                                    style: OutlinedButton.styleFrom(
+                                      backgroundColor: Colors.white,
+                                      side: const BorderSide(color: Color(0xFFFCA5A5)),
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                      visualDensity: VisualDensity.compact,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  TextButton.icon(
+                                    onPressed: () {
+                                      setState(() {
+                                        _importedExcelData = null;
+                                        _excelMismatchReport = null;
+                                      });
+                                      ScaffoldMessenger.of(context).clearSnackBars();
+                                    },
+                                    icon: const Icon(Icons.link_off, size: 14, color: Color(0xFF64748B)),
+                                    label: const Text(
+                                      "엑셀 연결 해제",
+                                      style: TextStyle(fontSize: 11, color: Color(0xFF64748B)),
+                                    ),
+                                    style: TextButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),
