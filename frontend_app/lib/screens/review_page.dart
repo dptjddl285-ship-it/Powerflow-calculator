@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import '../models/review_models.dart';
 import '../services/review_api_service.dart';
 import '../widgets/review_overlay.dart';
+import '../widgets/excel_mismatch_dialog.dart';
 
 enum ReviewPhase { objectReview, connectionReview, busMappingReview, verifiedFinal }
 
@@ -62,6 +63,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   static const int _busPageSize = 7;
   final TextEditingController _busNumberEditController = TextEditingController();
   Map<String, dynamic>? _importedExcelData;
+  Map<String, dynamic>? _excelMismatchReport;
 
   // Loading & Modes
   bool _isLoading = false;
@@ -1056,6 +1058,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     final data = _verifiedSld!.toJson();
     if (_importedExcelData != null) {
       data['excel_data'] = _importedExcelData;
+      if (_excelMismatchReport != null) {
+        data['mismatch_report'] = _excelMismatchReport;
+      }
     }
     widget.onProceedToCanvas?.call(data);
     if (Navigator.canPop(context)) {
@@ -1253,16 +1258,38 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           const SizedBox(width: 8),
           ElevatedButton.icon(
             onPressed: _importExcelInReview,
-            icon: const Icon(Icons.table_chart, size: 14, color: Color(0xFF0D9488)),
+            icon: Icon(
+              Icons.table_chart,
+              size: 14,
+              color: (_excelMismatchReport != null && _excelMismatchReport!['is_matched'] == false)
+                  ? const Color(0xFFDC2626)
+                  : const Color(0xFF0D9488),
+            ),
             label: Text(
-              _importedExcelData != null ? "엑셀 적용됨 (#${_importedExcelData!['slack_bus_number']})" : "엑셀 불러오기",
-              style: const TextStyle(fontSize: 11, color: Color(0xFF0F172A), fontWeight: FontWeight.bold),
+              _importedExcelData != null
+                  ? ((_excelMismatchReport != null && _excelMismatchReport!['is_matched'] == false)
+                      ? "⚠️ 엑셀 불일치 (#${_importedExcelData!['slack_bus_number'] ?? '?'})"
+                      : "엑셀 적용됨 (#${_importedExcelData!['slack_bus_number']})")
+                  : "엑셀 불러오기",
+              style: TextStyle(
+                fontSize: 11,
+                color: (_excelMismatchReport != null && _excelMismatchReport!['is_matched'] == false)
+                    ? const Color(0xFFB91C1C)
+                    : const Color(0xFF0F172A),
+                fontWeight: FontWeight.bold,
+              ),
             ),
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFF1F5F9),
+              backgroundColor: (_excelMismatchReport != null && _excelMismatchReport!['is_matched'] == false)
+                  ? const Color(0xFFFEF2F2)
+                  : const Color(0xFFF1F5F9),
               foregroundColor: const Color(0xFF0F172A),
               elevation: 0,
-              side: const BorderSide(color: Color(0xFFCBD5E1)),
+              side: BorderSide(
+                color: (_excelMismatchReport != null && _excelMismatchReport!['is_matched'] == false)
+                    ? const Color(0xFFFCA5A5)
+                    : const Color(0xFFCBD5E1),
+              ),
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               visualDensity: VisualDensity.compact,
             ),
@@ -4910,7 +4937,131 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     );
   }
 
-  // --- Excel Importer Method ---
+  // --- Excel Importer & Discrepancy Validation Methods ---
+
+  List<Map<String, dynamic>> _collectCurrentReviewElements() {
+    List<Map<String, dynamic>> collected = [];
+    final nodes = (_verifiedSld != null && _verifiedSld!.nodes.isNotEmpty)
+        ? _verifiedSld!.nodes
+        : _workingNodes.where((n) => n.reviewStatus != 'REJECTED').toList();
+
+    final lines = (_verifiedSld != null && _verifiedSld!.lines.isNotEmpty)
+        ? _verifiedSld!.lines
+        : _workingLines.where((l) => l.reviewStatus != 'REJECTED').toList();
+
+    for (var node in nodes) {
+      final cls = node.className.toLowerCase();
+      final bool isSlack = node.metadata['is_slack'] == true ||
+          node.metadata['isSlack'] == true ||
+          (node.displayLabel?.toLowerCase().contains('slack') ?? false);
+      collected.add({
+        'id': node.id,
+        'type': cls,
+        'class': cls,
+        'label': node.effectiveDisplayLabel,
+        'bus_number': node.connectedBusNumber ?? node.busNumber ?? node.displayNumber,
+        'connected_bus_number': node.connectedBusNumber ?? node.busNumber,
+        'parentBusId': node.connectedBusId,
+        'is_slack': isSlack,
+        'isSlack': isSlack,
+      });
+    }
+
+    for (var line in lines) {
+      collected.add({
+        'id': line.lineId,
+        'type': 'line',
+        'connected_to': line.connectedTo,
+        'startElementId': line.connectedTo.isNotEmpty ? line.connectedTo[0] : null,
+        'endElementId': line.connectedTo.length > 1 ? line.connectedTo[1] : null,
+        'label': line.displayLabel ?? '',
+        'endpoints_display': line.endpointsDisplay ?? '',
+      });
+    }
+
+    return collected;
+  }
+
+  Future<void> _validateAndSetExcelData(Map<String, dynamic> excelData) async {
+    Map<String, dynamic>? mismatchReport;
+    try {
+      final reviewElements = _collectCurrentReviewElements();
+      final uri = Uri.parse('http://127.0.0.1:8000/apply_excel_to_elements');
+      final applyRes = await http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'elements': reviewElements,
+          'excel_data': excelData,
+        }),
+      );
+      if (applyRes.statusCode == 200) {
+        final resJson = jsonDecode(applyRes.body);
+        mismatchReport = (resJson['mismatch_report'] ?? resJson['summary']?['mismatch_report']) as Map<String, dynamic>?;
+      }
+    } catch (e) {
+      debugPrint("Review apply_excel_to_elements call error: $e");
+    }
+
+    setState(() {
+      _importedExcelData = excelData;
+      _excelMismatchReport = mismatchReport;
+      _isLoading = false;
+    });
+
+    if (!mounted) return;
+
+    if (mismatchReport != null && mismatchReport['is_matched'] == false) {
+      _showReviewMismatchDialog();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            "⚠️ 도면과 엑셀 데이터가 일치하지 않습니다!\n• ${mismatchReport['summary'] ?? '모선/선로 구성 불일치'}",
+          ),
+          backgroundColor: Colors.orange.shade900,
+          duration: const Duration(seconds: 5),
+          action: SnackBarAction(
+            label: "AI 진단 보기",
+            textColor: Colors.amberAccent,
+            onPressed: _showReviewMismatchDialog,
+          ),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            "✅ 엑셀 데이터 매칭 성공 (도면과 완벽 일치)!\n• 슬랙 모선: #${excelData['slack_bus_number'] ?? '자동'}\n• 모선: ${excelData['total_buses'] ?? 0}개, 발전기: ${excelData['total_generators'] ?? 0}개, 선로: ${excelData['total_branches'] ?? 0}개",
+          ),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    }
+  }
+
+  void _showReviewMismatchDialog() {
+    if (_excelMismatchReport == null || _importedExcelData == null) return;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => ExcelMismatchDialog(
+        mismatchReport: _excelMismatchReport!,
+        excelData: _importedExcelData!,
+        elements: _collectCurrentReviewElements(),
+        onAutoRecover: () {
+          Navigator.of(ctx).pop();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("캔버스 편집 화면으로 이동하여 누락 요소를 자동 동기화합니다."),
+              backgroundColor: Colors.teal,
+            ),
+          );
+          _handoffToFlutterCanvas();
+        },
+      ),
+    );
+  }
 
   Future<void> _loadDefaultExcelInReview() async {
     setState(() {
@@ -4920,19 +5071,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     try {
       final data = await _apiService.loadDefaultExcelCase();
       if (!mounted) return;
-      setState(() {
-        _importedExcelData = data;
-        _isLoading = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            "✅ ac_case25 데이터 매칭 성공!\n• 슬랙 모선: #${_importedExcelData!['slack_bus_number']}\n• 모선: ${_importedExcelData!['total_buses']}개, 발전기: ${_importedExcelData!['total_generators']}개, 선로: ${_importedExcelData!['total_branches']}개",
-          ),
-          backgroundColor: Colors.green,
-          duration: const Duration(seconds: 4),
-        ),
-      );
+      await _validateAndSetExcelData(data);
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -4975,19 +5114,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
       final data = await _apiService.uploadExcelCase(bytes, file.name);
       if (!mounted) return;
-      setState(() {
-        _importedExcelData = data;
-        _isLoading = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            "✅ 엑셀 데이터 매칭 성공!\n• 슬랙 모선: #${_importedExcelData!['slack_bus_number']}\n• 모선: ${_importedExcelData!['total_buses']}개, 발전기: ${_importedExcelData!['total_generators']}개, 선로: ${_importedExcelData!['total_branches']}개",
-          ),
-          backgroundColor: Colors.green,
-          duration: const Duration(seconds: 4),
-        ),
-      );
+      await _validateAndSetExcelData(data);
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -5241,7 +5368,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   color: const Color(0xFFF8FAFC),
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(
-                    color: _importedExcelData != null ? const Color(0xFF86EFAC) : const Color(0xFFCBD5E1),
+                    color: _importedExcelData != null
+                        ? ((_excelMismatchReport != null && _excelMismatchReport!['is_matched'] == false)
+                            ? const Color(0xFFF87171)
+                            : const Color(0xFF86EFAC))
+                        : const Color(0xFFCBD5E1),
                     width: 1.5,
                   ),
                 ),
@@ -5251,11 +5382,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Row(
+                        Row(
                           children: [
-                            Icon(Icons.table_chart, color: Color(0xFF0D9488), size: 20),
-                            SizedBox(width: 8),
-                            Text(
+                            Icon(
+                              Icons.table_chart,
+                              color: (_excelMismatchReport != null && _excelMismatchReport!['is_matched'] == false)
+                                  ? const Color(0xFFDC2626)
+                                  : const Color(0xFF0D9488),
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            const Text(
                               "계통 엑셀 데이터 (.xlsx) 매칭",
                               style: TextStyle(color: Color(0xFF0F172A), fontSize: 13.5, fontWeight: FontWeight.bold),
                             ),
@@ -5278,34 +5415,83 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     ),
                     const SizedBox(height: 10),
                     if (_importedExcelData != null) ...[
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF0FDF4),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: const Color(0xFF86EFAC)),
+                      if (_excelMismatchReport != null && _excelMismatchReport!['is_matched'] == false) ...[
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFEF2F2),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: const Color(0xFFFCA5A5)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  const Icon(Icons.warning_amber_rounded, color: Color(0xFFDC2626), size: 20),
+                                  const SizedBox(width: 8),
+                                  const Text(
+                                    "⚠️ 도면과 엑셀 데이터가 일치하지 않습니다!",
+                                    style: TextStyle(color: Color(0xFF991B1B), fontWeight: FontWeight.bold, fontSize: 13),
+                                  ),
+                                  const Spacer(),
+                                  TextButton.icon(
+                                    onPressed: _showReviewMismatchDialog,
+                                    icon: const Icon(Icons.auto_awesome, size: 14, color: Color(0xFF4F46E5)),
+                                    label: const Text(
+                                      "AI 진단 & 세부비교 보기",
+                                      style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: Color(0xFF4F46E5)),
+                                    ),
+                                    style: TextButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      backgroundColor: const Color(0xFFEEF2FF),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                "• ${_excelMismatchReport!['summary'] ?? '도면과 엑셀 사양이 일치하지 않습니다.'}",
+                                style: const TextStyle(color: Color(0xFFB91C1C), fontSize: 11.5, fontWeight: FontWeight.w600),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                "• 도면: 모선 ${_busNodes.length}개, 결선 ${sld.lines.length}개  |  엑셀: 모선 ${_importedExcelData!['total_buses'] ?? 0}개, 선로 ${_importedExcelData!['total_branches'] ?? 0}개",
+                                style: const TextStyle(color: Color(0xFF7F1D1D), fontSize: 11),
+                              ),
+                            ],
+                          ),
                         ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                const Icon(Icons.check_circle, color: Color(0xFF16A34A), size: 18),
-                                const SizedBox(width: 8),
-                                Text(
-                                  _importedExcelData!['summary_title'] ?? "계통 엑셀 데이터 매칭 완료",
-                                  style: const TextStyle(color: Color(0xFF15803D), fontWeight: FontWeight.bold, fontSize: 13),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              "• 슬랙 모선: #${_importedExcelData!['slack_bus_number'] ?? '자동'}  |  모선: ${_importedExcelData!['total_buses'] ?? 0}개  |  발전기: ${_importedExcelData!['total_generators'] ?? 0}개  |  선로/변압기: ${_importedExcelData!['total_branches'] ?? 0}개",
-                              style: const TextStyle(color: Color(0xFF166534), fontSize: 11.5),
-                            ),
-                          ],
+                      ] else ...[
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF0FDF4),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: const Color(0xFF86EFAC)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  const Icon(Icons.check_circle, color: Color(0xFF16A34A), size: 18),
+                                  const SizedBox(width: 8),
+                                  const Text(
+                                    "계통 엑셀 데이터 매칭 완료 (도면과 완벽 일치)",
+                                    style: TextStyle(color: Color(0xFF15803D), fontWeight: FontWeight.bold, fontSize: 13),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                "• 슬랙 모선: #${_importedExcelData!['slack_bus_number'] ?? '자동'}  |  모선: ${_importedExcelData!['total_buses'] ?? 0}개  |  발전기: ${_importedExcelData!['total_generators'] ?? 0}개  |  선로/변압기: ${_importedExcelData!['total_branches'] ?? 0}개",
+                                style: const TextStyle(color: Color(0xFF166534), fontSize: 11.5),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
+                      ],
                     ] else ...[
                       Text(
                         "💡 계통 제원 엑셀(.xlsx) 파일을 불러오면 슬랙 모선과 발전기/부하/선로 파라미터가 캔버스에 자동 반영됩니다.",
