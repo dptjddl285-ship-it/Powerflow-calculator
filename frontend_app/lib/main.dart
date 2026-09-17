@@ -158,8 +158,11 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     final isShift = HardwareKeyboard.instance.isShiftPressed;
 
     final focusedWidget = FocusManager.instance.primaryFocus;
-    // Any focus outside canvas means the user is actively typing or editing in an input field / inspector
-    final isEditingInput = focusedWidget != null && focusedWidget != _canvasFocusNode;
+    // Any focus outside canvas on an editable text field means the user is typing
+    final isEditingInput = focusedWidget != null && focusedWidget != _canvasFocusNode && (
+      focusedWidget.context?.widget is EditableText ||
+      focusedWidget.toString().contains('EditableText')
+    );
 
     if (isEditingInput) {
       if (event.logicalKey == LogicalKeyboardKey.escape) {
@@ -175,10 +178,11 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       return;
     }
 
-    // Only allow element deletion when Delete key is pressed on the canvas (Backspace is strictly reserved for text editing)
-    if (event.logicalKey == LogicalKeyboardKey.delete && _canvasFocusNode.hasFocus) {
+    // Only allow element deletion when Delete key is pressed
+    if (event.logicalKey == LogicalKeyboardKey.delete && selectedElement != null) {
       _deleteSelectedElement();
-    } else if (selectedElement != null && _canvasFocusNode.hasFocus && (
+      return;
+    } else if (selectedElement != null && (
         event.logicalKey == LogicalKeyboardKey.arrowLeft ||
         event.logicalKey == LogicalKeyboardKey.arrowRight ||
         event.logicalKey == LogicalKeyboardKey.arrowUp ||
@@ -194,11 +198,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         _moveElement(selectedElement!, Offset(0, step));
       }
       return;
-    } else if (selectedElement != null && _canvasFocusNode.hasFocus && event.logicalKey == LogicalKeyboardKey.keyR) {
-      _saveState();
-      setState(() {
-        selectedElement!.angle = (selectedElement!.angle + math.pi / 2) % (math.pi * 2);
-      });
+    } else if (selectedElement != null && event.logicalKey == LogicalKeyboardKey.keyR) {
+      _rotateElement(selectedElement!);
       return;
     } else if (event.logicalKey == LogicalKeyboardKey.escape) {
       setState(() {
@@ -231,6 +232,21 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         setState(() { selectedTool = Tool.line; selectedElement = null; });
       }
     }
+  }
+
+  void _rotateElement(DrawingElement e) {
+    _saveState();
+    setState(() {
+      if (e.type == Tool.bus) {
+        // Toggle bus bar between horizontal (w > h) and vertical (h > w)
+        double temp = e.width;
+        e.width = e.height;
+        e.height = temp;
+        e.angle = (e.width < e.height) ? (math.pi / 2) : 0.0;
+      } else {
+        e.angle = (e.angle + math.pi / 2) % (math.pi * 2);
+      }
+    });
   }
 
   void _deleteSelectedElement() {
@@ -1480,6 +1496,11 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                       setState(() {});
                     },
                     onDeleteSelected: _deleteSelectedElement,
+                    onRotateSelected: () {
+                      if (selectedElement != null) {
+                        _rotateElement(selectedElement!);
+                      }
+                    },
                     onClose: () => setState(() => selectedElement = null),
                     onBusRenamed: _handleBusRenamed,
                     onClearAll: _confirmClearCanvas,
@@ -1689,6 +1710,23 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           _paletteItem(Tool.transformer, Icons.crop_square, "변압기", "T"),
           _paletteItem(Tool.line, Icons.polyline, "선로", "W"),
           _paletteItem(Tool.text, Icons.text_fields, "라벨", ""),
+          _actionPaletteItem(
+            Icons.rotate_right,
+            "회전 (R)",
+            const Color(0xFF2563EB),
+            () {
+              if (selectedElement != null) {
+                _rotateElement(selectedElement!);
+              } else {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text("먼저 회전할 요소(모선, 발전기, 부하, 변압기)를 클릭해 선택해주세요."),
+                    duration: Duration(seconds: 1),
+                  ),
+                );
+              }
+            },
+          ),
           const Divider(indent: 8, endIndent: 8, height: 16),
           _actionPaletteItem(
             Icons.auto_awesome,
@@ -2224,7 +2262,11 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       }
 
       if (selectedTool == Tool.bus) {
-        _saveState(); elements.add(DrawingElement(id: newId, type: Tool.bus, position: pos));
+        _saveState();
+        final newEl = DrawingElement(id: newId, type: Tool.bus, position: pos);
+        elements.add(newEl);
+        selectedElement = newEl;
+        _canvasFocusNode.requestFocus();
       } else if (selectedTool == Tool.generator || selectedTool == Tool.load || selectedTool == Tool.transformer) {
         _saveState(); Offset finalPos = target != null ? _getSnapPoint(target, pos) : pos;
         final newEl = DrawingElement(
@@ -2242,6 +2284,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           newEl.isSynchronousCondenser = false;
         }
         elements.add(newEl);
+        selectedElement = newEl;
+        _canvasFocusNode.requestFocus();
       } else if (selectedTool == Tool.line) {
         if (lineStart == null) {
           lineStart = target != null ? _getSnapPoint(target, pos) : pos; pendingStartId = target?.id;
@@ -2250,7 +2294,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           lineMid = pos;
         } else {
           _saveState(); Offset endP = target != null ? _getSnapPoint(target, pos) : pos;
-          elements.add(DrawingElement(id: newId, type: Tool.line, position: lineStart!, midPosition: lineMid, endPosition: endP, startElementId: pendingStartId, endElementId: target?.id, startAnchor: pendingStartAnchor, endAnchor: target != null ? (endP - target.position) : null));
+          final newLine = DrawingElement(id: newId, type: Tool.line, position: lineStart!, midPosition: lineMid, endPosition: endP, startElementId: pendingStartId, endElementId: target?.id, startAnchor: pendingStartAnchor, endAnchor: target != null ? (endP - target.position) : null);
+          elements.add(newLine);
+          selectedElement = newLine;
+          _canvasFocusNode.requestFocus();
           
           if (target != null && pendingStartId != null) {
             DrawingElement? startEl; try { startEl = elements.firstWhere((e) => e.id == pendingStartId); } catch(_) {}
@@ -2264,13 +2311,17 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           lineStart = null; lineMid = null; pendingStartId = null;
         }
       } else if (selectedTool == Tool.text) {
-        _saveState(); elements.add(DrawingElement(id: newId, type: Tool.text, position: pos, label: "텍스트 입력"));
+        _saveState(); 
+        final newText = DrawingElement(id: newId, type: Tool.text, position: pos, label: "텍스트 입력");
+        elements.add(newText);
+        selectedElement = newText;
+        _canvasFocusNode.requestFocus();
       }
     });
   }
 
   Widget _buildBusGenLoadWidget(DrawingElement e) {
-    bool isSelected = (selectedElement == e && selectedTool == Tool.move);
+    bool isSelected = (selectedElement == e);
     if (e.type == Tool.text) {
       return Positioned(
         left: e.position.dx,
@@ -2495,9 +2546,11 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
             GestureDetector(
               behavior: HitTestBehavior.opaque,
               onTap: () {
+                _canvasFocusNode.requestFocus();
                 setState(() => selectedElement = e);
               },
               onDoubleTap: () {
+                _canvasFocusNode.requestFocus();
                 setState(() {
                   selectedElement = e;
                   isInspectorOpen = true;
@@ -2535,8 +2588,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                 top: -8,
                 child: GestureDetector(
                   onTap: () {
-                    _saveState();
-                    setState(() => e.angle = (e.angle + math.pi / 2) % (math.pi * 2));
+                    _rotateElement(e);
                   },
                   child: MouseRegion(
                     cursor: SystemMouseCursors.click,

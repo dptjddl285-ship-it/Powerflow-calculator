@@ -9,6 +9,7 @@ class InspectorPanel extends StatefulWidget {
   final double sBase;
   final VoidCallback onStateChanged;
   final VoidCallback onDeleteSelected;
+  final VoidCallback? onRotateSelected;
   final VoidCallback onClose;
   final Function(DrawingElement) onBusRenamed;
   final VoidCallback onClearAll;
@@ -21,6 +22,7 @@ class InspectorPanel extends StatefulWidget {
     this.sBase = 100.0,
     required this.onStateChanged,
     required this.onDeleteSelected,
+    this.onRotateSelected,
     required this.onClose,
     required this.onBusRenamed,
     required this.onClearAll,
@@ -265,6 +267,8 @@ class _InspectorPanelState extends State<InspectorPanel> {
               child: Column(
                 children: [
                   _shortcutRow("Del / Backspace", "선택 요소 삭제"),
+                  _shortcutRow("R", "선택 요소 90° 회전"),
+                  _shortcutRow("방향키 (↑↓←→)", "선택 요소 미세 이동"),
                   _shortcutRow("Esc", "선택 해제 / 도구 취소"),
                   _shortcutRow("Ctrl + Z", "실행 취소 (Undo)"),
                   _shortcutRow("Ctrl + Y", "다시 실행 (Redo)"),
@@ -474,6 +478,24 @@ class _InspectorPanelState extends State<InspectorPanel> {
             ],
           ),
           const Divider(height: 20),
+
+          if (widget.onRotateSelected != null && e.type != Tool.line) ...[
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.rotate_right, size: 18),
+                label: const Text("90° 회전 (R)", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF2563EB),
+                  side: const BorderSide(color: Color(0xFF93C5FD)),
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                ),
+                onPressed: widget.onRotateSelected,
+              ),
+            ),
+            const SizedBox(height: 10),
+          ],
 
           _buildSimulationResultBox(e),
 
