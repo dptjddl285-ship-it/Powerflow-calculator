@@ -5261,37 +5261,18 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                             ),
                           ],
                         ),
-                        Wrap(
-                          spacing: 6,
-                          runSpacing: 4,
-                          children: [
-                            OutlinedButton.icon(
-                              onPressed: _loadDefaultExcelInReview,
-                              icon: const Icon(Icons.bolt, size: 14, color: Color(0xFFD97706)),
-                              label: const Text(
-                                "⚡ ac_case25 기본값 바로 적용",
-                                style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFFB45309)),
-                              ),
-                              style: OutlinedButton.styleFrom(
-                                backgroundColor: const Color(0xFFFFFBEB),
-                                side: const BorderSide(color: Color(0xFFFDE68A)),
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                              ),
-                            ),
-                            ElevatedButton.icon(
-                              onPressed: _importExcelInReview,
-                              icon: const Icon(Icons.file_upload, size: 14),
-                              label: Text(
-                                _importedExcelData != null ? "다른 엑셀 다시 불러오기" : "엑셀 파일 선택",
-                                style: const TextStyle(fontSize: 11),
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF0D9488),
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                              ),
-                            ),
-                          ],
+                        ElevatedButton.icon(
+                          onPressed: _importExcelInReview,
+                          icon: const Icon(Icons.file_upload, size: 14),
+                          label: Text(
+                            _importedExcelData != null ? "다른 엑셀 다시 불러오기" : "엑셀 파일 선택",
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF0D9488),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          ),
                         ),
                       ],
                     ),
@@ -5309,26 +5290,26 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                           children: [
                             Row(
                               children: [
-                                const Icon(Icons.stars, color: Color(0xFFD97706), size: 18),
-                                const SizedBox(width: 6),
+                                const Icon(Icons.check_circle, color: Color(0xFF16A34A), size: 18),
+                                const SizedBox(width: 8),
                                 Text(
-                                  "⭐️ 슬랙 모선: #${_importedExcelData!['slack_bus_number']} (Swing Bus 자동 지정)",
-                                  style: const TextStyle(color: Color(0xFF15803D), fontSize: 12.5, fontWeight: FontWeight.bold),
+                                  _importedExcelData!['summary_title'] ?? "계통 엑셀 데이터 매칭 완료",
+                                  style: const TextStyle(color: Color(0xFF15803D), fontWeight: FontWeight.bold, fontSize: 13),
                                 ),
                               ],
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              "• 발전기 ${_importedExcelData!['total_generators']}개 파라미터 (PG, 목표전압 Vset)\n• 부하 ${_importedExcelData!['total_buses']}개 모선 유효/무효전력 (Pload, Qload)\n• 선로 ${_importedExcelData!['total_branches']}개 임피던스 (R, X, B, Tap) 자동 바인딩 완료!",
-                              style: const TextStyle(color: Color(0xFF334155), fontSize: 11.5, height: 1.4),
+                              "• 슬랙 모선: #${_importedExcelData!['slack_bus_number'] ?? '자동'}  |  모선: ${_importedExcelData!['total_buses'] ?? 0}개  |  발전기: ${_importedExcelData!['total_generators'] ?? 0}개  |  선로/변압기: ${_importedExcelData!['total_branches'] ?? 0}개",
+                              style: const TextStyle(color: Color(0xFF166534), fontSize: 11.5),
                             ),
                           ],
                         ),
                       ),
                     ] else ...[
-                      const Text(
-                        "💡 'ac_case25 - 복사본.xlsx' 등의 엑셀 파일을 불러오면 13번 슬랙 모선과 발전기/부하/선로 파라미터가 캔버스에 자동 반영됩니다.",
-                        style: TextStyle(color: Color(0xFF64748B), fontSize: 11.5),
+                      Text(
+                        "💡 계통 제원 엑셀(.xlsx) 파일을 불러오면 슬랙 모선과 발전기/부하/선로 파라미터가 캔버스에 자동 반영됩니다.",
+                        style: TextStyle(color: Colors.grey[600], fontSize: 11),
                       ),
                     ],
                   ],
