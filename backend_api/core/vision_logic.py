@@ -4,17 +4,17 @@ import numpy as np
 import math
 import os
 from collections import deque
-import cv_bus_refined_experiment as bus_cv
-import cv_load_experiment as load_cv
-from cv_bus_refined_experiment import detect_cv_buses
-from cv_load_experiment import (
+from core import cv_bus_detector as bus_cv
+from core import cv_load_detector as load_cv
+from core.cv_bus_detector import detect_cv_buses
+from core.cv_load_detector import (
     SCALE as LOAD_SCALE,
     attach_to_bus_via_pixel_path,
     detect_cv_loads,
     load_core_mask,
     load_triangle_polygon,
 )
-from cv_transformer_experiment import detect_cv_transformers
+from core.cv_transformer_detector import detect_cv_transformers
 from core.electrical_topology import (
     bridge_one_pixel_gaps,
     skeletonize_binary,

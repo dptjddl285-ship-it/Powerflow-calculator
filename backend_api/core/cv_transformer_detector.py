@@ -1,16 +1,6 @@
-"""OpenCV experiment for detecting two common transformer symbols.
+"""OpenCV 변압기(Transformer) 권선 기호 검출 엔진.
 
-This module intentionally does not modify the FastAPI runtime yet. It is an
-offline validation step for the two transformer drawings found in the project:
-
-* ``wave``: two opposing rows of repeated U-shaped winding curves, separated
-  by a blank gap.
-* ``circle_pair``: two similarly sized, overlapping/touching circular
-  windings (the outside silhouette resembles a peanut).
-
-Both detectors are structural. They do not use the project's YOLO model or a
-crop from a labelled diagram as a template. The experiment writes annotated
-comparison images so its behaviour can be reviewed before API integration.
+vision_logic 연동 모듈: 2권선 접촉원/웨이브 패턴 지오메트리 검출 및 위상 검증을 수행합니다.
 """
 
 from __future__ import annotations

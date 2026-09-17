@@ -1,15 +1,17 @@
-﻿import http.server
+import http.server
 import socketserver
 import os
 import sys
+from pathlib import Path
 
 PORT = 58640
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-WEB_DIR = os.path.join(BASE_DIR, "frontend_app", "build", "web")
+SCRIPT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = SCRIPT_DIR.parent
+WEB_DIR = PROJECT_ROOT / "frontend_app" / "build" / "web"
 
 class NoCacheHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=WEB_DIR, **kwargs)
+        super().__init__(*args, directory=str(WEB_DIR), **kwargs)
 
     def end_headers(self):
         self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
@@ -25,7 +27,7 @@ def main():
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
-            print("\nShutting down server.")
+            print("\nShutting down frontend server.")
 
 if __name__ == '__main__':
     main()

@@ -4,5 +4,6 @@ title PowerLens Pro Launcher
 echo =========================================================
 echo ⚡ Starting PowerLens Pro (Backend + Frontend Web)
 echo =========================================================
-python run_powerlens.py
+cd /d "%~dp0\.."
+python scripts\run_powerlens.py
 pause

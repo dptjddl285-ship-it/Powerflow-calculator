@@ -1,8 +1,6 @@
-"""OpenCV detector for arrow/triangle load symbols.
+"""OpenCV 부하(Load) 화살표/삼각 기호 검출 및 방향 판별 엔진.
 
-The detector intentionally does not use YOLO.  It accepts filled or outline
-arrowheads only after the opposite side is traced to a CV-detected bus bar;
-short routed bends are allowed, while tiny text-like contours are filtered.
+vision_logic 연동 모듈: 모선 리드선 추적, 화살표 삼각형 방향 판별 및 연결 분석을 수행합니다.
 """
 
 from __future__ import annotations
@@ -15,7 +13,10 @@ import csv
 import cv2
 import numpy as np
 
-import cv_bus_refined_experiment as bus_cv
+try:
+    from core import cv_bus_detector as bus_cv
+except ImportError:
+    import cv_bus_detector as bus_cv
 
 
 ROOT = Path(__file__).resolve().parent.parent

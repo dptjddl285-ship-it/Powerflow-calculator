@@ -26,7 +26,7 @@ from core.vision_logic import (  # noqa: E402
     _secondary_bus_family_indices,
     _yolo_transformer_port_metadata,
 )
-from cv_load_experiment import (  # noqa: E402
+from core.cv_load_detector import (  # noqa: E402
     LoadCandidate,
     _attachment_implied_arrow_direction,
     _has_one_sided_terminal_profile,
