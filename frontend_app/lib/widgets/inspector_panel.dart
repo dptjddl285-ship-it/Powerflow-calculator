@@ -610,11 +610,46 @@ class _InspectorPanelState extends State<InspectorPanel> {
                   for (var g in widget.elements.where((el) => el.type == Tool.generator)) {
                     g.isSlack = false;
                   }
+                  e.isSynchronousCondenser = false;
                 }
                 e.isSlack = v;
                 widget.onStateChanged();
               },
             ),
+            if (!e.isSlack) ...[
+              SwitchListTile(
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: const Text("동기조상기 모드 (SC)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                subtitle: Text(
+                  e.isSynchronousCondenser ? "P=0 MW 고정 (전압 V 제어를 위한 무효전력 공급)" : "일반 PV 발전기 (유효전력 P, 전압 V 지정)",
+                  style: const TextStyle(fontSize: 10),
+                ),
+                value: e.isSynchronousCondenser,
+                activeColor: const Color(0xFF2563EB),
+                onChanged: (v) {
+                  e.isSynchronousCondenser = v;
+                  if (v) {
+                    e.pPu = 0.0;
+                    pCtrl.text = "0.0";
+                    if (e.label.startsWith("G_") || e.label.startsWith("G")) {
+                      e.label = e.label.replaceFirst("G", "SC");
+                      labelCtrl.text = e.label;
+                    }
+                  } else {
+                    if (e.pPu == 0.0) {
+                      e.pPu = 1.0;
+                      pCtrl.text = useMw ? (1.0 * widget.sBase).toStringAsFixed(1) : "1.0";
+                    }
+                    if (e.label.startsWith("SC_") || e.label.startsWith("SC")) {
+                      e.label = e.label.replaceFirst("SC", "G");
+                      labelCtrl.text = e.label;
+                    }
+                  }
+                  widget.onStateChanged();
+                },
+              ),
+            ],
             if (e.isSlack) ...[
               Container(
                 margin: const EdgeInsets.symmetric(vertical: 8),
@@ -736,6 +771,7 @@ class _InspectorPanelState extends State<InspectorPanel> {
                 label: e.isSynchronousCondenser ? "유효 발전 출력 P (0 MW 고정)" : "유효 발전 출력 P",
                 unit: useMw ? "MW" : "pu",
                 controller: pCtrl,
+                enabled: !e.isSynchronousCondenser,
                 helperText: useMw ? "(= ${e.pPu.toStringAsFixed(3)} pu)" : "(= ${(e.pPu * widget.sBase).toStringAsFixed(1)} MW)",
                 onChanged: (val) => e.pPu = useMw ? (val / widget.sBase) : val,
               ),
@@ -1167,12 +1203,14 @@ class _InspectorPanelState extends State<InspectorPanel> {
     required TextEditingController controller,
     String? helperText,
     String? unit,
+    bool enabled = true,
     required Function(double) onChanged,
   }) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6.0),
       child: TextField(
         controller: controller,
+        enabled: enabled,
         keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
         decoration: InputDecoration(
           labelText: label,

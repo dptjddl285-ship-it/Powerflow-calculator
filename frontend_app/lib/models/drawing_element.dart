@@ -38,8 +38,20 @@ class DrawingElement {
       label.contains("회선") ||
       label.contains("병렬");
 
-  bool get isSynchronousCondenser =>
-      !isSlack && type == Tool.generator && (pPu == 0 || pPu.abs() < 1e-4);
+  bool isSynchronousCondenserExplicit = false;
+
+  bool get isSynchronousCondenser {
+    if (type != Tool.generator || isSlack) return false;
+    if (isSynchronousCondenserExplicit) return true;
+    if (label.startsWith("SC") || label.contains("동기조상기") || id.startsWith("SC") || id.startsWith("sc")) {
+      return true;
+    }
+    return false;
+  }
+
+  set isSynchronousCondenser(bool val) {
+    isSynchronousCondenserExplicit = val;
+  }
 
   DrawingElement({
     required this.id,
@@ -92,7 +104,8 @@ class DrawingElement {
       ..rPu = rPu
       ..xPu = xPu
       ..bPu = bPu
-      ..tapRatio = tapRatio;
+      ..tapRatio = tapRatio
+      ..isSynchronousCondenser = isSynchronousCondenserExplicit;
   }
 
   Map<String, dynamic> toJson() {
@@ -104,6 +117,7 @@ class DrawingElement {
       'startElementId': startElementId,
       'endElementId': endElementId,
       'isSlack': isSlack,
+      'isSynchronousCondenser': isSynchronousCondenser,
       'vPu': vPu,
       'thetaDeg': thetaDeg,
       'pPu': pPu,
@@ -120,6 +134,13 @@ class DrawingElement {
   void updateFromJson(Map<String, dynamic> json) {
     if (json.containsKey('label') && json['label'] != null) {
       label = json['label'].toString();
+    }
+    if (json.containsKey('isSynchronousCondenser') && json['isSynchronousCondenser'] != null) {
+      isSynchronousCondenser = json['isSynchronousCondenser'] == true;
+    } else if (json.containsKey('is_synchronous_condenser') && json['is_synchronous_condenser'] != null) {
+      isSynchronousCondenser = json['is_synchronous_condenser'] == true;
+    } else if (label.startsWith("SC") || label.contains("동기조상기") || id.startsWith("SC") || id.startsWith("sc")) {
+      isSynchronousCondenser = true;
     }
     if (json.containsKey('isSlack') && json['isSlack'] != null) {
       isSlack = json['isSlack'] == true;

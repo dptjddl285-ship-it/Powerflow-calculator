@@ -1079,18 +1079,23 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           if (gens.containsKey(bKey)) {
             final gInfo = gens[bKey] ?? {};
             final gPos = Offset(bPos.dx, bPos.dy - 60);
+            final bool isSC = (gInfo['is_slack'] != true) && 
+                ((gInfo['isSynchronousCondenser'] == true) || 
+                 (gInfo['is_synchronous_condenser'] == true) ||
+                 (gInfo['label']?.toString().contains("SC") == true));
             final genEl = DrawingElement(
-              id: "gen_$bNum",
+              id: isSC ? "sc_$bNum" : "gen_$bNum",
               type: Tool.generator,
               position: gPos,
               width: 44,
               height: 44,
               parentBusId: busEl.id,
-              label: "G_$bNum" + (gInfo['is_slack'] == true ? " (Slack)" : ""),
+              label: isSC ? "SC_$bNum (동기조상기)" : ("G_$bNum" + (gInfo['is_slack'] == true ? " (Slack)" : "")),
             )
               ..isSlack = (gInfo['is_slack'] == true)
+              ..isSynchronousCondenser = isSC
               ..vPu = (gInfo['voltage_setpoint'] as num?)?.toDouble() ?? 1.0
-              ..pPu = (gInfo['is_slack'] == true) ? 0.0 : ((gInfo['pg_pu'] as num?)?.toDouble() ?? 0.0)
+              ..pPu = (gInfo['is_slack'] == true) ? 0.0 : ((gInfo['pg_pu'] as num?)?.toDouble() ?? (isSC ? 0.0 : 1.0))
               ..qPu = (gInfo['is_slack'] == true) ? 0.0 : ((gInfo['qg_pu'] as num?)?.toDouble() ?? 0.0);
             elements.add(genEl);
           }
@@ -2222,7 +2227,21 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         _saveState(); elements.add(DrawingElement(id: newId, type: Tool.bus, position: pos));
       } else if (selectedTool == Tool.generator || selectedTool == Tool.load || selectedTool == Tool.transformer) {
         _saveState(); Offset finalPos = target != null ? _getSnapPoint(target, pos) : pos;
-        elements.add(DrawingElement(id: newId, type: selectedTool, position: finalPos, width: 40, height: 40, parentBusId: target?.id));
+        final newEl = DrawingElement(
+          id: newId, 
+          type: selectedTool, 
+          position: finalPos, 
+          width: 40, 
+          height: 40, 
+          parentBusId: target?.id,
+          label: newId,
+        );
+        if (selectedTool == Tool.generator) {
+          newEl.pPu = 1.0;
+          newEl.vPu = 1.0;
+          newEl.isSynchronousCondenser = false;
+        }
+        elements.add(newEl);
       } else if (selectedTool == Tool.line) {
         if (lineStart == null) {
           lineStart = target != null ? _getSnapPoint(target, pos) : pos; pendingStartId = target?.id;
