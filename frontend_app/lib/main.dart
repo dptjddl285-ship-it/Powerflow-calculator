@@ -334,13 +334,288 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
   }
 
   Offset _getSnapPoint(DrawingElement e, Offset touchPos) {
-    if (e.type != Tool.bus) return e.position;
-    double cosA = math.cos(-e.angle); double sinA = math.sin(-e.angle);
-    Offset rel = touchPos - e.position;
-    double localX = (rel.dx * cosA - rel.dy * sinA).clamp(-e.width/2, e.width/2);
-    double localY = (rel.dx * sinA + rel.dy * cosA).clamp(-e.height/2, e.height/2);
-    cosA = math.cos(e.angle); sinA = math.sin(e.angle);
-    return e.position + Offset(localX * cosA - localY * sinA, localX * sinA + localY * cosA);
+    if (e.type == Tool.bus) {
+      double cosA = math.cos(-e.angle); double sinA = math.sin(-e.angle);
+      Offset rel = touchPos - e.position;
+      double localX = (rel.dx * cosA - rel.dy * sinA).clamp(-e.width/2, e.width/2);
+      double localY = (rel.dx * sinA + rel.dy * cosA).clamp(-e.height/2, e.height/2);
+      cosA = math.cos(e.angle); sinA = math.sin(e.angle);
+      return e.position + Offset(localX * cosA - localY * sinA, localX * sinA + localY * cosA);
+    } else if (e.type == Tool.generator || e.type == Tool.load || e.type == Tool.transformer) {
+      Offset delta = touchPos - e.position;
+      double dist = delta.distance;
+      double r = math.max(e.width, e.height) / 2;
+      if (dist > 0) return e.position + (delta / dist) * r;
+      return e.position;
+    }
+    return e.position;
+  }
+
+  List<Offset> _truncateSpursAtBus(List<Offset> points, DrawingElement? bus) {
+    if (bus == null || bus.type != Tool.bus || points.length < 3) return points;
+    final double x1 = bus.position.dx - bus.width / 2 - 10;
+    final double x2 = bus.position.dx + bus.width / 2 + 10;
+    final double y1 = bus.position.dy - bus.height / 2 - 10;
+    final double y2 = bus.position.dy + bus.height / 2 + 10;
+
+    for (int i = points.length - 1; i > 0; i--) {
+      final pt = points[i];
+      if (pt.dx >= x1 && pt.dx <= x2 && pt.dy >= y1 && pt.dy <= y2) {
+        final prev = points[i - 1];
+        if (!(prev.dx >= x1 && prev.dx <= x2 && prev.dy >= y1 && prev.dy <= y2)) {
+          return points.sublist(0, i + 1);
+        }
+      }
+    }
+    return points;
+  }
+
+  List<Offset> _ramerDouglasPeucker(List<Offset> points, double epsilon) {
+    if (points.length < 3) return points;
+
+    double dmax = 0.0;
+    int index = 0;
+    final int end = points.length - 1;
+
+    for (int i = 1; i < end; i++) {
+      final double d = _distToSegment(points[i], points[0], points[end]);
+      if (d > dmax) {
+        index = i;
+        dmax = d;
+      }
+    }
+
+    if (dmax > epsilon) {
+      final rec1 = _ramerDouglasPeucker(points.sublist(0, index + 1), epsilon);
+      final rec2 = _ramerDouglasPeucker(points.sublist(index), epsilon);
+      return [...rec1.sublist(0, rec1.length - 1), ...rec2];
+    } else {
+      return [points.first, points.last];
+    }
+  }
+
+  List<Offset> _vectorizeAndOrthogonalizeLine({
+    required List<Offset> rawPoints,
+    DrawingElement? startEl,
+    DrawingElement? endEl,
+  }) {
+    if (rawPoints.length < 2) return rawPoints;
+
+    // Truncate spurs penetrating deep into bus body
+    List<Offset> pts = _truncateSpursAtBus(rawPoints, endEl);
+    if (startEl != null && startEl.type == Tool.bus) {
+      pts = _truncateSpursAtBus(pts.reversed.toList(), startEl).reversed.toList();
+    }
+    if (pts.length < 2) pts = List.from(rawPoints);
+
+    // Reorient startEl and endEl so startEl is closer to pts.first
+    if (startEl != null && endEl != null) {
+      final double d1 = (pts.first - startEl.position).distance;
+      final double d2 = (pts.first - endEl.position).distance;
+      if (d1 > d2) {
+        final tmp = startEl;
+        startEl = endEl;
+        endEl = tmp;
+      }
+    }
+
+    // Special case: Generator or Load feeder lead to Bus
+    if (startEl != null && endEl != null) {
+      final bool isStartDev = (startEl.type == Tool.generator || startEl.type == Tool.load);
+      final bool isEndDev = (endEl.type == Tool.generator || endEl.type == Tool.load);
+      final bool isStartBus = startEl.type == Tool.bus;
+      final bool isEndBus = endEl.type == Tool.bus;
+
+      if ((isStartDev && isEndBus) || (isEndDev && isStartBus)) {
+        final dev = isStartDev ? startEl : endEl;
+        final bus = isStartDev ? endEl : startEl;
+        final double dx = dev.position.dx - bus.position.dx;
+        final double dy = dev.position.dy - bus.position.dy;
+
+        if (dx.abs() >= dy.abs()) {
+          // Horizontal lead: snap Y to dev.position.dy clamped to bus height
+          final double yCon = dev.position.dy.clamp(
+            bus.position.dy - bus.height / 2,
+            bus.position.dy + bus.height / 2,
+          );
+          final Offset devSnap = Offset(
+            dev.position.dx + (dx < 0 ? dev.width / 2 : -dev.width / 2),
+            yCon,
+          );
+          final Offset busSnap = Offset(
+            bus.position.dx + (dx < 0 ? -bus.width / 2 : bus.width / 2),
+            yCon,
+          );
+          return isStartDev ? [devSnap, busSnap] : [busSnap, devSnap];
+        } else {
+          // Vertical lead: snap X to dev.position.dx clamped to bus width
+          final double xCon = dev.position.dx.clamp(
+            bus.position.dx - bus.width / 2,
+            bus.position.dx + bus.width / 2,
+          );
+          final Offset devSnap = Offset(
+            xCon,
+            dev.position.dy + (dy < 0 ? dev.height / 2 : -dev.height / 2),
+          );
+          final Offset busSnap = Offset(
+            xCon,
+            bus.position.dy + (dy < 0 ? -bus.height / 2 : bus.height / 2),
+          );
+          return isStartDev ? [devSnap, busSnap] : [busSnap, devSnap];
+        }
+      }
+    }
+
+    // 1. Simplify via Ramer-Douglas-Peucker
+    final simplified = _ramerDouglasPeucker(pts, 14.0);
+
+    // 2. Snap endpoints to component boundaries
+    Offset pStart = startEl != null ? _getSnapPoint(startEl, simplified.first) : simplified.first;
+    Offset pEnd = endEl != null ? _getSnapPoint(endEl, simplified.last) : simplified.last;
+
+    // Case A: 2 points -> Straight line
+    if (simplified.length <= 2) {
+      final double dx = (pEnd.dx - pStart.dx).abs();
+      final double dy = (pEnd.dy - pStart.dy).abs();
+      if (dy < 30.0 || (dx > 0 && dy / dx < 0.25)) {
+        // Snap horizontal
+        final double yAvg = (pStart.dy + pEnd.dy) / 2;
+        if (startEl != null) pStart = _getSnapPoint(startEl, Offset(pStart.dx, yAvg));
+        if (endEl != null) pEnd = _getSnapPoint(endEl, Offset(pEnd.dx, yAvg));
+        return [pStart, Offset(pEnd.dx, pStart.dy)];
+      } else if (dx < 30.0 || (dy > 0 && dx / dy < 0.25)) {
+        // Snap vertical
+        final double xAvg = (pStart.dx + pEnd.dx) / 2;
+        if (startEl != null) pStart = _getSnapPoint(startEl, Offset(xAvg, pStart.dy));
+        if (endEl != null) pEnd = _getSnapPoint(endEl, Offset(xAvg, pEnd.dy));
+        return [pStart, Offset(pStart.dx, pEnd.dy)];
+      } else {
+        return [pStart, pEnd];
+      }
+    }
+
+    // Case B: 3 points -> L-bend
+    if (simplified.length == 3) {
+      final Offset pMid = simplified[1];
+      final double dx1 = (pMid.dx - pStart.dx).abs();
+      final double dy1 = (pMid.dy - pStart.dy).abs();
+
+      if (dx1 >= dy1) {
+        // Segment 1 Horizontal, Segment 2 Vertical
+        Offset corner = Offset(pEnd.dx, pStart.dy);
+        if (startEl != null) pStart = _getSnapPoint(startEl, corner);
+        if (endEl != null) pEnd = _getSnapPoint(endEl, corner);
+        corner = Offset(pEnd.dx, pStart.dy);
+        return [pStart, corner, pEnd];
+      } else {
+        // Segment 1 Vertical, Segment 2 Horizontal
+        Offset corner = Offset(pStart.dx, pEnd.dy);
+        if (startEl != null) pStart = _getSnapPoint(startEl, corner);
+        if (endEl != null) pEnd = _getSnapPoint(endEl, corner);
+        corner = Offset(pStart.dx, pEnd.dy);
+        return [pStart, corner, pEnd];
+      }
+    }
+
+    // Case C: 4+ points -> multi-segment orthogonalization
+    final List<Offset> result = [pStart];
+    for (int i = 1; i < simplified.length - 1; i++) {
+      final prev = result.last;
+      final curr = simplified[i];
+      final double dx = (curr.dx - prev.dx).abs();
+      final double dy = (curr.dy - prev.dy).abs();
+      if (dx >= dy) {
+        result.add(Offset(curr.dx, prev.dy));
+      } else {
+        result.add(Offset(prev.dx, curr.dy));
+      }
+    }
+    result.add(pEnd);
+    return result;
+  }
+
+  void _straightenAllLines() {
+    _saveState();
+    setState(() {
+      for (var line in elements.where((e) => e.type == Tool.line)) {
+        DrawingElement? startEl;
+        DrawingElement? endEl;
+        try { startEl = elements.firstWhere((e) => e.id == line.startElementId); } catch (_) {}
+        try { endEl = elements.firstWhere((e) => e.id == line.endElementId); } catch (_) {}
+
+        List<Offset> sourcePts = [];
+        if (line.aiPath != null && line.aiPath!.length >= 2) {
+          sourcePts = List.from(line.aiPath!);
+        } else if (line.endPosition != null) {
+          sourcePts.add(line.position);
+          if (line.midPosition != null) sourcePts.add(line.midPosition!);
+          sourcePts.add(line.endPosition!);
+        }
+
+        if (sourcePts.length >= 2) {
+          final clean = _vectorizeAndOrthogonalizeLine(
+            rawPoints: sourcePts,
+            startEl: startEl,
+            endEl: endEl,
+          );
+          line.position = clean.first;
+          line.endPosition = clean.last;
+          line.midPosition = clean.length == 3 ? clean[1] : (clean.length > 3 ? clean[1] : null);
+          line.aiPath = clean.length > 2 ? clean : null;
+          if (startEl != null) line.startAnchor = line.position - startEl.position;
+          if (endEl != null) line.endAnchor = line.endPosition! - endEl.position;
+        }
+      }
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("✨ 모든 선로를 CAD 표준(직교/직선)으로 깔끔하게 정형화했습니다."),
+        backgroundColor: Color(0xFF2563EB),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _straightenSelectedLine() {
+    if (selectedElement == null || selectedElement!.type != Tool.line) return;
+    _saveState();
+    setState(() {
+      final line = selectedElement!;
+      DrawingElement? startEl;
+      DrawingElement? endEl;
+      try { startEl = elements.firstWhere((e) => e.id == line.startElementId); } catch (_) {}
+      try { endEl = elements.firstWhere((e) => e.id == line.endElementId); } catch (_) {}
+
+      List<Offset> sourcePts = [];
+      if (line.aiPath != null && line.aiPath!.length >= 2) {
+        sourcePts = List.from(line.aiPath!);
+      } else if (line.endPosition != null) {
+        sourcePts.add(line.position);
+        if (line.midPosition != null) sourcePts.add(line.midPosition!);
+        sourcePts.add(line.endPosition!);
+      }
+
+      if (sourcePts.length >= 2) {
+        final clean = _vectorizeAndOrthogonalizeLine(
+          rawPoints: sourcePts,
+          startEl: startEl,
+          endEl: endEl,
+        );
+        line.position = clean.first;
+        line.endPosition = clean.last;
+        line.midPosition = clean.length == 3 ? clean[1] : (clean.length > 3 ? clean[1] : null);
+        line.aiPath = clean.length > 2 ? clean : null;
+        if (startEl != null) line.startAnchor = line.position - startEl.position;
+        if (endEl != null) line.endAnchor = line.endPosition! - endEl.position;
+      }
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("✨ 선택한 선로를 CAD 표준(직교/직선)으로 정형화했습니다."),
+        backgroundColor: Color(0xFF2563EB),
+        duration: Duration(seconds: 1),
+      ),
+    );
   }
 
   DrawingElement? _findElementAt(Offset pos) {
@@ -1315,13 +1590,22 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         elements.add(newEl);
       }
 
-      // 3. Parse lines using exact pixel paths
+      // 3. Parse lines and vectorize to clean CAD standards (orthogonal / straight)
       for (var line in rawLines) {
         String lineId = (line['line_id'] ?? line['id'] ?? '').toString();
         String lineLabel = (line['display_label'] ?? line['display_name'] ?? '').toString();
         List<dynamic> rawPath = line['path'] ?? [];
         List<dynamic> connectedTo = line['connected_to'] ?? [];
         
+        DrawingElement? startEl;
+        DrawingElement? endEl;
+        if (connectedTo.isNotEmpty) {
+          try { startEl = elements.firstWhere((e) => e.id == connectedTo[0].toString()); } catch (_) {}
+        }
+        if (connectedTo.length > 1) {
+          try { endEl = elements.firstWhere((e) => e.id == connectedTo[1].toString()); } catch (_) {}
+        }
+
         if (lineLabel.isEmpty && connectedTo.length >= 2) {
           String id1 = connectedTo[0].toString();
           String id2 = connectedTo[1].toString();
@@ -1341,25 +1625,33 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         }
 
         if (rawPath.length >= 2) {
-          Offset startPos = Offset((rawPath.first[0] as num).toDouble() + shiftX, (rawPath.first[1] as num).toDouble() + shiftY);
-          Offset endPos = Offset((rawPath.last[0] as num).toDouble() + shiftX, (rawPath.last[1] as num).toDouble() + shiftY);
-          
-          Offset midPos = rawPath.length > 2 
-              ? Offset((rawPath[(rawPath.length/2).floor()][0] as num).toDouble() + shiftX, (rawPath[(rawPath.length/2).floor()][1] as num).toDouble() + shiftY)
-              : Offset((startPos.dx + endPos.dx)/2, (startPos.dy + endPos.dy)/2);
-
           List<Offset> parsedPath = [];
           for (var pt in rawPath) {
             parsedPath.add(Offset((pt[0] as num).toDouble() + shiftX, (pt[1] as num).toDouble() + shiftY));
           }
 
+          final cleanPath = _vectorizeAndOrthogonalizeLine(
+            rawPoints: parsedPath,
+            startEl: startEl,
+            endEl: endEl,
+          );
+
+          Offset startPos = cleanPath.first;
+          Offset endPos = cleanPath.last;
+          Offset? midPos = cleanPath.length == 3 ? cleanPath[1] : (cleanPath.length > 3 ? cleanPath[1] : null);
+
           elements.add(DrawingElement(
-            id: lineId, type: Tool.line, 
-            position: startPos, midPosition: midPos, endPosition: endPos,
-            aiPath: parsedPath,
+            id: lineId,
+            type: Tool.line, 
+            position: startPos,
+            midPosition: midPos,
+            endPosition: endPos,
+            aiPath: cleanPath.length > 2 ? cleanPath : null,
             label: lineLabel.isNotEmpty ? lineLabel : lineId,
             startElementId: connectedTo.isNotEmpty ? connectedTo[0].toString() : null,
             endElementId: connectedTo.length > 1 ? connectedTo[1].toString() : null,
+            startAnchor: startEl != null ? (startPos - startEl.position) : null,
+            endAnchor: endEl != null ? (endPos - endEl.position) : null,
           ));
         }
       }
@@ -1498,6 +1790,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                         _rotateElement(selectedElement!);
                       }
                     },
+                    onStraightenLine: _straightenSelectedLine,
                     onClose: () => setState(() => selectedElement = null),
                     onBusRenamed: _handleBusRenamed,
                     onClearAll: _confirmClearCanvas,
@@ -1618,6 +1911,11 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           icon: const Icon(Icons.fit_screen, color: Colors.cyanAccent, size: 20),
           tooltip: "도면 전체 화면 맞춤 (F / Space)",
           onPressed: _zoomToFit,
+        ),
+        IconButton(
+          icon: const Icon(Icons.alt_route, color: Colors.cyanAccent, size: 20),
+          tooltip: "선로 CAD 정형화 (직교/직선화)",
+          onPressed: elements.any((e) => e.type == Tool.line) ? _straightenAllLines : null,
         ),
         const SizedBox(width: 6),
         Container(height: 24, width: 1, color: Colors.white24),

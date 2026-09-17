@@ -23,10 +23,13 @@ class InspectorPanel extends StatefulWidget {
     required this.onStateChanged,
     required this.onDeleteSelected,
     this.onRotateSelected,
+    this.onStraightenLine,
     required this.onClose,
     required this.onBusRenamed,
     required this.onClearAll,
   });
+
+  final VoidCallback? onStraightenLine;
 
   @override
   State<InspectorPanel> createState() => _InspectorPanelState();
@@ -845,6 +848,24 @@ class _InspectorPanelState extends State<InspectorPanel> {
               helperText: useMw ? "(= ${e.qPu.toStringAsFixed(3)} pu)" : "(= ${(e.qPu * widget.sBase).toStringAsFixed(1)} MVAR)",
               onChanged: (val) => e.qPu = useMw ? (val / widget.sBase) : val,
             ),
+          ],
+
+          if (e.type == Tool.line && widget.onStraightenLine != null) ...[
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.alt_route, size: 18),
+                label: const Text("선로 직교/직선 정형화", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF2563EB),
+                  side: const BorderSide(color: Color(0xFF2563EB)),
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                ),
+                onPressed: widget.onStraightenLine,
+              ),
+            ),
+            const SizedBox(height: 8),
           ],
 
           // Generator Lead Line Fields
