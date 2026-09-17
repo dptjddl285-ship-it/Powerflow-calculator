@@ -237,15 +237,12 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
   void _rotateElement(DrawingElement e) {
     _saveState();
     setState(() {
-      if (e.type == Tool.bus) {
-        // Toggle bus bar between horizontal (w > h) and vertical (h > w)
+      if (e.type == Tool.bus && e.width < e.height) {
         double temp = e.width;
         e.width = e.height;
         e.height = temp;
-        e.angle = (e.width < e.height) ? (math.pi / 2) : 0.0;
-      } else {
-        e.angle = (e.angle + math.pi / 2) % (math.pi * 2);
       }
+      e.angle = (e.angle + math.pi / 2) % (math.pi * 2);
     });
   }
 
@@ -2526,12 +2523,23 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       );
     }
 
-    // Precise hit bounds with slight padding only when selected for control points
-    const double pad = 12.0;
-    final double boxWidth = e.width + (isSelected ? pad * 2 : 0);
-    final double boxHeight = e.height + (isSelected ? pad * 2 : 0);
-    final double leftOffset = e.position.dx - (e.width / 2) - (isSelected ? pad : 0);
-    final double topOffset = e.position.dy - (e.height / 2) - (isSelected ? pad : 0);
+    if (e.type == Tool.bus && e.width < e.height) {
+      double temp = e.width;
+      e.width = e.height;
+      e.height = temp;
+      e.angle = (e.angle + math.pi / 2) % (math.pi * 2);
+    }
+
+    final double cosA = math.cos(e.angle).abs();
+    final double sinA = math.sin(e.angle).abs();
+    final double boundW = e.width * cosA + e.height * sinA;
+    final double boundH = e.width * sinA + e.height * cosA;
+
+    const double pad = 16.0;
+    final double boxWidth = boundW + (isSelected ? pad * 2 : 0);
+    final double boxHeight = boundH + (isSelected ? pad * 2 : 0);
+    final double leftOffset = e.position.dx - (boxWidth / 2);
+    final double topOffset = e.position.dy - (boxHeight / 2);
 
     return Positioned(
       left: leftOffset,
@@ -2569,23 +2577,66 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
               },
               child: MouseRegion(
                 cursor: selectedTool == Tool.move ? SystemMouseCursors.move : SystemMouseCursors.click,
-                child: Transform.rotate(angle: e.angle, child: shapeContent),
-              ),
-            ),
-
-            if (isSelected) ...[
-              IgnorePointer(
-                child: Container(
-                  width: e.width + 8,
-                  height: e.height + 8,
-                  decoration: BoxDecoration(
-                    border: Border.all(color: const Color(0xFF2563EB), width: 1.5),
-                    borderRadius: BorderRadius.circular(4),
+                child: Transform.rotate(
+                  angle: e.angle,
+                  child: SizedBox(
+                    width: e.width,
+                    height: e.height,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      clipBehavior: Clip.none,
+                      children: [
+                        shapeContent,
+                        if (isSelected) ...[
+                          IgnorePointer(
+                            child: Container(
+                              width: e.width + 8,
+                              height: e.height + 8,
+                              decoration: BoxDecoration(
+                                border: Border.all(color: const Color(0xFF2563EB), width: 1.5),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            right: -6,
+                            child: GestureDetector(
+                              onPanStart: (_) => _saveState(),
+                              onPanUpdate: (d) {
+                                setState(() {
+                                  double deltaX = d.delta.dx * math.cos(e.angle) + d.delta.dy * math.sin(e.angle);
+                                  e.width = (e.width + deltaX).clamp(20, 800);
+                                  if (e.type != Tool.bus) e.height = e.width;
+                                });
+                              },
+                              child: MouseRegion(
+                                cursor: (e.angle / (math.pi / 2)).round() % 2 == 1
+                                    ? SystemMouseCursors.resizeUpDown
+                                    : SystemMouseCursors.resizeLeftRight,
+                                child: Container(
+                                  width: 12,
+                                  height: 12,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    border: Border.all(color: const Color(0xFF2563EB), width: 2),
+                                    borderRadius: BorderRadius.circular(2),
+                                    boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 2)],
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
                 ),
               ),
+            ),
+
+            if (isSelected)
               Positioned(
-                top: -8,
+                top: -10,
                 child: GestureDetector(
                   onTap: () {
                     _rotateElement(e);
@@ -2593,45 +2644,18 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                   child: MouseRegion(
                     cursor: SystemMouseCursors.click,
                     child: Container(
-                      width: 18,
-                      height: 18,
+                      width: 20,
+                      height: 20,
                       decoration: const BoxDecoration(
                         color: Color(0xFF2563EB),
                         shape: BoxShape.circle,
                         boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 3)],
                       ),
-                      child: const Icon(Icons.rotate_right, size: 12, color: Colors.white),
+                      child: const Icon(Icons.rotate_right, size: 14, color: Colors.white),
                     ),
                   ),
                 ),
               ),
-              Positioned(
-                right: -6,
-                child: GestureDetector(
-                  onPanStart: (_) => _saveState(),
-                  onPanUpdate: (d) {
-                    setState(() {
-                      double deltaX = d.delta.dx * math.cos(e.angle) + d.delta.dy * math.sin(e.angle);
-                      e.width = (e.width + deltaX).clamp(20, 800);
-                      if (e.type != Tool.bus) e.height = e.width;
-                    });
-                  },
-                  child: MouseRegion(
-                    cursor: SystemMouseCursors.resizeLeftRight,
-                    child: Container(
-                      width: 12,
-                      height: 12,
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        border: Border.all(color: const Color(0xFF2563EB), width: 2),
-                        borderRadius: BorderRadius.circular(2),
-                        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 2)],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
           ],
         ),
       ),

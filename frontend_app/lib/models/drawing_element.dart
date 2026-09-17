@@ -38,12 +38,14 @@ class DrawingElement {
       label.contains("회선") ||
       label.contains("병렬");
 
-  bool isSynchronousCondenserExplicit = false;
+  bool? isSynchronousCondenserExplicit;
 
   bool get isSynchronousCondenser {
     if (type != Tool.generator || isSlack) return false;
-    if (isSynchronousCondenserExplicit) return true;
-    if (label.startsWith("SC") || label.contains("동기조상기") || id.startsWith("SC") || id.startsWith("sc")) {
+    if (isSynchronousCondenserExplicit != null) {
+      return isSynchronousCondenserExplicit!;
+    }
+    if (label.startsWith("SC_") || label.startsWith("SC ") || label == "SC" || label.contains("동기조상기") || id.startsWith("sc_") || id.startsWith("SC_")) {
       return true;
     }
     return false;
@@ -105,7 +107,7 @@ class DrawingElement {
       ..xPu = xPu
       ..bPu = bPu
       ..tapRatio = tapRatio
-      ..isSynchronousCondenser = isSynchronousCondenserExplicit;
+      ..isSynchronousCondenserExplicit = isSynchronousCondenserExplicit;
   }
 
   Map<String, dynamic> toJson() {
@@ -139,7 +141,7 @@ class DrawingElement {
       isSynchronousCondenser = json['isSynchronousCondenser'] == true;
     } else if (json.containsKey('is_synchronous_condenser') && json['is_synchronous_condenser'] != null) {
       isSynchronousCondenser = json['is_synchronous_condenser'] == true;
-    } else if (label.startsWith("SC") || label.contains("동기조상기") || id.startsWith("SC") || id.startsWith("sc")) {
+    } else if (label.startsWith("SC_") || label.startsWith("SC ") || label == "SC" || label.contains("동기조상기") || id.startsWith("SC_") || id.startsWith("sc_")) {
       isSynchronousCondenser = true;
     }
     if (json.containsKey('isSlack') && json['isSlack'] != null) {

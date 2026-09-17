@@ -1258,6 +1258,9 @@ class _InspectorPanelState extends State<InspectorPanel> {
           if (val != null) {
             onChanged(val);
             widget.onStateChanged();
+          } else if (text.trim().isEmpty) {
+            onChanged(0.0);
+            widget.onStateChanged();
           }
         },
       ),

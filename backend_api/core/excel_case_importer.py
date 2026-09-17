@@ -344,7 +344,16 @@ class ExcelCaseImporter:
                     el['pPu'] = float(g_info.get('pg_pu', 0.0))
                     el['qPu'] = float(g_info.get('qg_pu', 0.0))
                     el['vPu'] = float(g_info.get('voltage_setpoint', 1.0))
-                    is_sc = (not el['isSlack']) and (el['pPu'] == 0 or abs(el['pPu']) < 1e-4)
+                    is_explicit_sc = bool(
+                        el.get('isSynchronousCondenser') or 
+                        el.get('is_synchronous_condenser') or
+                        'sc' in str(g_info.get('type', '')).lower() or
+                        'condenser' in str(g_info.get('type', '')).lower() or
+                        'syn' in str(g_info.get('type', '')).lower() or
+                        str(g_info.get('label', '')).startswith('SC') or
+                        '동기조상기' in str(g_info.get('label', ''))
+                    )
+                    is_sc = (not el['isSlack']) and is_explicit_sc
                     el['isSynchronousCondenser'] = is_sc
                     if is_sc:
                         el['label'] = f"SC_{b_num} (동기조상기)"
