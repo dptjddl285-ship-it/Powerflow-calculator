@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 class ExcelMismatchDialog extends StatefulWidget {
   final Map<String, dynamic> mismatchReport;
   final Map<String, dynamic> excelData;
+  final List<dynamic> elements;
   final VoidCallback onAutoRecover;
   final VoidCallback? onResetToStart;
   final VoidCallback? onCancel;
