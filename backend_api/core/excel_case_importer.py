@@ -587,9 +587,278 @@ class ExcelCaseImporter:
                     elements.append(auto_gen)
                     applied_counts['generator'] += 1
 
+        mismatch_report = self.compare_elements_with_excel(elements, excel_data)
+
         summary = {
             'slack_bus_number': slack_bus_no,
             'applied_counts': applied_counts,
-            'total_elements_updated': sum(applied_counts.values())
+            'total_elements_updated': sum(applied_counts.values()),
+            'mismatch_report': mismatch_report,
         }
         return elements, summary
+
+    def compare_elements_with_excel(self, elements: list, excel_data: dict) -> dict:
+        """도면의 캔버스 요소와 엑셀 계통 사양을 정밀 비교하여 불일치 내역 리포트를 생성합니다."""
+        import re
+
+        def get_el_type(e):
+            if not e or not isinstance(e, dict):
+                return ''
+            return str(e.get('type') or e.get('class') or e.get('class_name') or '').lower()
+
+        def get_line_endpoints(l):
+            s_id = l.get('startElementId')
+            e_id = l.get('endElementId')
+            conns = l.get('connected_to') or []
+            if s_id is None and len(conns) > 0:
+                s_id = conns[0]
+            if e_id is None and len(conns) > 1:
+                e_id = conns[1]
+            return (str(s_id) if s_id is not None else None, str(e_id) if e_id is not None else None)
+
+        el_by_id = {str(el['id']): el for el in elements if el.get('id') is not None}
+
+        # 1. Map element ID to bus number
+        el_id_to_bus_num = {}
+        diagram_buses = set()
+        for el in elements:
+            el_type = get_el_type(el)
+            if 'bus' in el_type and not any(k in el_type for k in ('gen', 'load', 'trans')):
+                b_num = el.get('bus_number')
+                if b_num is None and el.get('label'):
+                    m = re.search(r'(\d+)', str(el.get('label')))
+                    if m:
+                        b_num = int(m.group(1))
+                if b_num is None and el.get('id'):
+                    m = re.search(r'bus_(\d+)', str(el.get('id')))
+                    if m:
+                        b_num = int(m.group(1))
+                    else:
+                        digits = ''.join(c for c in str(el.get('id')) if c.isdigit())
+                        if digits:
+                            b_num = int(digits)
+                if b_num is not None:
+                    b_num = int(b_num)
+                    diagram_buses.add(b_num)
+                    if el.get('id') is not None:
+                        el_id_to_bus_num[str(el['id'])] = b_num
+
+        # 2. Extract diagram generators
+        diagram_gens = set()
+        for el in elements:
+            el_type = get_el_type(el)
+            if 'gen' in el_type:
+                parent_id = str(el.get('parentBusId') or '')
+                b_num = el.get('bus_number') or el.get('connected_bus_number') or el_id_to_bus_num.get(parent_id)
+                if b_num is None and el.get('label'):
+                    m = re.search(r'(\d+)', str(el.get('label')))
+                    if m:
+                        b_num = int(m.group(1))
+                if b_num is None and el.get('id'):
+                    m = re.search(r'(\d+)', str(el.get('id')))
+                    if m:
+                        b_num = int(m.group(1))
+                if b_num is not None:
+                    diagram_gens.add(int(b_num))
+
+        # 3. Extract diagram loads
+        diagram_loads = set()
+        for el in elements:
+            el_type = get_el_type(el)
+            if 'load' in el_type:
+                parent_id = str(el.get('parentBusId') or '')
+                b_num = el.get('bus_number') or el.get('connected_bus_number') or el_id_to_bus_num.get(parent_id)
+                if b_num is None and el.get('label'):
+                    m = re.search(r'(\d+)', str(el.get('label')))
+                    if m:
+                        b_num = int(m.group(1))
+                if b_num is None and el.get('id'):
+                    m = re.search(r'(\d+)', str(el.get('id')))
+                    if m:
+                        b_num = int(m.group(1))
+                if b_num is not None:
+                    diagram_loads.add(int(b_num))
+
+        # 4. Extract diagram branches (Lines between buses + Transformers)
+        diagram_branches = set()
+        trans_lead_line_ids = set()
+
+        for tr in elements:
+            if 'trans' in get_el_type(tr):
+                t_id = str(tr.get('id'))
+                conn_buses = []
+                for l in elements:
+                    if 'line' in get_el_type(l):
+                        s_id, e_id = get_line_endpoints(l)
+                        if s_id == t_id or e_id == t_id:
+                            if l.get('id') is not None:
+                                trans_lead_line_ids.add(str(l.get('id')))
+                            other_id = e_id if s_id == t_id else s_id
+                            b = el_id_to_bus_num.get(other_id)
+                            if b is not None and b not in conn_buses:
+                                conn_buses.append(b)
+                fb = conn_buses[0] if len(conn_buses) > 0 else None
+                tb = conn_buses[1] if len(conn_buses) > 1 else None
+                if fb is None or tb is None:
+                    m = re.search(r'(\d+)\s*[-~_↔]\s*(\d+)', str(tr.get('label') or tr.get('id') or ''))
+                    if m:
+                        fb = fb or int(m.group(1))
+                        tb = tb or int(m.group(2))
+                if fb is not None and tb is not None:
+                    diagram_branches.add(tuple(sorted([int(fb), int(tb)])))
+
+        for el in elements:
+            if 'line' in get_el_type(el):
+                if str(el.get('id')) in trans_lead_line_ids:
+                    continue
+                start_id, end_id = get_line_endpoints(el)
+                s_el = el_by_id.get(start_id)
+                e_el = el_by_id.get(end_id)
+                s_type = get_el_type(s_el)
+                e_type = get_el_type(e_el)
+                s_str = str(start_id or '').lower()
+                e_str = str(end_id or '').lower()
+                lbl_str = str(el.get('label') or '').lower()
+                id_str = str(el.get('id') or '').lower()
+
+                is_gen = 'gen' in s_type or 'gen' in e_type or 'gen' in s_str or 'gen' in e_str or 'g_' in s_str or 'g_' in e_str or 'gen' in lbl_str or 'gen' in id_str
+                is_load = 'load' in s_type or 'load' in e_type or 'load' in s_str or 'load' in e_str or 'load' in lbl_str or 'load' in id_str
+                is_lead = ('lead' in id_str or '↔' in str(el.get('label') or '') or 'lead' in lbl_str)
+
+                if is_gen or is_load or is_lead:
+                    continue
+
+                fb = el_id_to_bus_num.get(start_id)
+                tb = el_id_to_bus_num.get(end_id)
+                if fb is None or tb is None:
+                    m = re.search(r'(\d+)\s*[-~_]\s*(\d+)', str(el.get('label') or el.get('id') or ''))
+                    if m:
+                        fb = fb or int(m.group(1))
+                        tb = tb or int(m.group(2))
+                if fb is not None and tb is not None:
+                    diagram_branches.add(tuple(sorted([int(fb), int(tb)])))
+
+        # 5. Extract Excel expectations
+        excel_buses = {int(k) for k in excel_data.get('buses', {}).keys()}
+        excel_gens = {int(k) for k in excel_data.get('generators', {}).keys()}
+        excel_loads = {
+            int(k) for k, v in excel_data.get('buses', {}).items()
+            if float(v.get('pload_pu', 0) or v.get('pload_mw', 0)) > 0 or float(v.get('qload_pu', 0) or v.get('qload_mvar', 0)) > 0
+        }
+
+        excel_branches = set()
+        for br in excel_data.get('branches', {}).values():
+            fb = int(br.get('from_bus'))
+            tb = int(br.get('to_bus'))
+            excel_branches.add(tuple(sorted([fb, tb])))
+        for tr in excel_data.get('transformers', {}).values():
+            fb = int(tr.get('from_bus'))
+            tb = int(tr.get('to_bus'))
+            excel_branches.add(tuple(sorted([fb, tb])))
+
+        # 6. Compute Discrepancies
+        missing_buses = sorted(list(excel_buses - diagram_buses))
+        surplus_buses = sorted(list(diagram_buses - excel_buses))
+
+        missing_branches = sorted(list(excel_branches - diagram_branches))
+        surplus_branches = sorted(list(diagram_branches - excel_branches))
+
+        missing_gens = sorted(list(excel_gens - diagram_gens))
+        surplus_gens = sorted(list(diagram_gens - excel_gens))
+
+        missing_loads = sorted(list(excel_loads - diagram_loads))
+        surplus_loads = sorted(list(diagram_loads - excel_loads))
+
+        discrepancies = []
+        for b in missing_buses:
+            discrepancies.append({
+                "category": "bus",
+                "type": "missing",
+                "target": f"Bus {b}",
+                "message": f"모선 {b}번이 도면에 누락되었습니다 (엑셀에는 정의됨)."
+            })
+        for b in surplus_buses:
+            discrepancies.append({
+                "category": "bus",
+                "type": "surplus",
+                "target": f"Bus {b}",
+                "message": f"도면에 모선 {b}번이 있으나 엑셀 파일에는 없습니다."
+            })
+        for fb, tb in missing_branches:
+            discrepancies.append({
+                "category": "branch",
+                "type": "missing",
+                "target": f"Line {fb}-{tb}",
+                "message": f"선로 {fb}-{tb}번이 도면에 연결되어 있지 않습니다 (엑셀에는 존재)."
+            })
+        for fb, tb in surplus_branches:
+            discrepancies.append({
+                "category": "branch",
+                "type": "surplus",
+                "target": f"Line {fb}-{tb}",
+                "message": f"도면에 선로 {fb}-{tb}번이 연결되어 있으나 엑셀 선로 목록에는 없습니다."
+            })
+        for b in missing_gens:
+            discrepancies.append({
+                "category": "generator",
+                "type": "missing",
+                "target": f"G_{b}",
+                "message": f"{b}번 모선의 발전기가 도면에 누락되었습니다."
+            })
+        for b in surplus_gens:
+            discrepancies.append({
+                "category": "generator",
+                "type": "surplus",
+                "target": f"G_{b}",
+                "message": f"도면 {b}번 모선에 발전기가 있으나 엑셀에는 발전기가 없습니다."
+            })
+        for b in missing_loads:
+            discrepancies.append({
+                "category": "load",
+                "type": "missing",
+                "target": f"Load_{b}",
+                "message": f"{b}번 모선의 부하 심볼이 도면에 누락되었습니다."
+            })
+
+        is_matched = (len(discrepancies) == 0)
+
+        # Summary string
+        summary_parts = []
+        if missing_buses: summary_parts.append(f"누락 모선: {len(missing_buses)}개 ({missing_buses})")
+        if surplus_buses: summary_parts.append(f"초과 모선: {len(surplus_buses)}개 ({surplus_buses})")
+        if missing_branches: summary_parts.append(f"누락 선로: {len(missing_branches)}개")
+        if surplus_branches: summary_parts.append(f"초과 선로: {len(surplus_branches)}개")
+        if missing_gens: summary_parts.append(f"누락 발전기: {len(missing_gens)}개")
+        if missing_loads: summary_parts.append(f"누락 부하: {len(missing_loads)}개")
+
+        summary_text = " • ".join(summary_parts) if summary_parts else "모든 모선, 선로, 발전기, 부하가 일치합니다."
+
+        return {
+            "is_matched": is_matched,
+            "summary": summary_text,
+            "discrepancies": discrepancies,
+            "stats": {
+                "excel": {
+                    "buses": len(excel_buses),
+                    "branches": len(excel_branches),
+                    "generators": len(excel_gens),
+                    "loads": len(excel_loads),
+                },
+                "diagram": {
+                    "buses": len(diagram_buses),
+                    "branches": len(diagram_branches),
+                    "generators": len(diagram_gens),
+                    "loads": len(diagram_loads),
+                }
+            },
+            "details": {
+                "missing_buses": missing_buses,
+                "surplus_buses": surplus_buses,
+                "missing_branches": [[fb, tb] for fb, tb in missing_branches],
+                "surplus_branches": [[fb, tb] for fb, tb in surplus_branches],
+                "missing_generators": missing_gens,
+                "surplus_generators": surplus_gens,
+                "missing_loads": missing_loads,
+                "surplus_loads": surplus_loads,
+            }
+        }

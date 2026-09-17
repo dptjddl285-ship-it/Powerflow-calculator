@@ -169,7 +169,29 @@ async def apply_excel_to_elements(request: Request):
         return {
             "status": "success",
             "elements": updated_elements,
-            "summary": summary
+            "summary": summary,
+            "mismatch_report": summary.get("mismatch_report"),
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+from agent.excel_discrepancy_agent import excel_discrepancy_agent
+
+@app.post("/diagnose_excel_mismatch")
+async def diagnose_excel_mismatch(request: Request):
+    """AI 에이전트: 도면과 엑셀 데이터 불일치 원인 분석 및 해결 가이드 제공."""
+    try:
+        body = await request.json()
+        elements = body.get("elements", [])
+        excel_data = body.get("excel_data", {})
+        mismatch_report = body.get("mismatch_report")
+        if not mismatch_report:
+            mismatch_report = excel_importer.compare_elements_with_excel(elements, excel_data)
+        diagnosis = excel_discrepancy_agent.diagnose(elements, excel_data, mismatch_report)
+        return {
+            "status": "success",
+            "data": diagnosis,
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
