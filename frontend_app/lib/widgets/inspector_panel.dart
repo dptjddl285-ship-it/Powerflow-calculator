@@ -494,24 +494,7 @@ class _InspectorPanelState extends State<InspectorPanel> {
           ),
           const Divider(height: 20),
 
-          if (widget.onRotateSelected != null && e.type != Tool.line) ...[
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                icon: const Icon(Icons.rotate_right, size: 20),
-                label: const Text("90° 회전 (R)", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF2563EB),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 10),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  elevation: 1,
-                ),
-                onPressed: widget.onRotateSelected,
-              ),
-            ),
-            const SizedBox(height: 10),
-          ],
+
 
           _buildSimulationResultBox(e),
 
