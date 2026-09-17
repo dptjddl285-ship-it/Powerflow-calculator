@@ -370,6 +370,107 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     return points;
   }
 
+  List<Offset> _pruneBusTerminalHooks(
+    List<Offset> points,
+    DrawingElement? startEl,
+    DrawingElement? endEl,
+  ) {
+    if (points.length < 3) return points;
+    List<Offset> pts = List.from(points);
+
+    // 1. Prune contour hook at END (when endEl is a Bus)
+    if (endEl != null && endEl.type == Tool.bus) {
+      final int qTurns = ((endEl.angle / (math.pi / 2)).round() % 4 + 4) % 4;
+      final bool isVert = (qTurns % 2 == 0) ? (endEl.height > endEl.width) : (endEl.width > endEl.height);
+      final double busHalfW = (qTurns % 2 == 0) ? endEl.width / 2 : endEl.height / 2;
+      final double busHalfH = (qTurns % 2 == 0) ? endEl.height / 2 : endEl.width / 2;
+
+      while (pts.length >= 3) {
+        final Offset pLast = pts.last;
+        final Offset pPen = pts[pts.length - 2];
+        final Offset pAnte = pts[pts.length - 3];
+
+        final double dxLast = (pLast.dx - pPen.dx).abs();
+        final double dyLast = (pLast.dy - pPen.dy).abs();
+        final double dxAnte = (pPen.dx - pAnte.dx).abs();
+        final double dyAnte = (pPen.dy - pAnte.dy).abs();
+
+        final double distToCenterX = (pPen.dx - endEl.position.dx).abs();
+        final double distToCenterY = (pPen.dy - endEl.position.dy).abs();
+
+        if (isVert) {
+          // Vertical bus: spurious contour hook runs vertically parallel to bus (|dx| <= 10px, |dy| >= 6px)
+          // immediately adjacent to bus, while approaching segment had horizontal movement (dxAnte >= 8px)
+          final bool isParallelSpur = dxLast <= 10.0 && dyLast >= 6.0;
+          final bool isAdjacentToBus = distToCenterX <= busHalfW + 35.0 && distToCenterY <= busHalfH + 35.0;
+          final bool isApproachingFromSide = dxAnte >= 8.0 || dxAnte >= dyAnte;
+
+          if (isParallelSpur && isAdjacentToBus && isApproachingFromSide) {
+            pts.removeLast();
+            continue;
+          }
+        } else {
+          // Horizontal bus: spurious contour hook runs horizontally parallel to bus (|dy| <= 10px, |dx| >= 6px)
+          // immediately adjacent to bus, while approaching segment had vertical movement (dyAnte >= 8px)
+          final bool isParallelSpur = dyLast <= 10.0 && dxLast >= 6.0;
+          final bool isAdjacentToBus = distToCenterY <= busHalfH + 35.0 && distToCenterX <= busHalfW + 35.0;
+          final bool isApproachingVertically = dyAnte >= 8.0 || dyAnte >= dxAnte;
+
+          if (isParallelSpur && isAdjacentToBus && isApproachingVertically) {
+            pts.removeLast();
+            continue;
+          }
+        }
+        break;
+      }
+    }
+
+    // 2. Prune contour hook at START (when startEl is a Bus)
+    if (startEl != null && startEl.type == Tool.bus) {
+      final int qTurns = ((startEl.angle / (math.pi / 2)).round() % 4 + 4) % 4;
+      final bool isVert = (qTurns % 2 == 0) ? (startEl.height > startEl.width) : (startEl.width > startEl.height);
+      final double busHalfW = (qTurns % 2 == 0) ? startEl.width / 2 : startEl.height / 2;
+      final double busHalfH = (qTurns % 2 == 0) ? startEl.height / 2 : startEl.width / 2;
+
+      while (pts.length >= 3) {
+        final Offset pFirst = pts[0];
+        final Offset pSec = pts[1];
+        final Offset pThird = pts[2];
+
+        final double dxFirst = (pSec.dx - pFirst.dx).abs();
+        final double dyFirst = (pSec.dy - pFirst.dy).abs();
+        final double dxSec = (pThird.dx - pSec.dx).abs();
+        final double dySec = (pThird.dy - pSec.dy).abs();
+
+        final double distToCenterX = (pSec.dx - startEl.position.dx).abs();
+        final double distToCenterY = (pSec.dy - startEl.position.dy).abs();
+
+        if (isVert) {
+          final bool isParallelSpur = dxFirst <= 10.0 && dyFirst >= 6.0;
+          final bool isAdjacentToBus = distToCenterX <= busHalfW + 35.0 && distToCenterY <= busHalfH + 35.0;
+          final bool isLeavingFromSide = dxSec >= 8.0 || dxSec >= dySec;
+
+          if (isParallelSpur && isAdjacentToBus && isLeavingFromSide) {
+            pts.removeAt(0);
+            continue;
+          }
+        } else {
+          final bool isParallelSpur = dyFirst <= 10.0 && dxFirst >= 6.0;
+          final bool isAdjacentToBus = distToCenterY <= busHalfH + 35.0 && distToCenterX <= busHalfW + 35.0;
+          final bool isLeavingVertically = dySec >= 8.0 || dySec >= dxSec;
+
+          if (isParallelSpur && isAdjacentToBus && isLeavingVertically) {
+            pts.removeAt(0);
+            continue;
+          }
+        }
+        break;
+      }
+    }
+
+    return pts;
+  }
+
   List<Offset> _ramerDouglasPeucker(List<Offset> points, double epsilon) {
     if (points.length < 3) return points;
 
@@ -467,7 +568,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     }
 
     // 1. Simplify via Ramer-Douglas-Peucker
-    final simplified = _ramerDouglasPeucker(pts, 14.0);
+    var simplified = _ramerDouglasPeucker(pts, 14.0);
+    simplified = _pruneBusTerminalHooks(simplified, startEl, endEl);
 
     // 2. Snap endpoints to component boundaries
     Offset pStart = startEl != null ? _getSnapPoint(startEl, simplified.first) : simplified.first;
@@ -542,17 +644,31 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
   }) {
     if (rawPoints.length < 2) return rawPoints;
 
+    // 0. Reorient startEl and endEl so startEl is closer to rawPoints.first
+    if (startEl != null && endEl != null) {
+      final double d1 = (rawPoints.first - startEl.position).distance;
+      final double d2 = (rawPoints.first - endEl.position).distance;
+      if (d1 > d2) {
+        final tmp = startEl;
+        startEl = endEl;
+        endEl = tmp;
+      }
+    }
+
     // 1. Ramer-Douglas-Peucker: eliminates pixel tremor / noise while preserving true vertices & corners!
     List<Offset> simplified = _ramerDouglasPeucker(rawPoints, epsilon);
     if (simplified.length < 2) simplified = [rawPoints.first, rawPoints.last];
 
-    // 2. Snap endpoints to component boundaries (if available)
+    // 2. Safely prune spurious bus contour hooks at terminals
+    simplified = _pruneBusTerminalHooks(simplified, startEl, endEl);
+
+    // 3. Snap endpoints to component boundaries (if available)
     Offset pStart = startEl != null ? _getSnapPoint(startEl, simplified.first) : simplified.first;
     Offset pEnd = endEl != null ? _getSnapPoint(endEl, simplified.last) : simplified.last;
 
     List<Offset> pts = [pStart, ...simplified.sublist(1, simplified.length - 1), pEnd];
 
-    // 3. Level out segments that are ALREADY nearly horizontal or vertical (within 4 degrees or 5px)
+    // 4. Level out segments that are ALREADY nearly horizontal or vertical (within 4 degrees or 5px)
     // IMPORTANT: Diagonal lines (angle > 5 deg) are preserved 100% naturally!
     List<Offset> result = [pts.first];
     for (int i = 1; i < pts.length; i++) {
@@ -574,7 +690,15 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       }
     }
 
-    // 4. Remove redundant collinear points
+    // 5. Ensure terminal points remain firmly snapped to component boundaries
+    if (startEl != null && result.isNotEmpty) {
+      result[0] = _getSnapPoint(startEl, result.first);
+    }
+    if (endEl != null && result.length > 1) {
+      result[result.length - 1] = _getSnapPoint(endEl, result.last);
+    }
+
+    // 6. Remove redundant collinear points
     if (result.length > 2) {
       List<Offset> cleaned = [result.first];
       for (int i = 1; i < result.length - 1; i++) {
@@ -614,6 +738,27 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         }
 
         if (sourcePts.length >= 2) {
+          if (startEl == null) {
+            for (var b in elements.where((e) => e.type == Tool.bus)) {
+              if ((sourcePts.first.dx - b.position.dx).abs() <= b.width / 2 + 35.0 &&
+                  (sourcePts.first.dy - b.position.dy).abs() <= b.height / 2 + 35.0) {
+                startEl = b;
+                line.startElementId = b.id;
+                break;
+              }
+            }
+          }
+          if (endEl == null) {
+            for (var b in elements.where((e) => e.type == Tool.bus)) {
+              if ((sourcePts.last.dx - b.position.dx).abs() <= b.width / 2 + 35.0 &&
+                  (sourcePts.last.dy - b.position.dy).abs() <= b.height / 2 + 35.0) {
+                endEl = b;
+                line.endElementId = b.id;
+                break;
+              }
+            }
+          }
+
           final clean = _smoothNaturalLine(
             rawPoints: sourcePts,
             startEl: startEl,
@@ -659,6 +804,27 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       }
 
       if (sourcePts.length >= 2) {
+        if (startEl == null) {
+          for (var b in elements.where((e) => e.type == Tool.bus)) {
+            if ((sourcePts.first.dx - b.position.dx).abs() <= b.width / 2 + 35.0 &&
+                (sourcePts.first.dy - b.position.dy).abs() <= b.height / 2 + 35.0) {
+              startEl = b;
+              line.startElementId = b.id;
+              break;
+            }
+          }
+        }
+        if (endEl == null) {
+          for (var b in elements.where((e) => e.type == Tool.bus)) {
+            if ((sourcePts.last.dx - b.position.dx).abs() <= b.width / 2 + 35.0 &&
+                (sourcePts.last.dy - b.position.dy).abs() <= b.height / 2 + 35.0) {
+              endEl = b;
+              line.endElementId = b.id;
+              break;
+            }
+          }
+        }
+
         final clean = _smoothNaturalLine(
           rawPoints: sourcePts,
           startEl: startEl,
@@ -1848,6 +2014,27 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
             parsedPath.add(Offset((pt[0] as num).toDouble() + shiftX, (pt[1] as num).toDouble() + shiftY));
           }
 
+          if (parsedPath.isNotEmpty) {
+            if (startEl == null) {
+              for (var b in elements.where((e) => e.type == Tool.bus)) {
+                if ((parsedPath.first.dx - b.position.dx).abs() <= b.width / 2 + 35.0 &&
+                    (parsedPath.first.dy - b.position.dy).abs() <= b.height / 2 + 35.0) {
+                  startEl = b;
+                  break;
+                }
+              }
+            }
+            if (endEl == null) {
+              for (var b in elements.where((e) => e.type == Tool.bus)) {
+                if ((parsedPath.last.dx - b.position.dx).abs() <= b.width / 2 + 35.0 &&
+                    (parsedPath.last.dy - b.position.dy).abs() <= b.height / 2 + 35.0) {
+                  endEl = b;
+                  break;
+                }
+              }
+            }
+          }
+
           final cleanPath = _smoothNaturalLine(
             rawPoints: parsedPath,
             startEl: startEl,
@@ -1867,8 +2054,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
             aiPath: cleanPath.length > 2 ? cleanPath : null,
             rawAiPath: parsedPath,
             label: lineLabel.isNotEmpty ? lineLabel : lineId,
-            startElementId: connectedTo.isNotEmpty ? connectedTo[0].toString() : null,
-            endElementId: connectedTo.length > 1 ? connectedTo[1].toString() : null,
+            startElementId: startEl != null ? startEl.id : (connectedTo.isNotEmpty ? connectedTo[0].toString() : null),
+            endElementId: endEl != null ? endEl.id : (connectedTo.length > 1 ? connectedTo[1].toString() : null),
             startAnchor: startEl != null ? (startPos - startEl.position) : null,
             endAnchor: endEl != null ? (endPos - endEl.position) : null,
           ));
