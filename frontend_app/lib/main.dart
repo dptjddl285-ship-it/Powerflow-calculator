@@ -2989,37 +2989,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         ],
       );
     } else if (e.type == Tool.load) {
-      shapeContent = Stack(
-        clipBehavior: Clip.none,
-        alignment: Alignment.center,
-        children: [
-          CustomPaint(
-            size: Size(e.width, e.height), 
-            painter: LoadArrowPainter(color: isSelected ? const Color(0xFF2563EB) : drawColor),
-          ),
-          Positioned(
-            bottom: -18,
-            child: RotatedBox(
-              quarterTurns: counterQuarterTurns,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.9),
-                  borderRadius: BorderRadius.circular(3),
-                  border: Border.all(color: isSelected ? const Color(0xFF2563EB) : Colors.black12),
-                ),
-                child: Text(
-                  e.label.isNotEmpty ? e.label : e.id,
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold, 
-                    color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF0F172A), 
-                    fontSize: 10,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
+      shapeContent = CustomPaint(
+        size: Size(e.width, e.height), 
+        painter: LoadArrowPainter(color: isSelected ? const Color(0xFF2563EB) : drawColor),
       );
     } else if (e.type == Tool.transformer) {
       bool isVert = e.height >= e.width;
@@ -3124,6 +3096,44 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         child: Stack(
           clipBehavior: Clip.none,
           children: [
+            if (e.type == Tool.load)
+              Positioned(
+                left: 0,
+                right: 0,
+                top: (quarterTurns == 0) ? (topPad + elemH + 2) : (topPad - 18),
+                child: Center(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {
+                      _canvasFocusNode.requestFocus();
+                      setState(() => selectedElement = e);
+                    },
+                    onDoubleTap: () {
+                      _canvasFocusNode.requestFocus();
+                      setState(() {
+                        selectedElement = e;
+                        isInspectorOpen = true;
+                      });
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.92),
+                        borderRadius: BorderRadius.circular(3),
+                        border: Border.all(color: isSelected ? const Color(0xFF2563EB) : Colors.black12),
+                      ),
+                      child: Text(
+                        e.label.isNotEmpty ? e.label : e.id,
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold, 
+                          color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF0F172A), 
+                          fontSize: 10,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             Positioned(
               left: sidePad,
               top: topPad,
