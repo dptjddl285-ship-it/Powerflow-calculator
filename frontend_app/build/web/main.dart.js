@@ -48681,7 +48681,7 @@ c0=b1==null?f1:B.d.bD(b1)
 if(c0==null){b1=A.bu(a1.h(a0,"bus_number"))
 c0=b1==null?f1:B.d.bD(b1)}if(b9==null&&c0!=null&&!a2)b9="bus_"+A.j(c0)
 c1=A.kd(f1,b4,f1,f1,f1,f1,f1,a8,a3,B.d1,b8,f1,b9,new A.f(a5+c,a6+b),f1,f1,f1,a9,a7)
-if(a2&&c0!=null)if(c0===1||J.d(a1.h(a0,"is_slack"),!0)||J.d(a1.h(a0,"isSlack"),!0))c1.cx=!0
+if(a2)if(J.d(a1.h(a0,"is_slack"),!0)||J.d(a1.h(a0,"isSlack"),!0))c1.cx=!0
 B.b.D(f9.f,c1)}for(o=J.bM(m),l=t.g;o.A();){c2=o.gN()
 k=J.aN(c2)
 f=k.h(c2,"line_id")

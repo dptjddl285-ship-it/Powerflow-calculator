@@ -1966,8 +1966,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           label: label,
           parentBusId: parentBusId,
         );
-        if (type == Tool.bus && devBusNum != null) {
-          if (devBusNum == 1 || node['is_slack'] == true || node['isSlack'] == true) {
+        if (type == Tool.bus) {
+          if (node['is_slack'] == true || node['isSlack'] == true) {
             newEl.isSlack = true;
           }
         }
