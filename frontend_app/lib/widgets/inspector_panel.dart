@@ -83,7 +83,7 @@ class _InspectorPanelState extends State<InspectorPanel> {
 
   String _formatNum(double v) {
     if (v == v.roundToDouble()) return v.toInt().toString();
-    return v.toStringAsFixed(2);
+    return v.toStringAsFixed(4).replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '');
   }
 
   @override
@@ -97,18 +97,33 @@ class _InspectorPanelState extends State<InspectorPanel> {
     if (e == null) return;
     String newLabel = e.label.isNotEmpty ? e.label : e.id;
     if (labelCtrl.text != newLabel) labelCtrl.text = newLabel;
-    if (vCtrl.text != e.vPu.toString()) vCtrl.text = e.vPu.toString();
+
+    void updateIfDifferent(TextEditingController ctrl, double modelVal) {
+      final text = ctrl.text.trim();
+      final parsed = double.tryParse(text);
+      if (text.endsWith('.') || text == '-' || text == '-0' || text.endsWith('.0') || text.isEmpty) {
+        if (parsed != null && (parsed - modelVal).abs() < 1e-6) {
+          return;
+        }
+      }
+      if (parsed == null || (parsed - modelVal).abs() > 1e-6) {
+        String formatted = _formatNum(modelVal);
+        if (ctrl.text != formatted) {
+          ctrl.text = formatted;
+        }
+      }
+    }
+
+    updateIfDifferent(vCtrl, e.vPu);
     final double pVal = useMw ? (e.pPu * widget.sBase) : e.pPu;
     final double qVal = useMw ? (e.qPu * widget.sBase) : e.qPu;
-    String newP = _formatNum(pVal);
-    String newQ = _formatNum(qVal);
-    if (pCtrl.text != newP) pCtrl.text = newP;
-    if (qCtrl.text != newQ) qCtrl.text = newQ;
-    if (rCtrl.text != e.rPu.toString()) rCtrl.text = e.rPu.toString();
-    if (xCtrl.text != e.xPu.toString()) xCtrl.text = e.xPu.toString();
-    if (bCtrl.text != e.bPu.toString()) bCtrl.text = e.bPu.toString();
-    if (thetaCtrl.text != e.thetaDeg.toString()) thetaCtrl.text = e.thetaDeg.toString();
-    if (tapCtrl.text != e.tapRatio.toString()) tapCtrl.text = e.tapRatio.toString();
+    updateIfDifferent(pCtrl, pVal);
+    updateIfDifferent(qCtrl, qVal);
+    updateIfDifferent(rCtrl, e.rPu);
+    updateIfDifferent(xCtrl, e.xPu);
+    updateIfDifferent(bCtrl, e.bPu);
+    updateIfDifferent(thetaCtrl, e.thetaDeg);
+    updateIfDifferent(tapCtrl, e.tapRatio);
   }
 
   @override
@@ -482,14 +497,15 @@ class _InspectorPanelState extends State<InspectorPanel> {
           if (widget.onRotateSelected != null && e.type != Tool.line) ...[
             SizedBox(
               width: double.infinity,
-              child: OutlinedButton.icon(
-                icon: const Icon(Icons.rotate_right, size: 18),
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.rotate_right, size: 20),
                 label: const Text("90° 회전 (R)", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFF2563EB),
-                  side: const BorderSide(color: Color(0xFF93C5FD)),
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF2563EB),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  elevation: 1,
                 ),
                 onPressed: widget.onRotateSelected,
               ),

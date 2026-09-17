@@ -2530,96 +2530,108 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     final double elemW = isTransposed ? e.height : e.width;
     final double elemH = isTransposed ? e.width : e.height;
 
-    final double leftOffset = e.position.dx - (elemW / 2);
-    final double topOffset = e.position.dy - (elemH / 2);
+    const double topPad = 36.0;
+    const double sidePad = 24.0;
+    const double bottomPad = 24.0;
+
+    final double boxW = elemW + sidePad * 2;
+    final double boxH = elemH + topPad + bottomPad;
+
+    final double leftOffset = e.position.dx - (boxW / 2);
+    final double topOffset = e.position.dy - (elemH / 2) - topPad;
 
     return Positioned(
       left: leftOffset,
       top: topOffset,
       child: SizedBox(
-        width: elemW,
-        height: elemH,
+        width: boxW,
+        height: boxH,
         child: Stack(
-          alignment: Alignment.center,
           clipBehavior: Clip.none,
           children: [
-            GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () {
-                _canvasFocusNode.requestFocus();
-                setState(() => selectedElement = e);
-              },
-              onDoubleTap: () {
-                _canvasFocusNode.requestFocus();
-                setState(() {
-                  selectedElement = e;
-                  isInspectorOpen = true;
-                });
-              },
-              onPanStart: (d) {
-                if (selectedTool == Tool.move) {
-                  _saveState();
+            Positioned(
+              left: sidePad,
+              top: topPad,
+              width: elemW,
+              height: elemH,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  _canvasFocusNode.requestFocus();
                   setState(() => selectedElement = e);
-                }
-              },
-              onPanUpdate: (d) {
-                if (selectedTool == Tool.move) {
-                  _moveElement(e, d.delta);
-                }
-              },
-              child: MouseRegion(
-                cursor: selectedTool == Tool.move ? SystemMouseCursors.move : SystemMouseCursors.click,
-                child: RotatedBox(
-                  quarterTurns: quarterTurns,
-                  child: SizedBox(
-                    width: e.width,
-                    height: e.height,
-                    child: Stack(
-                      alignment: Alignment.center,
-                      clipBehavior: Clip.none,
-                      children: [
-                        shapeContent,
-                        if (isSelected) ...[
-                          IgnorePointer(
-                            child: Container(
-                              width: e.width + 8,
-                              height: e.height + 8,
-                              decoration: BoxDecoration(
-                                border: Border.all(color: const Color(0xFF2563EB), width: 1.5),
-                                borderRadius: BorderRadius.circular(4),
+                },
+                onDoubleTap: () {
+                  _canvasFocusNode.requestFocus();
+                  setState(() {
+                    selectedElement = e;
+                    isInspectorOpen = true;
+                  });
+                },
+                onPanStart: (d) {
+                  if (selectedTool == Tool.move) {
+                    _saveState();
+                    setState(() => selectedElement = e);
+                  }
+                },
+                onPanUpdate: (d) {
+                  if (selectedTool == Tool.move) {
+                    _moveElement(e, d.delta);
+                  }
+                },
+                child: MouseRegion(
+                  cursor: selectedTool == Tool.move ? SystemMouseCursors.move : SystemMouseCursors.click,
+                  child: RotatedBox(
+                    quarterTurns: quarterTurns,
+                    child: SizedBox(
+                      width: e.width,
+                      height: e.height,
+                      child: Stack(
+                        alignment: Alignment.center,
+                        clipBehavior: Clip.none,
+                        children: [
+                          shapeContent,
+                          if (isSelected) ...[
+                            IgnorePointer(
+                              child: Container(
+                                width: e.width + 8,
+                                height: e.height + 8,
+                                decoration: BoxDecoration(
+                                  border: Border.all(color: const Color(0xFF2563EB), width: 1.5),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
                               ),
                             ),
-                          ),
-                          Positioned(
-                            right: -6,
-                            child: GestureDetector(
-                              behavior: HitTestBehavior.opaque,
-                              onPanStart: (_) => _saveState(),
-                              onPanUpdate: (d) {
-                                setState(() {
-                                  e.width = (e.width + d.delta.dx).clamp(20, 800);
-                                  if (e.type != Tool.bus) e.height = e.width;
-                                });
-                              },
-                              child: MouseRegion(
-                                cursor: isTransposed
-                                    ? SystemMouseCursors.resizeUpDown
-                                    : SystemMouseCursors.resizeLeftRight,
-                                child: Container(
-                                  width: 12,
-                                  height: 12,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    border: Border.all(color: const Color(0xFF2563EB), width: 2),
-                                    borderRadius: BorderRadius.circular(2),
-                                    boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 2)],
+                            Positioned(
+                              right: -6,
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onPanStart: (_) => _saveState(),
+                                onPanUpdate: (d) {
+                                  setState(() {
+                                    e.width = (e.width + d.delta.dx).clamp(20, 800);
+                                    if (e.type != Tool.bus) e.height = e.width;
+                                  });
+                                },
+                                child: MouseRegion(
+                                  cursor: isTransposed
+                                      ? SystemMouseCursors.resizeUpDown
+                                      : SystemMouseCursors.resizeLeftRight,
+                                  child: Container(
+                                    width: 12,
+                                    height: 12,
+                                    decoration: BoxDecoration(
+                                      color: Colors.white,
+                                      border: Border.all(color: const Color(0xFF2563EB), width: 2),
+                                      borderRadius: BorderRadius.circular(2),
+                                      boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 2)],
+                                    ),
                                   ),
                                 ),
                               ),
                             ),
-                          ),
+                          ],
                         ],
-                      ],
+                      ),
                     ),
                   ),
                 ),
@@ -2628,7 +2640,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
 
             if (isSelected)
               Positioned(
-                top: -24,
+                top: 4,
+                left: (boxW - 28) / 2,
                 child: GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: () {
@@ -2637,14 +2650,14 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                   child: MouseRegion(
                     cursor: SystemMouseCursors.click,
                     child: Container(
-                      width: 22,
-                      height: 22,
+                      width: 28,
+                      height: 28,
                       decoration: const BoxDecoration(
                         color: Color(0xFF2563EB),
                         shape: BoxShape.circle,
-                        boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 3)],
+                        boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2))],
                       ),
-                      child: const Icon(Icons.rotate_right, size: 15, color: Colors.white),
+                      child: const Icon(Icons.rotate_right, size: 18, color: Colors.white),
                     ),
                   ),
                 ),
