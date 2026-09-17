@@ -344,14 +344,18 @@ class ExcelCaseImporter:
                     el['pPu'] = float(g_info.get('pg_pu', 0.0))
                     el['qPu'] = float(g_info.get('qg_pu', 0.0))
                     el['vPu'] = float(g_info.get('voltage_setpoint', 1.0))
+                    g_type_lower = str(g_info.get('type', '')).strip().lower()
+                    g_label_str = str(g_info.get('label', '')).strip()
                     is_explicit_sc = bool(
                         el.get('isSynchronousCondenser') or 
                         el.get('is_synchronous_condenser') or
-                        'sc' in str(g_info.get('type', '')).lower() or
-                        'condenser' in str(g_info.get('type', '')).lower() or
-                        'syn' in str(g_info.get('type', '')).lower() or
-                        str(g_info.get('label', '')).startswith('SC') or
-                        '동기조상기' in str(g_info.get('label', ''))
+                        'condenser' in g_type_lower or
+                        g_type_lower == 'sc' or
+                        g_type_lower.startswith('sc_') or
+                        g_label_str.startswith('SC_') or
+                        g_label_str.startswith('SC ') or
+                        g_label_str == 'SC' or
+                        '동기조상기' in g_label_str
                     )
                     is_sc = (not el['isSlack']) and is_explicit_sc
                     el['isSynchronousCondenser'] = is_sc

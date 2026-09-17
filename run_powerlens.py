@@ -29,8 +29,8 @@ def main():
         backend_proc.terminate()
         sys.exit(1)
 
-    frontend_cmd = [sys.executable, "-m", "http.server", "58640", "--directory", web_dir]
-    print("▶ [2/2] Starting Frontend Web Server on http://localhost:58640 ...")
+    frontend_cmd = [sys.executable, os.path.join(BASE_DIR, "frontend_server.py")]
+    print("▶ [2/2] Starting Frontend Web Server on http://localhost:58640 (No-Cache) ...")
     frontend_proc = subprocess.Popen(frontend_cmd, cwd=BASE_DIR)
 
     # 3. Wait and open browser

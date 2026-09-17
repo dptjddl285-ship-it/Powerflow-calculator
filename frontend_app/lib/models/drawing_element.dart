@@ -74,7 +74,16 @@ class DrawingElement {
     this.aiPath,
     this.circuitCount,
     this.busType,
-  });
+    this.isSynchronousCondenserExplicit,
+  }) {
+    if (type == Tool.generator && isSynchronousCondenserExplicit == null) {
+      if (label.startsWith("SC_") || label.startsWith("SC ") || label == "SC" || label.contains("동기조상기") || id.startsWith("sc_") || id.startsWith("SC_")) {
+        isSynchronousCondenserExplicit = true;
+      } else {
+        isSynchronousCondenserExplicit = false;
+      }
+    }
+  }
 
   DrawingElement copy() {
     return DrawingElement(
@@ -143,6 +152,8 @@ class DrawingElement {
       isSynchronousCondenser = json['is_synchronous_condenser'] == true;
     } else if (label.startsWith("SC_") || label.startsWith("SC ") || label == "SC" || label.contains("동기조상기") || id.startsWith("SC_") || id.startsWith("sc_")) {
       isSynchronousCondenser = true;
+    } else if (type == Tool.generator) {
+      isSynchronousCondenser = false;
     }
     if (json.containsKey('isSlack') && json['isSlack'] != null) {
       isSlack = json['isSlack'] == true;
@@ -242,6 +253,12 @@ class DrawingElement {
       busType: json['bus_type']?.toString(),
     );
     el.updateFromJson(json);
+    if (el.type == Tool.bus && el.width < el.height) {
+      double temp = el.width;
+      el.width = el.height;
+      el.height = temp;
+      el.angle = (el.angle + 3.141592653589793 / 2) % (3.141592653589793 * 2);
+    }
     return el;
   }
 }

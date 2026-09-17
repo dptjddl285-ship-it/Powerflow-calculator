@@ -2348,6 +2348,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
             : (e.type == Tool.load ? const Color(0xFF059669) : const Color(0xFF7C3AED)));
     Color drawColor = isSelected ? const Color(0xFF2563EB) : baseColor;
     
+    final int quarterTurns = ((e.angle / (math.pi / 2)).round() % 4 + 4) % 4;
+    final int counterQuarterTurns = (4 - quarterTurns) % 4;
+
     Widget shapeContent;
     if (e.type == Tool.generator) {
       final isSC = e.isSynchronousCondenser;
@@ -2373,8 +2376,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
               ],
             ), 
             child: Center(
-              child: Transform.rotate(
-                angle: -e.angle,
+              child: RotatedBox(
+                quarterTurns: counterQuarterTurns,
                 child: Text(
                   isSC ? "SC" : (e.isSlack ? "S" : "G"), 
                   style: TextStyle(
@@ -2388,8 +2391,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           ),
           Positioned(
             top: -18,
-            child: Transform.rotate(
-              angle: -e.angle,
+            child: RotatedBox(
+              quarterTurns: counterQuarterTurns,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                 decoration: BoxDecoration(
@@ -2421,8 +2424,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           ),
           Positioned(
             bottom: -18,
-            child: Transform.rotate(
-              angle: -e.angle,
+            child: RotatedBox(
+              quarterTurns: counterQuarterTurns,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                 decoration: BoxDecoration(
@@ -2450,13 +2453,13 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         alignment: Alignment.center,
         children: [
           CustomPaint(
-            size: Size(e.width, e.height),
+            size: Size(e.width, e.height), 
             painter: TransformerPainter(color: isSelected ? const Color(0xFF2563EB) : drawColor, isVertical: isVert),
           ),
           Positioned(
             top: -18,
-            child: Transform.rotate(
-              angle: -e.angle,
+            child: RotatedBox(
+              quarterTurns: counterQuarterTurns,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                 decoration: BoxDecoration(
@@ -2499,8 +2502,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           ),
           Positioned(
             top: -20,
-            child: Transform.rotate(
-              angle: -e.angle,
+            child: RotatedBox(
+              quarterTurns: counterQuarterTurns,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
                 decoration: BoxDecoration(
@@ -2523,30 +2526,19 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       );
     }
 
-    if (e.type == Tool.bus && e.width < e.height) {
-      double temp = e.width;
-      e.width = e.height;
-      e.height = temp;
-      e.angle = (e.angle + math.pi / 2) % (math.pi * 2);
-    }
+    final bool isTransposed = (quarterTurns % 2 == 1);
+    final double elemW = isTransposed ? e.height : e.width;
+    final double elemH = isTransposed ? e.width : e.height;
 
-    final double cosA = math.cos(e.angle).abs();
-    final double sinA = math.sin(e.angle).abs();
-    final double boundW = e.width * cosA + e.height * sinA;
-    final double boundH = e.width * sinA + e.height * cosA;
-
-    const double pad = 16.0;
-    final double boxWidth = boundW + (isSelected ? pad * 2 : 0);
-    final double boxHeight = boundH + (isSelected ? pad * 2 : 0);
-    final double leftOffset = e.position.dx - (boxWidth / 2);
-    final double topOffset = e.position.dy - (boxHeight / 2);
+    final double leftOffset = e.position.dx - (elemW / 2);
+    final double topOffset = e.position.dy - (elemH / 2);
 
     return Positioned(
       left: leftOffset,
       top: topOffset,
       child: SizedBox(
-        width: boxWidth,
-        height: boxHeight,
+        width: elemW,
+        height: elemH,
         child: Stack(
           alignment: Alignment.center,
           clipBehavior: Clip.none,
@@ -2577,8 +2569,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
               },
               child: MouseRegion(
                 cursor: selectedTool == Tool.move ? SystemMouseCursors.move : SystemMouseCursors.click,
-                child: Transform.rotate(
-                  angle: e.angle,
+                child: RotatedBox(
+                  quarterTurns: quarterTurns,
                   child: SizedBox(
                     width: e.width,
                     height: e.height,
@@ -2601,16 +2593,16 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                           Positioned(
                             right: -6,
                             child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
                               onPanStart: (_) => _saveState(),
                               onPanUpdate: (d) {
                                 setState(() {
-                                  double deltaX = d.delta.dx * math.cos(e.angle) + d.delta.dy * math.sin(e.angle);
-                                  e.width = (e.width + deltaX).clamp(20, 800);
+                                  e.width = (e.width + d.delta.dx).clamp(20, 800);
                                   if (e.type != Tool.bus) e.height = e.width;
                                 });
                               },
                               child: MouseRegion(
-                                cursor: (e.angle / (math.pi / 2)).round() % 2 == 1
+                                cursor: isTransposed
                                     ? SystemMouseCursors.resizeUpDown
                                     : SystemMouseCursors.resizeLeftRight,
                                 child: Container(
@@ -2636,22 +2628,23 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
 
             if (isSelected)
               Positioned(
-                top: -10,
+                top: -24,
                 child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
                   onTap: () {
                     _rotateElement(e);
                   },
                   child: MouseRegion(
                     cursor: SystemMouseCursors.click,
                     child: Container(
-                      width: 20,
-                      height: 20,
+                      width: 22,
+                      height: 22,
                       decoration: const BoxDecoration(
                         color: Color(0xFF2563EB),
                         shape: BoxShape.circle,
                         boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 3)],
                       ),
-                      child: const Icon(Icons.rotate_right, size: 14, color: Colors.white),
+                      child: const Icon(Icons.rotate_right, size: 15, color: Colors.white),
                     ),
                   ),
                 ),
