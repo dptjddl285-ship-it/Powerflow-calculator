@@ -37,6 +37,7 @@ class AgentChatReviewer:
         missing_candidates: Optional[List[Dict[str, Any]]] = None,
         topology_issues: Optional[List[Dict[str, Any]]] = None,
         history: Optional[List[ChatMessagePayload]] = None,
+        app_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Process a conversational query using diagram review context via active provider."""
         return self.provider.answer_chat(
@@ -50,6 +51,7 @@ class AgentChatReviewer:
             missing_candidates=missing_candidates,
             topology_issues=topology_issues,
             history=history,
+            app_context=app_context,
         )
 
 

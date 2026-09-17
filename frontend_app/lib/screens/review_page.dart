@@ -1,14 +1,15 @@
 import 'dart:io';
-import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
-import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter/material.dart';
 import '../models/review_models.dart';
+import '../models/powerlens_assistant_context.dart';
 import '../services/review_api_service.dart';
 import '../widgets/review_overlay.dart';
+import '../widgets/powerlens_ai/powerlens_ai_button.dart';
+import '../widgets/powerlens_ai/powerlens_ai_panel.dart';
 
 enum ReviewPhase { objectReview, connectionReview, busMappingReview, verifiedFinal }
 
@@ -16,8 +17,15 @@ enum RightPanelTab { detailReview, agentActivity, agentChat }
 
 class ObjectReviewPage extends StatefulWidget {
   final Function(Map<String, dynamic> verifiedSldData)? onProceedToCanvas;
+  final Uint8List? initialImageBytes;
+  final String? initialFilename;
 
-  const ObjectReviewPage({super.key, this.onProceedToCanvas});
+  const ObjectReviewPage({
+    super.key,
+    this.onProceedToCanvas,
+    this.initialImageBytes,
+    this.initialFilename,
+  });
 
   @override
   State<ObjectReviewPage> createState() => _ObjectReviewPageState();
@@ -106,10 +114,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   int get _unresolvedCandidatesCount =>
       _missingCandidates.where((c) => c.status == 'OPEN').length;
 
-  bool get _canVerifyObjectGate =>
+  bool get _isCleanAuto =>
       _objSuspiciousCount == 0 &&
       _unresolvedCandidatesCount == 0 &&
-      _humanCompletenessConfirmed &&
+      _workingNodes.where((n) => n.reviewStatus != 'REJECTED').isNotEmpty;
+
+  bool get _canVerifyObjectGate =>
+      (_isCleanAuto || _humanCompletenessConfirmed) &&
       _workingNodes.where((n) => n.reviewStatus != 'REJECTED').isNotEmpty;
 
   List<String> get _objectGateBlockers {
@@ -120,7 +131,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     if (_unresolvedCandidatesCount > 0) {
       blockers.add('누락 후보 $_unresolvedCandidatesCount개 복구 또는 문제없음 처리');
     }
-    if (!_humanCompletenessConfirmed) {
+    if (!_humanCompletenessConfirmed && !_isCleanAuto) {
       blockers.add('원본 회로도 대조 확인 체크');
     }
     if (_workingNodes.where((n) => n.reviewStatus != 'REJECTED').isEmpty) {
@@ -307,6 +318,21 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     return list;
   }
 
+  bool _isAiPanelOpen = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialImageBytes != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _processImageBytes(
+          widget.initialImageBytes!,
+          widget.initialFilename ?? 'sample_diagram_ieee24.jpg',
+        );
+      });
+    }
+  }
+
   @override
   void dispose() {
     _chatInputController.dispose();
@@ -314,17 +340,40 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     super.dispose();
   }
 
+  PowerLensAssistantContext _buildAssistantContext() {
+    return PowerLensAssistantContext(
+      currentScreen: 'REVIEW_PAGE',
+      workflowStage: _currentPhase == ReviewPhase.objectReview
+          ? 'OBJECT_REVIEW'
+          : _currentPhase == ReviewPhase.busMappingReview
+              ? 'BUS_MAPPING'
+              : _currentPhase == ReviewPhase.connectionReview
+                  ? 'CONNECTION_REVIEW'
+                  : 'FINAL',
+      documentId: _document?.documentId ?? '',
+      hasDiagram: _document != null,
+      totalObjects: _workingNodes.length,
+      suspiciousObjects: _objSuspiciousCount,
+      unresolvedMissingCandidates: _unresolvedCandidatesCount,
+      totalBuses: _busNodes.length,
+      unresolvedBusNumbers: _busUncertainCount,
+      duplicateBusNumbers: _duplicateBusNumbers.length,
+      totalConnections: _workingLines.length,
+      ambiguousConnections: _lineAmbiguousCount,
+      topologyIssueCount: _topologyIssues.length,
+      finalVerified: _verifiedSld != null,
+      currentBlockers: _currentPhase == ReviewPhase.objectReview
+          ? _objectGateBlockers
+          : _currentPhase == ReviewPhase.busMappingReview
+              ? _busGateBlockers
+              : _topologyIssues.map((e) => e['message']?.toString() ?? '연결 오류').toList(),
+    );
+  }
+
   // --- Step 1: Upload & Object Detection ---
 
-  Future<void> _pickAndUploadImage() async {
+  Future<void> _processImageBytes(Uint8List bytes, String filename) async {
     try {
-      final ImagePicker picker = ImagePicker();
-      final XFile? file = await picker.pickImage(source: ImageSource.gallery);
-      if (file == null) return;
-
-      final Uint8List bytes = await file.readAsBytes();
-      final String filename = file.name;
-
       setState(() {
         _isLoading = true;
         _loadingMessage = "AI 객체 검출 및 근거 수집 중... 🔍";
@@ -360,7 +409,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         // Greeting and Proactive Summary in Chat
         final summaryMsg =
             doc.proactiveSummary?.summaryText ??
-            "안녕하세요! VisionFlow 로컬 도면 어시스턴트입니다.\n도면 검수 상태, 선택 객체/선로의 판정 근거, 누락 후보 등을 로컬 분석 모드로 즉시 안내해 드립니다.";
+            "안녕하세요! PowerLens AI 도면 어시스턴트입니다.\n도면 검수 상태, 선택 객체/선로의 판정 근거, 누락 후보 등을 즉시 안내해 드립니다.";
 
         _chatHistory.add(
           ChatMessageItem(
@@ -382,7 +431,25 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       setState(() => _isLoading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("업로드 실패: $e"), backgroundColor: Colors.red),
+          SnackBar(content: Text("도면 분석 실패: $e"), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  Future<void> _pickAndUploadImage() async {
+    try {
+      final ImagePicker picker = ImagePicker();
+      final XFile? file = await picker.pickImage(source: ImageSource.gallery);
+      if (file == null) return;
+
+      final Uint8List bytes = await file.readAsBytes();
+      final String filename = file.name;
+      await _processImageBytes(bytes, filename);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("이미지 선택 오류: $e"), backgroundColor: Colors.red),
         );
       }
     }
@@ -739,7 +806,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         documentId: _document!.documentId,
         workingNodes: _workingNodes,
         missingCandidates: _missingCandidates,
-        humanCompletenessConfirmed: _humanCompletenessConfirmed,
+        humanCompletenessConfirmed: _humanCompletenessConfirmed || _isCleanAuto,
       );
 
       setState(() {
@@ -1320,6 +1387,42 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 ),
               ),
             ),
+          Positioned(
+            right: 20,
+            bottom: 20,
+            child: PowerLensAIFloatingButton(
+              onPressed: () {
+                final isMobile = MediaQuery.of(context).size.width < 768;
+                if (isMobile) {
+                  showModalBottomSheet(
+                    context: context,
+                    isScrollControlled: true,
+                    backgroundColor: Colors.transparent,
+                    builder: (ctx) => PowerLensAIPanel(
+                      assistantContext: _buildAssistantContext(),
+                      onClose: () => Navigator.pop(ctx),
+                      isMobile: true,
+                    ),
+                  );
+                } else {
+                  setState(() => _isAiPanelOpen = !_isAiPanelOpen);
+                }
+              },
+              isOpen: _isAiPanelOpen,
+              isMobile: MediaQuery.of(context).size.width < 768,
+              alertCount: _objSuspiciousCount > 0 ? _objSuspiciousCount : null,
+            ),
+          ),
+          if (_isAiPanelOpen && MediaQuery.of(context).size.width >= 768)
+            Positioned(
+              right: 20,
+              bottom: 70,
+              child: PowerLensAIPanel(
+                assistantContext: _buildAssistantContext(),
+                onClose: () => setState(() => _isAiPanelOpen = false),
+                isMobile: false,
+              ),
+            ),
         ],
       ),
     );
@@ -1402,18 +1505,38 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 style: TextStyle(color: Color(0xFF64748B), fontSize: 13),
               ),
               const SizedBox(height: 20),
-              ElevatedButton.icon(
-                onPressed: _pickAndUploadImage,
-                icon: const Icon(Icons.add_photo_alternate),
-                label: const Text("도면 파일 선택"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF2563EB),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 12,
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  ElevatedButton.icon(
+                    onPressed: _pickAndUploadImage,
+                    icon: const Icon(Icons.add_photo_alternate, size: 16),
+                    label: const Text("도면 파일 선택"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF2563EB),
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                    ),
                   ),
-                ),
+                  const SizedBox(width: 12),
+                  OutlinedButton.icon(
+                    onPressed: _loadSampleDiagram,
+                    icon: const Icon(Icons.flash_on, size: 16, color: Color(0xFFD97706)),
+                    label: const Text("IEEE-24 샘플로 체험"),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xFFD97706),
+                      side: const BorderSide(color: Color(0xFFFDE68A)),
+                      backgroundColor: const Color(0xFFFFFBEB),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -1422,28 +1545,46 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     );
   }
 
+  Future<void> _loadSampleDiagram() async {
+    try {
+      setState(() {
+        _isLoading = true;
+        _loadingMessage = "IEEE-24 샘플 도면을 불러오는 중... ⚡";
+      });
+      final bytes = await _apiService.fetchSampleDiagramBytes();
+      await _processImageBytes(bytes, 'sample_diagram_ieee24.jpg');
+    } catch (e) {
+      setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("샘플 도면 불러오기 실패: $e"), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
   // --- Proactive AI Summary Top Banner ---
 
   String get _nextReviewActionText {
     if (_currentPhase == ReviewPhase.objectReview) {
       if (_objSuspiciousCount > 0) {
-        return '신뢰도가 낮은 객체 $_objSuspiciousCount개를 승인하거나 제외하세요.';
+        return '검토가 필요한 객체 $_objSuspiciousCount개를 승인하거나 제외하세요.';
       }
       if (_unresolvedCandidatesCount > 0) {
-        return '누락 후보 $_unresolvedCandidatesCount개를 복구하거나 문제없음 처리하세요.';
+        return '누락 의심 설비 $_unresolvedCandidatesCount개를 복구하거나 문제없음 처리하세요.';
       }
-      if (!_humanCompletenessConfirmed) {
+      if (!_humanCompletenessConfirmed && !_isCleanAuto) {
         return '원본 도면과 객체 목록이 일치하는지 확인해 주세요.';
       }
-      return '객체 검수가 끝났습니다. 결선 검수로 이동할 수 있습니다.';
+      return '객체 확인이 완료되었습니다. 모선 번호 매핑으로 이동할 수 있습니다.';
     }
     if (_lineAmbiguousCount > 0) {
-      return '판단이 필요한 결선 $_lineAmbiguousCount개를 확인하세요.';
+      return '검토가 필요한 결선 $_lineAmbiguousCount개를 확인하세요.';
     }
     if (_criticalIssuesCount > 0) {
-      return '전기적 오류 $_criticalIssuesCount건을 먼저 해결하세요.';
+      return '연결 구조 오류 $_criticalIssuesCount건을 먼저 해결하세요.';
     }
-    return '결선 검수가 끝났습니다. 최종 회로도를 생성할 수 있습니다.';
+    return '결선 확인이 완료되었습니다. 최종 검증을 진행할 수 있습니다.';
   }
 
   void _focusNextReviewTask() {
@@ -4523,8 +4664,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                         );
                       } else {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text("✓ 고유한 모선 번호가 모두 승인되었습니다."),
+                          SnackBar(
+                            content: Text("✓ $approvedCount개 모선 번호가 모두 승인되었습니다."),
                             backgroundColor: Colors.green,
                           ),
                         );
@@ -4910,38 +5051,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     );
   }
 
-  // --- Excel Importer Method ---
 
-  Future<void> _loadDefaultExcelInReview() async {
-    setState(() {
-      _isLoading = true;
-      _loadingMessage = "📊 기본 ac_case25 계통 데이터를 분석 및 매칭하는 중...";
-    });
-    try {
-      final data = await _apiService.loadDefaultExcelCase();
-      if (!mounted) return;
-      setState(() {
-        _importedExcelData = data;
-        _isLoading = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            "✅ ac_case25 데이터 매칭 성공!\n• 슬랙 모선: #${_importedExcelData!['slack_bus_number']}\n• 모선: ${_importedExcelData!['total_buses']}개, 발전기: ${_importedExcelData!['total_generators']}개, 선로: ${_importedExcelData!['total_branches']}개",
-          ),
-          backgroundColor: Colors.green,
-          duration: const Duration(seconds: 4),
-        ),
-      );
-    } catch (e) {
-      if (mounted) {
-        setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("기본 엑셀 불러오기 실패: $e"), backgroundColor: Colors.red),
-        );
-      }
-    }
-  }
 
   Future<void> _importExcelInReview() async {
     try {
@@ -5012,18 +5122,77 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         child: Column(
           children: [
             CheckboxListTile(
-              value: _humanCompletenessConfirmed,
-              onChanged: (val) =>
-                  setState(() => _humanCompletenessConfirmed = val ?? false),
-              title: const Text(
-                "원본 회로도 전체와의 대조 확인 완료 (Completeness Confirmed)",
-                style: TextStyle(color: Color(0xFF0F172A), fontSize: 11, fontWeight: FontWeight.w600),
+              value: _isCleanAuto ? true : _humanCompletenessConfirmed,
+              onChanged: _isCleanAuto
+                  ? null
+                  : (val) =>
+                      setState(() => _humanCompletenessConfirmed = val ?? false),
+              title: Text(
+                _isCleanAuto
+                    ? "✓ 전체 도면 대조 완료 (검토 필요 객체 0건으로 자동 확인됨)"
+                    : "원본 회로도 전체와의 대조 확인 완료",
+                style: TextStyle(
+                  color: _isCleanAuto ? const Color(0xFF16A34A) : const Color(0xFF0F172A),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
               controlAffinity: ListTileControlAffinity.leading,
               contentPadding: EdgeInsets.zero,
               activeColor: const Color(0xFF2563EB),
             ),
-            if (_objectGateBlockers.isNotEmpty)
+            if (_objSuspiciousCount > 0)
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFEF2F2),
+                  border: Border.all(color: const Color(0xFFFECACA)),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.warning_amber_rounded, size: 16, color: Color(0xFFDC2626)),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        "검토가 필요한 객체 $_objSuspiciousCount개가 남아 있습니다.",
+                        style: const TextStyle(
+                          color: Color(0xFF991B1B),
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        setState(() {
+                          _objFilterStatus = 'SUSPICIOUS';
+                          _selectedNode = _workingNodes.firstWhere(
+                            (n) => n.reviewStatus == 'SUSPICIOUS',
+                            orElse: () => _workingNodes.first,
+                          );
+                        });
+                      },
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text(
+                        "[검토 항목 보기]",
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFFDC2626),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            if (_objectGateBlockers.isNotEmpty && _objSuspiciousCount == 0)
               Container(
                 width: double.infinity,
                 margin: const EdgeInsets.only(bottom: 8),
@@ -5034,7 +5203,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
-                  '결선 단계로 가려면:\n• ${_objectGateBlockers.join('\n• ')}',
+                  '다음 단계로 가려면:\n• ${_objectGateBlockers.join('\n• ')}',
                   style: const TextStyle(
                     color: Color(0xFFB45309),
                     fontSize: 10,
@@ -5146,11 +5315,26 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           children: [
             Expanded(
               child: ElevatedButton.icon(
-                onPressed: _verifyFinalGate,
+                onPressed: _canVerifyFinalGate
+                    ? _verifyFinalGate
+                    : () {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              _criticalIssuesCount > 0
+                                  ? "해결되지 않은 연결 구조 오류($_criticalIssuesCount건)가 남아 있습니다."
+                                  : "검토할 선로가 남아 있습니다.",
+                            ),
+                            backgroundColor: Colors.orange,
+                          ),
+                        );
+                      },
                 icon: const Icon(Icons.verified, size: 16),
                 label: const Text("결선 검수 완료 ➔ 다음: 최종 확인 & 엑셀"),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF16A34A),
+                  backgroundColor: _canVerifyFinalGate
+                      ? const Color(0xFF16A34A)
+                      : Colors.grey.shade400,
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 12),
                 ),

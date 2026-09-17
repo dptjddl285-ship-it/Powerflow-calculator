@@ -231,6 +231,15 @@ class ReviewApiService {
     return jsonDecode(utf8.decode(response.bodyBytes));
   }
 
+  Future<Uint8List> fetchSampleDiagramBytes() async {
+    final uri = Uri.parse('$baseUrl/review/sample_diagram');
+    final response = await http.get(uri);
+    if (response.statusCode == 200) {
+      return response.bodyBytes;
+    }
+    throw Exception('샘플 도면 다운로드 실패: HTTP ${response.statusCode}');
+  }
+
   Future<Map<String, dynamic>> sendAgentChat({
     required String documentId,
     required String message,
@@ -242,6 +251,7 @@ class ReviewApiService {
     List<MissingCandidateItem> missingCandidates = const [],
     List<Map<String, dynamic>> topologyIssues = const [],
     List<ChatMessageItem> history = const [],
+    Map<String, dynamic>? appContext,
   }) async {
     final uri = Uri.parse('$baseUrl/review/agent_chat');
     final response = await http.post(
@@ -258,6 +268,7 @@ class ReviewApiService {
         'missing_candidates': missingCandidates.map((c) => c.toJson()).toList(),
         'topology_issues': topologyIssues,
         'history': history.map((h) => h.toPayload()).toList(),
+        if (appContext != null) 'app_context': appContext,
       }),
     );
 
@@ -275,6 +286,7 @@ class ReviewApiService {
     List<ReviewLineItem> workingLines = const [],
     List<MissingCandidateItem> missingCandidates = const [],
     List<Map<String, dynamic>> topologyIssues = const [],
+    Map<String, dynamic>? appContext,
   }) async {
     final uri = Uri.parse('$baseUrl/review/proactive_summary');
     final response = await http.post(
@@ -287,6 +299,7 @@ class ReviewApiService {
         'working_lines': workingLines.map((l) => l.toJson()).toList(),
         'missing_candidates': missingCandidates.map((c) => c.toJson()).toList(),
         'topology_issues': topologyIssues,
+        if (appContext != null) 'app_context': appContext,
       }),
     );
 

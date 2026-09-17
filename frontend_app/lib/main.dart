@@ -10,7 +10,13 @@ import 'package:image_picker/image_picker.dart';
 
 import 'screens/review_page.dart';
 import 'models/drawing_element.dart';
+import 'models/powerlens_assistant_context.dart';
+import 'services/powerlens_ai_service.dart';
+import 'services/review_api_service.dart';
 import 'widgets/inspector_panel.dart';
+import 'widgets/home/powerlens_home_empty_state.dart';
+import 'widgets/powerlens_ai/powerlens_ai_button.dart';
+import 'widgets/powerlens_ai/powerlens_ai_panel.dart';
 
 // 절대 끊기지 않는 무한 캔버스의 크기 (10만 픽셀)
 const double CANVAS_SIZE = 100000.0;
@@ -52,6 +58,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
   bool showResultOverlay = false;
   bool isInspectorOpen = true;
   bool isSimulating = false;
+  bool _isAiPanelOpen = false;
+  final ReviewApiService _apiService = ReviewApiService();
 
   @override
   void initState() {
@@ -59,6 +67,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _resetCamera();
       _canvasFocusNode.requestFocus();
+      PowerLensAIService.instance.onStageChanged('HOME');
     });
   }
 
@@ -480,6 +489,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
               ),
             );
           } else {
+            PowerLensAIService.instance.onStageChanged('POWERFLOW_CONVERGED');
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Row(
@@ -906,12 +916,14 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     });
   }
 
-  Future<void> _openReviewPage() async {
+  Future<void> _openReviewPage({Uint8List? initialImageBytes, String? initialFilename}) async {
     bool hasApplied = false;
     final result = await Navigator.push<Map<String, dynamic>>(
       context,
       MaterialPageRoute(
         builder: (context) => ObjectReviewPage(
+          initialImageBytes: initialImageBytes,
+          initialFilename: initialFilename,
           onProceedToCanvas: (verifiedData) {
             if (!hasApplied) {
               hasApplied = true;
@@ -927,36 +939,41 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     }
   }
 
+  Future<void> _loadSampleDiagram() async {
+    try {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("IEEE-24 샘플 도면을 불러오는 중... ⚡"),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      final bytes = await _apiService.fetchSampleDiagramBytes();
+      await _openReviewPage(
+        initialImageBytes: bytes,
+        initialFilename: 'sample_diagram_ieee24.jpg',
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("샘플 도면 불러오기 실패: $e"),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _uploadImageToAI() async {
     final ImagePicker picker = ImagePicker();
     final XFile? image = await picker.pickImage(source: ImageSource.gallery);
     if (image == null) return; 
 
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("AI가 도면을 분석 중입니다... 🧠")));
-
-    var uri = Uri.parse('http://127.0.0.1:8000/analyze_image'); 
-    var request = http.MultipartRequest('POST', uri);
     Uint8List imageBytes = await image.readAsBytes();
-    request.files.add(http.MultipartFile.fromBytes('file', imageBytes, filename: image.name));
-
-    try {
-      var response = await request.send();
-      if (!mounted) return; // Async Gap 경고 해결
-      if (response.statusCode == 200) {
-        var responseData = await response.stream.bytesToString();
-        var result = jsonDecode(responseData);
-
-        if (result['status'] == 'success') {
-          _applyAiDataToCanvas(result['data']);
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("AI 분석 완료! 화면 중앙에 배치되었습니다."), backgroundColor: Colors.green));
-        }
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("AI 분석 서버 오류!"), backgroundColor: Colors.red));
-      }
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("접속 실패: $e"), backgroundColor: Colors.red));
-    }
+    await _openReviewPage(
+      initialImageBytes: imageBytes,
+      initialFilename: image.name,
+    );
   }
 
   Future<void> _importExcelCase() async {
@@ -1027,6 +1044,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
 
   Future<void> _applyExcelDataToCanvas(Map<String, dynamic> excelData) async {
     _saveState();
+    PowerLensAIService.instance.onStageChanged('EXCEL_LOADED');
 
     var buses = excelData['buses'] as Map<String, dynamic>? ?? {};
     var gens = excelData['generators'] as Map<String, dynamic>? ?? {};
@@ -1449,6 +1467,47 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                 children: [
                   _buildCanvas(),
                   _buildCanvasViewControls(),
+                  if (elements.isEmpty)
+                    PowerLensHomeEmptyState(
+                      onStartAnalysis: _openReviewPage,
+                      onPickImage: _uploadImageToAI,
+                      onLoadSample: _loadSampleDiagram,
+                    ),
+                  Positioned(
+                    right: 20,
+                    bottom: 20,
+                    child: PowerLensAIFloatingButton(
+                      onPressed: () {
+                        final isMobile = MediaQuery.of(context).size.width < 768;
+                        if (isMobile) {
+                          showModalBottomSheet(
+                            context: context,
+                            isScrollControlled: true,
+                            backgroundColor: Colors.transparent,
+                            builder: (ctx) => PowerLensAIPanel(
+                              assistantContext: _buildAssistantContext(),
+                              onClose: () => Navigator.pop(ctx),
+                              isMobile: true,
+                            ),
+                          );
+                        } else {
+                          setState(() => _isAiPanelOpen = !_isAiPanelOpen);
+                        }
+                      },
+                      isOpen: _isAiPanelOpen,
+                      isMobile: MediaQuery.of(context).size.width < 768,
+                    ),
+                  ),
+                  if (_isAiPanelOpen && MediaQuery.of(context).size.width >= 768)
+                    Positioned(
+                      right: 20,
+                      bottom: 70,
+                      child: PowerLensAIPanel(
+                        assistantContext: _buildAssistantContext(),
+                        onClose: () => setState(() => _isAiPanelOpen = false),
+                        isMobile: false,
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -1510,6 +1569,56 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     return true;
   }
 
+  PowerLensAssistantContext _buildAssistantContext() {
+    final busCount = elements.where((e) => e.type == Tool.bus).length;
+    final lineCount = excelBranchCount ?? (lastSimulationResult != null ? (lastSimulationResult!['total_branches'] as num?)?.toInt() ?? 0 : elements.where(_isActualTransmissionOrTransformerLine).length);
+    final bool hasElements = elements.isNotEmpty;
+    final bool hasResults = lastSimulationResult != null;
+    final bool converged = lastSimulationResult?['converged'] == true;
+
+    return PowerLensAssistantContext(
+      currentScreen: hasElements ? 'CAD_CANVAS' : 'HOME',
+      workflowStage: !hasElements
+          ? 'HOME'
+          : !hasResults
+              ? (excelBranchCount != null && excelBranchCount! > 0 ? 'EXCEL' : 'FINAL_CAD')
+              : 'POWERFLOW',
+      documentId: '',
+      hasDiagram: hasElements,
+      totalObjects: elements.length,
+      totalBuses: busCount,
+      totalConnections: lineCount,
+      excelLoaded: excelBranchCount != null && excelBranchCount! > 0,
+      powerflowReady: busCount > 0 && lineCount > 0,
+      powerflowRunning: isSimulating,
+      powerflowConverged: hasResults ? converged : null,
+      selectedElement: selectedElement?.label,
+      currentBlockers: !hasElements
+          ? ['단선도 도면 불러오기 또는 AI 분석']
+          : (excelBranchCount == null || excelBranchCount == 0)
+              ? ['엑셀 계통 제원(임피던스, P, Q, V) 연결']
+              : [],
+    );
+  }
+
+  Widget _workflowBadge(String label, bool isCurrent) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      decoration: BoxDecoration(
+        color: isCurrent ? const Color(0xFF2563EB) : Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: isCurrent ? Colors.white : Colors.white60,
+          fontSize: 10.5,
+          fontWeight: isCurrent ? FontWeight.bold : FontWeight.w500,
+        ),
+      ),
+    );
+  }
+
   PreferredSizeWidget _buildTopAppBar() {
     final int busCount = elements.where((e) => e.type == Tool.bus).length;
     int lineCount = excelBranchCount ?? 0;
@@ -1544,118 +1653,163 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
             ),
             const SizedBox(width: 8),
             const Text(
-              "PowerLens Pro",
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16, letterSpacing: -0.3),
+              "Power Designer Pro",
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15, letterSpacing: -0.3),
             ),
           ],
         ),
       ),
       actions: [
-        Container(
-          margin: const EdgeInsets.symmetric(vertical: 12),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.08),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.white12),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.hub_outlined, color: Colors.cyanAccent, size: 14),
-              const SizedBox(width: 6),
-              Text(
-                "모선 $busCount · 선로 $lineCount",
-                style: const TextStyle(color: Colors.white70, fontSize: 11),
-              ),
-              if (hasResults) ...[
-                const SizedBox(width: 8),
-                Container(width: 5, height: 5, decoration: const BoxDecoration(color: Colors.greenAccent, shape: BoxShape.circle)),
-                const SizedBox(width: 6),
-                const Text(
-                  "수렴됨",
-                  style: TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold),
-                ),
+        if (MediaQuery.of(context).size.width >= 1180)
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.06),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _workflowBadge("1. 도면", elements.isEmpty),
+                const Icon(Icons.chevron_right, color: Colors.white30, size: 14),
+                _workflowBadge("2. AI 검수", elements.isNotEmpty && (excelBranchCount == null || excelBranchCount == 0)),
+                const Icon(Icons.chevron_right, color: Colors.white30, size: 14),
+                _workflowBadge("3. 제원 연결", excelBranchCount != null && excelBranchCount! > 0 && !hasResults),
+                const Icon(Icons.chevron_right, color: Colors.white30, size: 14),
+                _workflowBadge("4. 조류계산", hasResults),
               ],
-            ],
+            ),
           ),
-        ),
-        const SizedBox(width: 8),
+        if (MediaQuery.of(context).size.width >= 850)
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 12),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white12),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.hub_outlined, color: Colors.cyanAccent, size: 14),
+                const SizedBox(width: 4),
+                Text(
+                  "모선 $busCount · 선로 $lineCount",
+                  style: const TextStyle(color: Colors.white70, fontSize: 11),
+                ),
+                if (hasResults) ...[
+                  const SizedBox(width: 6),
+                  Container(width: 5, height: 5, decoration: const BoxDecoration(color: Colors.greenAccent, shape: BoxShape.circle)),
+                  const SizedBox(width: 4),
+                  const Text(
+                    "수렴됨",
+                    style: TextStyle(color: Colors.greenAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        const SizedBox(width: 4),
         IconButton(
-          icon: const Icon(Icons.undo, color: Colors.white, size: 20),
+          icon: const Icon(Icons.undo, color: Colors.white, size: 18),
           tooltip: "되돌리기 (Ctrl+Z)",
           onPressed: historyStack.isNotEmpty ? _undo : null,
         ),
         IconButton(
-          icon: const Icon(Icons.redo, color: Colors.white, size: 20),
+          icon: const Icon(Icons.redo, color: Colors.white, size: 18),
           tooltip: "다시실행 (Ctrl+Y)",
           onPressed: redoStack.isNotEmpty ? _redo : null,
         ),
         IconButton(
-          icon: const Icon(Icons.fit_screen, color: Colors.cyanAccent, size: 20),
+          icon: const Icon(Icons.fit_screen, color: Colors.cyanAccent, size: 18),
           tooltip: "도면 전체 화면 맞춤 (F / Space)",
           onPressed: _zoomToFit,
         ),
-        const SizedBox(width: 6),
-        Container(height: 24, width: 1, color: Colors.white24),
-        const SizedBox(width: 6),
+        const SizedBox(width: 4),
+        Container(height: 20, width: 1, color: Colors.white24),
+        const SizedBox(width: 4),
         Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10.0, horizontal: 4.0),
+          padding: const EdgeInsets.symmetric(vertical: 10.0, horizontal: 2.0),
           child: OutlinedButton.icon(
             onPressed: _importExcelCase,
-            icon: const Icon(Icons.table_chart, color: Colors.tealAccent, size: 16),
-            label: const Text("엑셀 가져오기", style: TextStyle(color: Colors.tealAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+            icon: const Icon(Icons.table_chart, color: Colors.tealAccent, size: 15),
+            label: const Text("엑셀 가져오기", style: TextStyle(color: Colors.tealAccent, fontSize: 11, fontWeight: FontWeight.bold)),
             style: OutlinedButton.styleFrom(
               side: const BorderSide(color: Colors.tealAccent),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              padding: const EdgeInsets.symmetric(horizontal: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 6),
             ),
           ),
         ),
         Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10.0, horizontal: 4.0),
+          padding: const EdgeInsets.symmetric(vertical: 10.0, horizontal: 2.0),
           child: OutlinedButton.icon(
             onPressed: _openReviewPage,
-            icon: const Icon(Icons.auto_awesome, color: Colors.purpleAccent, size: 16),
-            label: const Text("AI 도면 검수실", style: TextStyle(color: Colors.purpleAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+            icon: const Icon(Icons.auto_awesome, color: Colors.purpleAccent, size: 15),
+            label: const Text("AI 도면 검수실", style: TextStyle(color: Colors.purpleAccent, fontSize: 11, fontWeight: FontWeight.bold)),
             style: OutlinedButton.styleFrom(
               side: const BorderSide(color: Colors.purpleAccent),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              padding: const EdgeInsets.symmetric(horizontal: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 6),
             ),
           ),
         ),
         if (hasResults)
           Padding(
-            padding: const EdgeInsets.symmetric(vertical: 10.0, horizontal: 4.0),
+            padding: const EdgeInsets.symmetric(vertical: 10.0, horizontal: 2.0),
             child: OutlinedButton.icon(
               onPressed: () => _showPowerFlowResultDialog(lastSimulationResult!),
-              icon: const Icon(Icons.assessment_outlined, color: Colors.amberAccent, size: 16),
-              label: const Text("수치 결과표", style: TextStyle(color: Colors.amberAccent, fontSize: 12, fontWeight: FontWeight.bold)),
+              icon: const Icon(Icons.assessment_outlined, color: Colors.amberAccent, size: 15),
+              label: const Text("수치 결과표", style: TextStyle(color: Colors.amberAccent, fontSize: 11, fontWeight: FontWeight.bold)),
               style: OutlinedButton.styleFrom(
                 side: const BorderSide(color: Colors.amberAccent),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                padding: const EdgeInsets.symmetric(horizontal: 10),
+                padding: const EdgeInsets.symmetric(horizontal: 6),
               ),
             ),
           ),
-        const SizedBox(width: 6),
+        const SizedBox(width: 4),
         Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 8.0),
+          padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 4.0),
           child: ElevatedButton.icon(
-            onPressed: isSimulating ? null : _sendDataToServer,
+            onPressed: isSimulating
+                ? null
+                : () {
+                    if (busCount == 0) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: const Text("먼저 단선도를 분석하고 계통 제원을 연결해주세요."),
+                          backgroundColor: const Color(0xFF0F172A),
+                          action: SnackBarAction(
+                            label: "도면 분석 시작",
+                            textColor: Colors.amberAccent,
+                            onPressed: _openReviewPage,
+                          ),
+                        ),
+                      );
+                      return;
+                    }
+                    _sendDataToServer();
+                  },
             icon: isSimulating
-                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                : const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 20),
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                  )
+                : const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 18),
             label: Text(
-              isSimulating ? "해석 중..." : "조류계산 실행",
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+              isSimulating ? "해석 중..." : "조류계산 (파이썬 전송)",
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
             ),
             style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.blueAccent.shade700,
-              elevation: 2,
+              backgroundColor: busCount > 0 ? Colors.blueAccent.shade700 : const Color(0xFF334155),
+              elevation: busCount > 0 ? 2 : 0,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              padding: const EdgeInsets.symmetric(horizontal: 14),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
             ),
           ),
         ),

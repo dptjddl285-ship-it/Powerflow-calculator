@@ -7,7 +7,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import APIRouter, File, Response, UploadFile
+from pathlib import Path
+from fastapi import APIRouter, File, HTTPException, Response, UploadFile
 
 import core.env_loader
 from core.adaptive_vision_pipeline import (
@@ -61,6 +62,16 @@ def _require_model() -> Any:
     if _model_provider is None or _model_provider() is None:
         raise RuntimeError("Vision model is not loaded")
     return _model_provider()
+
+
+@router.get("/review/sample_diagram")
+async def review_sample_diagram():
+    sample_path = Path(__file__).resolve().parent.parent / "sample_cases" / "sample_diagram_ieee24.jpg"
+    if not sample_path.exists():
+        raise HTTPException(status_code=404, detail="Sample diagram not found")
+    with open(sample_path, "rb") as f:
+        data = f.read()
+    return Response(content=data, media_type="image/jpeg")
 
 
 @router.post("/review/detect_objects")
@@ -240,14 +251,16 @@ async def review_verify_objects_gate(request: VerifyObjectsGateRequest):
             }
 
         # 3. Check human completeness confirmation
-        if not request.human_completeness_confirmed:
+        # CASE A: If all suspicious nodes are 0 and missing candidates are 0, auto-confirm completeness
+        is_clean_auto = (len(suspicious_nodes) == 0 and len(unresolved_candidates) == 0 and len(confirmed_nodes) > 0)
+        if not (request.human_completeness_confirmed or is_clean_auto):
             return {
                 "status": "success",
                 "gate_status": "BLOCKED",
                 "document_id": request.document_id,
                 "confirmed_nodes": confirmed_nodes,
                 "human_completeness_confirmed": False,
-                "message": "원본 회로도 전체와의 대조 검증(Human Completeness Confirmation) 체크가 필요합니다.",
+                "message": "검토가 필요한 항목이 남아있거나 원본 회로도 대조 확인이 필요합니다.",
             }
 
         return {
@@ -658,6 +671,7 @@ async def review_agent_chat(request: AgentChatRequest):
             missing_candidates=request.missing_candidates,
             topology_issues=request.topology_issues,
             history=history_payload,
+            app_context=request.app_context,
         )
 
         return {
@@ -685,6 +699,7 @@ async def review_proactive_summary(request: ProactiveSummaryRequest):
             working_lines=request.working_lines,
             missing_candidates=request.missing_candidates,
             topology_issues=request.topology_issues,
+            app_context=request.app_context,
         )
         return {
             "status": "success",
