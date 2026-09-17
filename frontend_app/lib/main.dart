@@ -534,6 +534,153 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     return result;
   }
 
+  List<Offset> _smoothNaturalLine({
+    required List<Offset> rawPoints,
+    DrawingElement? startEl,
+    DrawingElement? endEl,
+    double epsilon = 7.0,
+  }) {
+    if (rawPoints.length < 2) return rawPoints;
+
+    // 1. Ramer-Douglas-Peucker: eliminates pixel tremor / noise while preserving true vertices & corners!
+    List<Offset> simplified = _ramerDouglasPeucker(rawPoints, epsilon);
+    if (simplified.length < 2) simplified = [rawPoints.first, rawPoints.last];
+
+    // 2. Snap endpoints to component boundaries (if available)
+    Offset pStart = startEl != null ? _getSnapPoint(startEl, simplified.first) : simplified.first;
+    Offset pEnd = endEl != null ? _getSnapPoint(endEl, simplified.last) : simplified.last;
+
+    List<Offset> pts = [pStart, ...simplified.sublist(1, simplified.length - 1), pEnd];
+
+    // 3. Level out segments that are ALREADY nearly horizontal or vertical (within 4 degrees or 5px)
+    // IMPORTANT: Diagonal lines (angle > 5 deg) are preserved 100% naturally!
+    List<Offset> result = [pts.first];
+    for (int i = 1; i < pts.length; i++) {
+      Offset prev = result.last;
+      Offset curr = pts[i];
+      double dx = curr.dx - prev.dx;
+      double dy = curr.dy - prev.dy;
+      double angle = math.atan2(dy.abs(), dx.abs()); // 0 ~ pi/2
+
+      if (dy.abs() <= 5.0 || angle < 0.07) {
+        // Nearly horizontal -> level to flat
+        result.add(Offset(curr.dx, prev.dy));
+      } else if (dx.abs() <= 5.0 || (math.pi / 2 - angle).abs() < 0.07) {
+        // Nearly vertical -> align to straight vertical
+        result.add(Offset(prev.dx, curr.dy));
+      } else {
+        // Natural diagonal or intentional angle -> KEEP IT!
+        result.add(curr);
+      }
+    }
+
+    // 4. Remove redundant collinear points
+    if (result.length > 2) {
+      List<Offset> cleaned = [result.first];
+      for (int i = 1; i < result.length - 1; i++) {
+        Offset p0 = cleaned.last;
+        Offset p1 = result[i];
+        Offset p2 = result[i + 1];
+        double d = _distToSegment(p1, p0, p2);
+        if (d > 2.5) {
+          cleaned.add(p1);
+        }
+      }
+      cleaned.add(result.last);
+      return cleaned;
+    }
+
+    return result;
+  }
+
+  void _smoothAllLinesNaturally() {
+    _saveState();
+    setState(() {
+      for (var line in elements.where((e) => e.type == Tool.line)) {
+        DrawingElement? startEl;
+        DrawingElement? endEl;
+        try { startEl = elements.firstWhere((e) => e.id == line.startElementId); } catch (_) {}
+        try { endEl = elements.firstWhere((e) => e.id == line.endElementId); } catch (_) {}
+
+        List<Offset> sourcePts = [];
+        if (line.rawAiPath != null && line.rawAiPath!.length >= 2) {
+          sourcePts = List.from(line.rawAiPath!);
+        } else if (line.aiPath != null && line.aiPath!.length >= 2) {
+          sourcePts = List.from(line.aiPath!);
+        } else if (line.endPosition != null) {
+          sourcePts.add(line.position);
+          if (line.midPosition != null) sourcePts.add(line.midPosition!);
+          sourcePts.add(line.endPosition!);
+        }
+
+        if (sourcePts.length >= 2) {
+          final clean = _smoothNaturalLine(
+            rawPoints: sourcePts,
+            startEl: startEl,
+            endEl: endEl,
+          );
+          line.position = clean.first;
+          line.endPosition = clean.last;
+          line.midPosition = clean.length == 3 ? clean[1] : (clean.length > 3 ? clean[1] : null);
+          line.aiPath = clean.length > 2 ? clean : null;
+          if (startEl != null) line.startAnchor = line.position - startEl.position;
+          if (endEl != null) line.endAnchor = line.endPosition! - endEl.position;
+        }
+      }
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("✨ 원본 경로와 각도를 보존하며 선로를 매끄러운 직선으로 보정했습니다."),
+        backgroundColor: Color(0xFF2563EB),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _smoothSelectedLine() {
+    if (selectedElement == null || selectedElement!.type != Tool.line) return;
+    _saveState();
+    setState(() {
+      final line = selectedElement!;
+      DrawingElement? startEl;
+      DrawingElement? endEl;
+      try { startEl = elements.firstWhere((e) => e.id == line.startElementId); } catch (_) {}
+      try { endEl = elements.firstWhere((e) => e.id == line.endElementId); } catch (_) {}
+
+      List<Offset> sourcePts = [];
+      if (line.rawAiPath != null && line.rawAiPath!.length >= 2) {
+        sourcePts = List.from(line.rawAiPath!);
+      } else if (line.aiPath != null && line.aiPath!.length >= 2) {
+        sourcePts = List.from(line.aiPath!);
+      } else if (line.endPosition != null) {
+        sourcePts.add(line.position);
+        if (line.midPosition != null) sourcePts.add(line.midPosition!);
+        sourcePts.add(line.endPosition!);
+      }
+
+      if (sourcePts.length >= 2) {
+        final clean = _smoothNaturalLine(
+          rawPoints: sourcePts,
+          startEl: startEl,
+          endEl: endEl,
+        );
+        line.position = clean.first;
+        line.endPosition = clean.last;
+        line.midPosition = clean.length == 3 ? clean[1] : (clean.length > 3 ? clean[1] : null);
+        line.aiPath = clean.length > 2 ? clean : null;
+        if (startEl != null) line.startAnchor = line.position - startEl.position;
+        if (endEl != null) line.endAnchor = line.endPosition! - endEl.position;
+      }
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("✨ 선택한 선로를 자연스러운 직선으로 보정했습니다."),
+        backgroundColor: Color(0xFF2563EB),
+        duration: Duration(seconds: 1),
+      ),
+    );
+  }
+
   void _straightenAllLines() {
     _saveState();
     setState(() {
@@ -544,7 +691,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         try { endEl = elements.firstWhere((e) => e.id == line.endElementId); } catch (_) {}
 
         List<Offset> sourcePts = [];
-        if (line.aiPath != null && line.aiPath!.length >= 2) {
+        if (line.rawAiPath != null && line.rawAiPath!.length >= 2) {
+          sourcePts = List.from(line.rawAiPath!);
+        } else if (line.aiPath != null && line.aiPath!.length >= 2) {
           sourcePts = List.from(line.aiPath!);
         } else if (line.endPosition != null) {
           sourcePts.add(line.position);
@@ -569,8 +718,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     });
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text("✨ 모든 선로를 CAD 표준(직교/직선)으로 깔끔하게 정형화했습니다."),
-        backgroundColor: Color(0xFF2563EB),
+        content: Text("📐 모든 선로를 90° 직각(맨해튼)으로 정형화했습니다."),
+        backgroundColor: Color(0xFFD97706),
         duration: Duration(seconds: 2),
       ),
     );
@@ -587,7 +736,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       try { endEl = elements.firstWhere((e) => e.id == line.endElementId); } catch (_) {}
 
       List<Offset> sourcePts = [];
-      if (line.aiPath != null && line.aiPath!.length >= 2) {
+      if (line.rawAiPath != null && line.rawAiPath!.length >= 2) {
+        sourcePts = List.from(line.rawAiPath!);
+      } else if (line.aiPath != null && line.aiPath!.length >= 2) {
         sourcePts = List.from(line.aiPath!);
       } else if (line.endPosition != null) {
         sourcePts.add(line.position);
@@ -611,9 +762,55 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     });
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text("✨ 선택한 선로를 CAD 표준(직교/직선)으로 정형화했습니다."),
-        backgroundColor: Color(0xFF2563EB),
+        content: Text("📐 선택한 선로를 90° 직각으로 정형화했습니다."),
+        backgroundColor: Color(0xFFD97706),
         duration: Duration(seconds: 1),
+      ),
+    );
+  }
+
+  void _restoreSelectedRawLine() {
+    if (selectedElement == null || selectedElement!.type != Tool.line) return;
+    _saveState();
+    setState(() {
+      final line = selectedElement!;
+      if (line.rawAiPath != null && line.rawAiPath!.length >= 2) {
+        line.aiPath = List.from(line.rawAiPath!);
+        line.position = line.rawAiPath!.first;
+        line.endPosition = line.rawAiPath!.last;
+        line.midPosition = line.rawAiPath!.length > 2
+            ? line.rawAiPath![line.rawAiPath!.length ~/ 2]
+            : null;
+      }
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("↩️ 원본 손그림 경로로 복원했습니다."),
+        backgroundColor: Colors.blueGrey,
+        duration: Duration(seconds: 1),
+      ),
+    );
+  }
+
+  void _restoreAllRawLines() {
+    _saveState();
+    setState(() {
+      for (var line in elements.where((e) => e.type == Tool.line)) {
+        if (line.rawAiPath != null && line.rawAiPath!.length >= 2) {
+          line.aiPath = List.from(line.rawAiPath!);
+          line.position = line.rawAiPath!.first;
+          line.endPosition = line.rawAiPath!.last;
+          line.midPosition = line.rawAiPath!.length > 2
+              ? line.rawAiPath![line.rawAiPath!.length ~/ 2]
+              : null;
+        }
+      }
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text("↩️ 모든 선로를 원본 인식 경로로 복원했습니다."),
+        backgroundColor: Colors.blueGrey,
+        duration: Duration(seconds: 2),
       ),
     );
   }
@@ -1630,7 +1827,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
             parsedPath.add(Offset((pt[0] as num).toDouble() + shiftX, (pt[1] as num).toDouble() + shiftY));
           }
 
-          final cleanPath = _vectorizeAndOrthogonalizeLine(
+          final cleanPath = _smoothNaturalLine(
             rawPoints: parsedPath,
             startEl: startEl,
             endEl: endEl,
@@ -1647,6 +1844,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
             midPosition: midPos,
             endPosition: endPos,
             aiPath: cleanPath.length > 2 ? cleanPath : null,
+            rawAiPath: parsedPath,
             label: lineLabel.isNotEmpty ? lineLabel : lineId,
             startElementId: connectedTo.isNotEmpty ? connectedTo[0].toString() : null,
             endElementId: connectedTo.length > 1 ? connectedTo[1].toString() : null,
@@ -1791,6 +1989,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                       }
                     },
                     onStraightenLine: _straightenSelectedLine,
+                    onSmoothLine: _smoothSelectedLine,
+                    onRestoreRawLine: _restoreSelectedRawLine,
                     onClose: () => setState(() => selectedElement = null),
                     onBusRenamed: _handleBusRenamed,
                     onClearAll: _confirmClearCanvas,
@@ -1912,10 +2112,51 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           tooltip: "도면 전체 화면 맞춤 (F / Space)",
           onPressed: _zoomToFit,
         ),
-        IconButton(
-          icon: const Icon(Icons.alt_route, color: Colors.cyanAccent, size: 20),
-          tooltip: "선로 CAD 정형화 (직교/직선화)",
-          onPressed: elements.any((e) => e.type == Tool.line) ? _straightenAllLines : null,
+        PopupMenuButton<String>(
+          tooltip: "선로 형태 보정 및 정형화",
+          icon: const Icon(Icons.auto_fix_high, color: Colors.cyanAccent, size: 20),
+          enabled: elements.any((e) => e.type == Tool.line),
+          onSelected: (mode) {
+            if (mode == 'natural') {
+              _smoothAllLinesNaturally();
+            } else if (mode == 'orthogonal') {
+              _straightenAllLines();
+            } else if (mode == 'raw') {
+              _restoreAllRawLines();
+            }
+          },
+          itemBuilder: (context) => [
+            const PopupMenuItem(
+              value: 'natural',
+              child: Row(
+                children: [
+                  Icon(Icons.timeline, color: Color(0xFF2563EB), size: 18),
+                  SizedBox(width: 8),
+                  Text("자연스러운 직선화 (대각선/각도 보존, 추천)"),
+                ],
+              ),
+            ),
+            const PopupMenuItem(
+              value: 'orthogonal',
+              child: Row(
+                children: [
+                  Icon(Icons.alt_route, color: Color(0xFFD97706), size: 18),
+                  SizedBox(width: 8),
+                  Text("90° 직각 정형화 (맨해튼 직교)"),
+                ],
+              ),
+            ),
+            const PopupMenuItem(
+              value: 'raw',
+              child: Row(
+                children: [
+                  Icon(Icons.gesture, color: Colors.grey, size: 18),
+                  SizedBox(width: 8),
+                  Text("원본 손그림 복원"),
+                ],
+              ),
+            ),
+          ],
         ),
         const SizedBox(width: 6),
         Container(height: 24, width: 1, color: Colors.white24),

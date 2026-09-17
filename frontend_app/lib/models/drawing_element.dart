@@ -18,6 +18,7 @@ class DrawingElement {
   Offset infoOffset;
 
   List<Offset>? aiPath;
+  List<Offset>? rawAiPath;
 
   bool showInfo = false;
 
@@ -72,6 +73,7 @@ class DrawingElement {
     this.label = "",
     this.infoOffset = const Offset(40, -40),
     this.aiPath,
+    this.rawAiPath,
     this.circuitCount,
     this.busType,
     this.isSynchronousCondenserExplicit,
@@ -103,6 +105,7 @@ class DrawingElement {
       label: label,
       infoOffset: infoOffset,
       aiPath: aiPath != null ? List.from(aiPath!) : null,
+      rawAiPath: rawAiPath != null ? List.from(rawAiPath!) : null,
       circuitCount: circuitCount,
       busType: busType,
     )

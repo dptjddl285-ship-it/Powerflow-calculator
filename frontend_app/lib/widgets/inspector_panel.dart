@@ -24,12 +24,16 @@ class InspectorPanel extends StatefulWidget {
     required this.onDeleteSelected,
     this.onRotateSelected,
     this.onStraightenLine,
+    this.onSmoothLine,
+    this.onRestoreRawLine,
     required this.onClose,
     required this.onBusRenamed,
     required this.onClearAll,
   });
 
   final VoidCallback? onStraightenLine;
+  final VoidCallback? onSmoothLine;
+  final VoidCallback? onRestoreRawLine;
 
   @override
   State<InspectorPanel> createState() => _InspectorPanelState();
@@ -850,19 +854,69 @@ class _InspectorPanelState extends State<InspectorPanel> {
             ),
           ],
 
-          if (e.type == Tool.line && widget.onStraightenLine != null) ...[
-            SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
-                icon: const Icon(Icons.alt_route, size: 18),
-                label: const Text("선로 직교/직선 정형화", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFF2563EB),
-                  side: const BorderSide(color: Color(0xFF2563EB)),
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                ),
-                onPressed: widget.onStraightenLine,
+          if (e.type == Tool.line) ...[
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF1F5F9),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFCBD5E1)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    "선로 형태 보정",
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF475569)),
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.timeline, size: 15),
+                          label: const Text("자연스런 직선", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFF2563EB),
+                            side: const BorderSide(color: Color(0xFF2563EB)),
+                            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                          ),
+                          onPressed: widget.onSmoothLine,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.alt_route, size: 15),
+                          label: const Text("90° 직각", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFFD97706),
+                            side: const BorderSide(color: Color(0xFFD97706)),
+                            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                          ),
+                          onPressed: widget.onStraightenLine,
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (e.rawAiPath != null && e.rawAiPath!.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    SizedBox(
+                      width: double.infinity,
+                      child: TextButton.icon(
+                        icon: const Icon(Icons.undo, size: 14, color: Colors.blueGrey),
+                        label: const Text("원본 손그림 복원", style: TextStyle(fontSize: 11, color: Colors.blueGrey)),
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        onPressed: widget.onRestoreRawLine,
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
             const SizedBox(height: 8),
