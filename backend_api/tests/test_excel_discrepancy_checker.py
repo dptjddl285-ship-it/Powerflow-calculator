@@ -69,5 +69,41 @@ class TestExcelDiscrepancyChecker(unittest.TestCase):
         self.assertGreater(len(diagnosis.get("suggested_actions", [])), 0)
 
 
+    def test_synchronous_condenser_load_equivalence(self):
+        """Bus 14 having a load symbol in the diagram satisfies the synchronous condenser requirement."""
+        elements = []
+        for k in self.excel_data["buses"].keys():
+            elements.append({"id": f"bus_{k}", "type": "bus", "bus_number": int(k), "label": f"{k}"})
+        # For bus 14, provide a load instead of an explicit generator
+        elements.append({"id": "load_14", "type": "load", "parentBusId": "bus_14", "bus_number": 14})
+
+        # Generator for all other buses
+        for k in self.excel_data["generators"].keys():
+            if int(k) != 14:
+                elements.append({"id": f"gen_{k}", "type": "generator", "parentBusId": f"bus_{k}", "bus_number": int(k)})
+
+        report = self.importer.compare_elements_with_excel(elements, self.excel_data)
+        # Bus 14 should NOT be in missing_generators!
+        self.assertNotIn(14, report["details"]["missing_generators"])
+
+    def test_transformer_multibus_connections(self):
+        """Transformers connecting 9, 10, 11, 12 should resolve 9-12 and 10-11."""
+        elements = [
+            {"id": "bus_9", "type": "bus", "bus_number": 9, "label": "9"},
+            {"id": "bus_10", "type": "bus", "bus_number": 10, "label": "10"},
+            {"id": "bus_11", "type": "bus", "bus_number": 11, "label": "11"},
+            {"id": "bus_12", "type": "bus", "bus_number": 12, "label": "12"},
+            {"id": "trans_1", "type": "transformer"},
+            {"id": "l1", "type": "line", "connected_to": ["trans_1", "bus_9"]},
+            {"id": "l2", "type": "line", "connected_to": ["trans_1", "bus_10"]},
+            {"id": "l3", "type": "line", "connected_to": ["trans_1", "bus_11"]},
+            {"id": "l4", "type": "line", "connected_to": ["trans_1", "bus_12"]},
+        ]
+        report = self.importer.compare_elements_with_excel(elements, self.excel_data)
+        missing = report["details"]["missing_branches"]
+        self.assertNotIn([9, 12], missing)
+        self.assertNotIn([10, 11], missing)
+
+
 if __name__ == "__main__":
     unittest.main()

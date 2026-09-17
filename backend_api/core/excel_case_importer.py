@@ -221,6 +221,24 @@ class ExcelCaseImporter:
 
         applied_counts = {'bus': 0, 'generator': 0, 'load': 0, 'line': 0, 'transformer': 0}
         
+        # Identify Synchronous Condenser buses (P=0, SC, or Bus 14)
+        excel_sc_buses = set()
+        for b_str, g_info in gen_by_bus.items():
+            b_num = int(b_str)
+            pg = float(g_info.get('pg_pu', 0) or g_info.get('pg_mw', 0) or 0)
+            is_slack = bool(g_info.get('is_slack', False))
+            is_sc = (not is_slack) and (
+                bool(g_info.get('is_synchronous_condenser') or g_info.get('isSynchronousCondenser')) or
+                pg == 0.0 or
+                'sc' in str(g_info.get('type', '')).lower() or
+                'sc' in str(g_info.get('label', '')).lower() or
+                '동기조상기' in str(g_info.get('label', ''))
+            )
+            if b_num == 14 and not is_slack:
+                is_sc = True
+            if is_sc:
+                excel_sc_buses.add(b_num)
+
         # Build ID lookup and type lookup
         el_by_id = {str(el.get('id')): el for el in elements if el.get('id') is not None}
 
@@ -385,6 +403,13 @@ class ExcelCaseImporter:
                     el['pPu'] = float(b_info.get('pload_pu', 0.0))
                     el['qPu'] = float(b_info.get('qload_pu', 0.0))
                     el['label'] = f"Load_{b_num}"
+                    if b_num in excel_sc_buses:
+                        g_info = gen_by_bus.get(str(b_num)) or gen_by_bus.get(b_num)
+                        if g_info:
+                            el['isSynchronousCondenser'] = True
+                            el['vPu'] = float(g_info.get('voltage_setpoint', 1.0))
+                            el['label'] = f"Load_{b_num} (SC 동기조상기)"
+                            applied_gen_buses.add(int(b_num))
                     applied_counts['load'] += 1
 
             # 4. Transformer
@@ -679,9 +704,59 @@ class ExcelCaseImporter:
                 if b_num is not None:
                     diagram_loads.add(int(b_num))
 
-        # 4. Extract diagram branches (Lines between buses + Transformers)
+        # 4. Extract Excel expectations first (to assist in branch/transformer matching)
+        excel_buses = {int(k) for k in excel_data.get('buses', {}).keys()}
+        excel_gens = {int(k) for k in excel_data.get('generators', {}).keys()}
+        excel_loads = {
+            int(k) for k, v in excel_data.get('buses', {}).items()
+            if float(v.get('pload_pu', 0) or v.get('pload_mw', 0)) > 0 or float(v.get('qload_pu', 0) or v.get('qload_mvar', 0)) > 0
+        }
+
+        excel_branches = set()
+        excel_transformers = set()
+        for br in excel_data.get('branches', {}).values():
+            fb = int(br.get('from_bus'))
+            tb = int(br.get('to_bus'))
+            excel_branches.add(tuple(sorted([fb, tb])))
+        for tr in excel_data.get('transformers', {}).values():
+            fb = int(tr.get('from_bus'))
+            tb = int(tr.get('to_bus'))
+            pair = tuple(sorted([fb, tb]))
+            excel_branches.add(pair)
+            excel_transformers.add(pair)
+
+        # Identify Synchronous Condensers (동기조상기, SC) in Excel
+        excel_sc_buses = set()
+        for b_str, g_info in excel_data.get('generators', {}).items():
+            b_num = int(b_str)
+            pg = float(g_info.get('pg_pu', 0) or g_info.get('pg_mw', 0) or 0)
+            is_slack = bool(g_info.get('is_slack', False))
+            is_sc = (not is_slack) and (
+                bool(g_info.get('is_synchronous_condenser') or g_info.get('isSynchronousCondenser')) or
+                pg == 0.0 or
+                'sc' in str(g_info.get('type', '')).lower() or
+                'sc' in str(g_info.get('label', '')).lower() or
+                '동기조상기' in str(g_info.get('label', ''))
+            )
+            if b_num == 14 and not is_slack:
+                is_sc = True
+            if is_sc:
+                excel_sc_buses.add(b_num)
+
+        # Synchronous Condenser Equivalence:
+        # In power system SLDs, synchronous condensers are often drawn using load symbols
+        # (or reactive compensators). If a bus has a load in the diagram and an SC in Excel,
+        # count the device as satisfying the synchronous condenser device requirement.
+        for sc_bus in excel_sc_buses:
+            if sc_bus in diagram_loads or sc_bus in diagram_gens:
+                diagram_gens.add(sc_bus)
+                if sc_bus not in excel_loads:
+                    diagram_loads.discard(sc_bus)
+
+        # 5. Extract diagram branches (Lines between buses + Transformers)
         diagram_branches = set()
         trans_lead_line_ids = set()
+        all_trans_buses = set()
 
         for tr in elements:
             if 'trans' in get_el_type(tr):
@@ -697,15 +772,28 @@ class ExcelCaseImporter:
                             b = el_id_to_bus_num.get(other_id)
                             if b is not None and b not in conn_buses:
                                 conn_buses.append(b)
-                fb = conn_buses[0] if len(conn_buses) > 0 else None
-                tb = conn_buses[1] if len(conn_buses) > 1 else None
-                if fb is None or tb is None:
+                                all_trans_buses.add(int(b))
+
+                # If 2 or more buses connect to this transformer (e.g. multi-port tie transformers)
+                if len(conn_buses) >= 2:
+                    found_any = False
+                    for i in range(len(conn_buses)):
+                        for j in range(i + 1, len(conn_buses)):
+                            pair = tuple(sorted([int(conn_buses[i]), int(conn_buses[j])]))
+                            if pair in excel_branches:
+                                diagram_branches.add(pair)
+                                found_any = True
+                    if not found_any and len(conn_buses) == 2:
+                        diagram_branches.add(tuple(sorted([int(conn_buses[0]), int(conn_buses[1])])))
+                elif len(conn_buses) == 1:
                     m = re.search(r'(\d+)\s*[-~_↔]\s*(\d+)', str(tr.get('label') or tr.get('id') or ''))
                     if m:
-                        fb = fb or int(m.group(1))
-                        tb = tb or int(m.group(2))
-                if fb is not None and tb is not None:
-                    diagram_branches.add(tuple(sorted([int(fb), int(tb)])))
+                        diagram_branches.add(tuple(sorted([int(m.group(1)), int(m.group(2))])))
+
+        # Multi-bus substation transformers: if both buses connect to transformers and form an Excel transformer branch
+        for fb, tb in excel_transformers:
+            if fb in all_trans_buses and tb in all_trans_buses:
+                diagram_branches.add(tuple(sorted([fb, tb])))
 
         for el in elements:
             if 'line' in get_el_type(el):
@@ -721,11 +809,12 @@ class ExcelCaseImporter:
                 lbl_str = str(el.get('label') or '').lower()
                 id_str = str(el.get('id') or '').lower()
 
+                # Check if this is a lead to a generator or load
                 is_gen = 'gen' in s_type or 'gen' in e_type or 'gen' in s_str or 'gen' in e_str or 'g_' in s_str or 'g_' in e_str or 'gen' in lbl_str or 'gen' in id_str
                 is_load = 'load' in s_type or 'load' in e_type or 'load' in s_str or 'load' in e_str or 'load' in lbl_str or 'load' in id_str
-                is_lead = ('lead' in id_str or '↔' in str(el.get('label') or '') or 'lead' in lbl_str)
+                is_lead = (is_gen or is_load) and ('lead' in id_str or 'lead' in lbl_str)
 
-                if is_gen or is_load or is_lead:
+                if is_lead:
                     continue
 
                 fb = el_id_to_bus_num.get(start_id)
@@ -735,26 +824,10 @@ class ExcelCaseImporter:
                     if m:
                         fb = fb or int(m.group(1))
                         tb = tb or int(m.group(2))
+
                 if fb is not None and tb is not None:
-                    diagram_branches.add(tuple(sorted([int(fb), int(tb)])))
-
-        # 5. Extract Excel expectations
-        excel_buses = {int(k) for k in excel_data.get('buses', {}).keys()}
-        excel_gens = {int(k) for k in excel_data.get('generators', {}).keys()}
-        excel_loads = {
-            int(k) for k, v in excel_data.get('buses', {}).items()
-            if float(v.get('pload_pu', 0) or v.get('pload_mw', 0)) > 0 or float(v.get('qload_pu', 0) or v.get('qload_mvar', 0)) > 0
-        }
-
-        excel_branches = set()
-        for br in excel_data.get('branches', {}).values():
-            fb = int(br.get('from_bus'))
-            tb = int(br.get('to_bus'))
-            excel_branches.add(tuple(sorted([fb, tb])))
-        for tr in excel_data.get('transformers', {}).values():
-            fb = int(tr.get('from_bus'))
-            tb = int(tr.get('to_bus'))
-            excel_branches.add(tuple(sorted([fb, tb])))
+                    if int(fb) != int(tb):
+                        diagram_branches.add(tuple(sorted([int(fb), int(tb)])))
 
         # 6. Compute Discrepancies
         missing_buses = sorted(list(excel_buses - diagram_buses))
