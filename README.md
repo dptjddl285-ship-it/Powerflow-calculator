@@ -22,8 +22,8 @@
 
 **PowerLens Pro**는 이러한 문제를 해결하기 위해 개발된 **지능형 전력 엔지니어링 웹 CAD & 수치해석 솔루션**입니다.
 1. **Computer Vision 파이프라인**: 래스터 도면 이미지에서 모선(Bus), 발전기(Gen), 부하(Load), 변압기(Tr), 선로(Line)를 자동 탐지하고 위상 토폴로지를 추출합니다.
-2. **PC 마우스 최적화 순수 Web CAD Canvas**: Figma/AutoCAD 수준의 직접 드래그앤드롭, 방향키 초정밀 미세 정렬(1px/10px Nudge), 90도 회전(R 키) 및 글자 가독성 100% 역회전 보정 기능을 지원합니다.
-3. **자체 구현 Full AC Newton-Raphson 수치해석 엔진**: PSS/E 기준 3모선 및 IEEE 24-bus RTS 표준 계통에서 허용 오차 $10^{-4}$ 이하, 4회 반복 내 무오차 수렴과 완벽한 물리적 전력 균형($\sum P_{\\text{gen}} = \sum P_{\\text{load}} + \sum P_{\\text{loss}}$)을 보장합니다.
+2. **웹 기반 직접 편집 CAD 캔버스**: 직관적인 마우스 직접 드래그앤드롭, 방향키 미세 정렬(1px/10px Nudge), 90도 회전(R 키) 및 회전 시 라벨 방향 자동 보정(Counter-Rotation) 기능을 지원합니다.
+3. **자체 구현 Full AC Newton-Raphson 수치해석 엔진**: PSS/E 기준 3모선 및 IEEE 24-bus RTS 표준 계통에서 허용 오차 $10^{-4}$ 이하, 4회 반복 내 수렴 및 수렴 후 전력수지 검증($\sum P_{\text{gen}} = \sum P_{\text{load}} + \sum P_{\text{loss}}$)을 통과했습니다.
 
 ---
 
@@ -36,23 +36,23 @@
 - **전기적 토폴로지 검증**: 모선의 다중 연결, 부하·발전기의 단일 인입선, 변압기의 방향별 독립 포트를 반영하여 검출 결과를 편집 가능한 `nodes`/`lines` 그래프로 변환.
 
 ### 2. ⚡ 자체 개발 Full AC Newton-Raphson 전력 조류계산 솔버
-- **정밀 복소 어드미턴스 행렬($Y_{\\text{bus}}$) 구축**: 송전선로 $\\pi$-등가회로의 병렬 서셉턴스(B/2), 변압기 탭비(Tap Ratio) 오프노미널 모델링 완전 지원.
+- **정밀 복소 어드미턴스 행렬($Y_{\\text{bus}}$) 구축**: 송전선로 $\\pi$-등가회로의 병렬 서셉턴스(B/2), 변압기 탭비(Tap Ratio) 오프노미널 모델링 지원.
 - **야코비안(Jacobian) 행렬 방정식 계산**: $\\begin{bmatrix} \\Delta P \\\\ \\Delta Q \\end{bmatrix} = \\begin{bmatrix} J_{11} & J_{12} \\\\ J_{21} & J_{22} \\end{bmatrix} \\begin{bmatrix} \\Delta \\theta \\\\ \\Delta |V| \\end{bmatrix}$ 반복 수렴 알고리즘을 NumPy 벡터화 연산으로 최적화.
-- **산업 표준 검증**: IEEE 24-bus RTS 계통에서 **4회 반복(Iteration)** 만에 최대 잔차 $4 \\times 10^{-8}$ 수준으로 초정밀 수렴.
+- **산업 표준 검증**: IEEE 24-bus RTS 계통에서 **4회 반복(Iteration)** 만에 최대 잔차 $4 \\times 10^{-8}$ 수준으로 안정적 수렴 확인.
 
-### 3. 🎨 순수 PC 마우스 CAD 인터랙션 체계 구축 (Flutter Web)
-- **Direct Drag & Tight Hitbox**: 14px의 미세한 조작 핸들을 조준해야 했던 구형 방식을 탈피하여, 심볼 몸체를 마우스로 직접 잡아 실시간 드래그앤드롭. 주변 인접 클릭을 방해하던 200px 투명 마진을 전면 제거하고 기하학적 정밀 바운딩 박스 구현.
+### 3. 🎨 웹 기반 인터랙티브 CAD 편집 체계 (Flutter Web)
+- **Direct Drag & Tight Hitbox**: 심볼 몸체를 마우스로 직접 선택하여 이동하는 직관적인 드래그앤드롭 및 기하학적 바운딩 박스 기반의 조작 영역 최적화.
 - **키보드 단축키 정렬 체계**:
-  - `↑ / ↓ / ← / →`: 1px 초정밀 단위 심볼 정렬 (텍스트 필드 포커스 시 커서 이동 자동 분기)
+  - `↑ / ↓ / ← / →`: 1px 단위 심볼 미세 정렬 (텍스트 필드 포커스 시 커서 이동 자동 분기)
   - `Shift + 방향키`: 10px 쾌속 이동
   - `R 키`: 즉각 90도 회전
   - `Ctrl + Z / Ctrl + Y`: 상태 복원 및 재실행
   - `Space / F`: 도면 전체 화면 맞춤 (Zoom to Fit)
-- **심볼 회전 시 글자 역회전(Counter-Rotation) 보정**: 부하 화살표나 변압기가 90°/180°/270°로 회전하더라도 라벨 텍스트와 발전기 기호(`G`, `S`, `SC`)는 화면 기준 완벽한 수평(정방향, Left-to-Right)으로 가독성을 100% 유지.
+- **심볼 회전 시 글자 역회전(Counter-Rotation) 보정**: 부하 화살표나 변압기가 90°/180°/270°로 회전하더라도 라벨 텍스트와 발전기 기호(`G`, `S`, `SC`)는 화면 기준 수평(정방향, Left-to-Right)을 유지하도록 회전 시 라벨 방향 자동 보정.
 - **선로 개수 정밀 동기화**: 발전기/부하 인입선(Feeder Leads)을 스마트하게 제외하고, 실제 송전선로 및 변압기 선로(34개 브랜치)만 상단 배지와 인스펙터에 일원화 표시.
 
 ### 4. 🔗 Dual Mapping 해소 및 클린 아키텍처 리팩토링
-- 프론트엔드와 백엔드에 분산되어 있던 중복 엑셀 파서(770줄)를 백엔드(`ExcelCaseImporter`)로 완전 일원화하여 수치 불일치 원천 차단.
+- 프론트엔드와 백엔드에 분산되어 있던 중복 엑셀 파서(770줄)를 백엔드(`ExcelCaseImporter`)로 일원화하여 데이터 파이프라인의 정합성 확보.
 - 단일 거대 파일(4,750줄)이었던 `main.dart`에서 `InspectorPanel`(1,350줄)과 도면 모델(`DrawingElement`)을 독립 모듈로 추출하여 유지보수성 극대화.
 
 ---
@@ -101,9 +101,9 @@ flowchart TB
 | **유효 브랜치 수 (Branches)** | 34개 | 송전선로 29개 + 탭 변압기 5개 (인입선 제외) |
 | **발전기 수 (Generators)** | 11기 | 동기조상기(SC) 포함 |
 | **수렴 반복 횟수 (Iterations)** | **4회** | 허용 오차: $10^{-4}$ (최대 잔차: $4 \times 10^{-8}$) |
-| **총 발전량 (Total Generation)** | **1,694.655 MW** / -44.542 MVAR | 유효/무효 전력 완전 수렴 |
-| **총 부하량 (Total Load)** | **1,672.000 MW** / 336.000 MVAR | 계통 수요 100% 충족 |
-| **총 전력 손실 (Total Loss)** | **22.655 MW** / -380.542 MVAR | $\sum P_{\\text{gen}} - \sum P_{\\text{load}} = P_{\\text{loss}}$ 무오차 성립 |
+| **총 발전량 (Total Generation)** | **1,694.655 MW** / -44.542 MVAR | 유효/무효 전력 수렴 기준 만족 |
+| **총 부하량 (Total Load)** | **1,672.000 MW** / 336.000 MVAR | 계통 부하 조건 충족 |
+| **총 전력 손실 (Total Loss)** | **22.655 MW** / -380.542 MVAR | $\sum P_{\text{gen}} - \sum P_{\text{load}} = P_{\text{loss}}$ 전력수지 검증 통과 |
 
 ---
 
@@ -167,7 +167,7 @@ flutter run -d chrome --web-port 58640
 ```
 - 웹 브라우저에서 [http://localhost:58640](http://localhost:58640) 접속
 
-### 4. 단위 테스트 실행
+### 5. 단위 테스트 실행
 ```bash
 # 조류계산기 및 수치 정합성 테스트
 python backend_api/tests/test_power_flow_solver.py
