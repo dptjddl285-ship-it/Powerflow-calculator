@@ -1,4 +1,8 @@
-# 파일명: main_server.py
+# PowerLens Pro - Backend API & Solver Server
+# Version: v2.4.0 (Synchronized Release)
+# Description: FastAPI backend providing AC Newton-Raphson power flow calculations,
+#              AI diagram recognition, and Excel parameter synchronization.
+
 from fastapi import FastAPI, Request, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from ultralytics import YOLO

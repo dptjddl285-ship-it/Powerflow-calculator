@@ -138,17 +138,25 @@ PowerLens/
 - Flutter 3.19+ (Web 지원)
 - Google Chrome 또는 최신 웹 브라우저
 
-### 2. 백엔드 서버 실행
+### 2. 원클릭 동시 실행 (가장 쉬운 방법 ⚡)
 ```bash
-# 가상환경 활성화 및 의존성 설치
+# 1) 파이썬 의존성 설치 (최초 1회)
 pip install -r backend_api/requirements.txt
 
-# FastAPI 백엔드 서버 실행 (포트 8000)
+# 2) 원클릭 실행 (백엔드+프론트 동시 구동 & 브라우저 자동 오픈)
+run_powerlens.bat
+# 또는
+python run_powerlens.py
+```
+
+### 3. 개별 서버 수동 실행
+```bash
+# [서버 1] FastAPI 백엔드 서버 실행 (포트 8000)
 python main_server.py
 ```
 - API 문서(Swagger UI): [http://localhost:8000/docs](http://localhost:8000/docs)
 
-### 3. 프론트엔드 웹 앱 실행
+### 4. 프론트엔드 웹 앱 실행
 ```bash
 # 방법 A: 프로덕션 빌드 서빙 (권장)
 python -m http.server 58640 --directory frontend_app/build/web
