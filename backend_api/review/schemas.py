@@ -94,9 +94,9 @@ try:
         human_completeness_confirmed: bool = False
 
     class AgentChatRequest(BaseModel):
-        document_id: str
+        document_id: str = ""
         message: str
-        stage: str = "OBJECT_REVIEW" # "OBJECT_REVIEW", "CONNECTION_REVIEW", "FINAL"
+        stage: str = "OBJECT_REVIEW" # "HOME", "OBJECT_REVIEW", "BUS_MAPPING", "CONNECTION_REVIEW", "FINAL", "CAD"
         selected_node: Optional[Dict[str, Any]] = None
         selected_line: Optional[Dict[str, Any]] = None
         working_nodes: List[Dict[str, Any]] = Field(default_factory=list)
@@ -104,14 +104,16 @@ try:
         missing_candidates: List[Dict[str, Any]] = Field(default_factory=list)
         topology_issues: List[Dict[str, Any]] = Field(default_factory=list)
         history: List[Dict[str, str]] = Field(default_factory=list)
+        app_context: Optional[Dict[str, Any]] = None
 
     class ProactiveSummaryRequest(BaseModel):
-        document_id: str
+        document_id: str = ""
         stage: str = "OBJECT_REVIEW"
         working_nodes: List[Dict[str, Any]] = Field(default_factory=list)
         working_lines: List[Dict[str, Any]] = Field(default_factory=list)
         missing_candidates: List[Dict[str, Any]] = Field(default_factory=list)
         topology_issues: List[Dict[str, Any]] = Field(default_factory=list)
+        app_context: Optional[Dict[str, Any]] = None
 
     class VerifiedNode(BaseModel):
         model_config = ConfigDict(populate_by_name=True)
@@ -238,8 +240,8 @@ except ImportError:
 
     @dataclass
     class AgentChatRequest:
-        document_id: str
-        message: str
+        document_id: str = ""
+        message: str = ""
         stage: str = "OBJECT_REVIEW"
         selected_node: Optional[Dict[str, Any]] = None
         selected_line: Optional[Dict[str, Any]] = None
@@ -248,6 +250,7 @@ except ImportError:
         missing_candidates: List[Dict[str, Any]] = field(default_factory=list)
         topology_issues: List[Dict[str, Any]] = field(default_factory=list)
         history: List[Dict[str, str]] = field(default_factory=list)
+        app_context: Optional[Dict[str, Any]] = None
 
     @dataclass
     class VerifiedSLD:

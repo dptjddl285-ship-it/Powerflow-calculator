@@ -7,7 +7,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from fastapi import APIRouter, File, Response, UploadFile
+from pathlib import Path
+from fastapi import APIRouter, File, HTTPException, Response, UploadFile
 
 import core.env_loader
 from core.adaptive_vision_pipeline import (
@@ -61,6 +62,16 @@ def _require_model() -> Any:
     if _model_provider is None or _model_provider() is None:
         raise RuntimeError("Vision model is not loaded")
     return _model_provider()
+
+
+@router.get("/review/sample_diagram")
+async def review_sample_diagram():
+    sample_path = Path(__file__).resolve().parent.parent / "sample_cases" / "sample_diagram_ieee24.jpg"
+    if not sample_path.exists():
+        raise HTTPException(status_code=404, detail="Sample diagram not found")
+    with open(sample_path, "rb") as f:
+        data = f.read()
+    return Response(content=data, media_type="image/jpeg")
 
 
 @router.post("/review/detect_objects")
@@ -240,14 +251,16 @@ async def review_verify_objects_gate(request: VerifyObjectsGateRequest):
             }
 
         # 3. Check human completeness confirmation
-        if not request.human_completeness_confirmed:
+        # CASE A: If all suspicious nodes are 0 and missing candidates are 0, auto-confirm completeness
+        is_clean_auto = (len(suspicious_nodes) == 0 and len(unresolved_candidates) == 0 and len(confirmed_nodes) > 0)
+        if not (request.human_completeness_confirmed or is_clean_auto):
             return {
                 "status": "success",
                 "gate_status": "BLOCKED",
                 "document_id": request.document_id,
                 "confirmed_nodes": confirmed_nodes,
                 "human_completeness_confirmed": False,
-                "message": "원본 회로도 전체와의 대조 검증(Human Completeness Confirmation) 체크가 필요합니다.",
+                "message": "검토가 필요한 항목이 남아있거나 원본 회로도 대조 확인이 필요합니다.",
             }
 
         return {
@@ -639,7 +652,12 @@ async def review_verify_final_gate(request: VerifyFinalGateRequest):
 # ==========================================
 @router.post("/review/agent_chat")
 async def review_agent_chat(request: AgentChatRequest):
-    print(f"\n💬 [Agent Chat 요청] Document: {request.document_id}, Query: '{request.message}'")
+    # Keep request logs useful without copying arbitrary user text (which may
+    # contain credentials) into the backend log.
+    print(
+        f"\n💬 [Agent Chat 요청] Document: {request.document_id}, "
+        f"Stage: {request.stage}, MessageLength: {len(request.message or '')}"
+    )
     try:
         from agent.chat_reviewer import ChatMessagePayload
         history_payload = [
@@ -658,6 +676,7 @@ async def review_agent_chat(request: AgentChatRequest):
             missing_candidates=request.missing_candidates,
             topology_issues=request.topology_issues,
             history=history_payload,
+            app_context=request.app_context,
         )
 
         return {
@@ -665,6 +684,9 @@ async def review_agent_chat(request: AgentChatRequest):
             "document_id": request.document_id,
             "reply_ko": result.get("reply_ko", ""),
             "agent_status": result.get("agent_status", "DETERMINISTIC"),
+            "provider_mode": result.get("provider_mode", "local"),
+            "display_mode": result.get("display_mode", ""),
+            "suggested_actions": result.get("suggested_actions", []),
             "context_summary": result.get("context_summary", {}),
         }
     except Exception as e:
@@ -685,6 +707,7 @@ async def review_proactive_summary(request: ProactiveSummaryRequest):
             working_lines=request.working_lines,
             missing_candidates=request.missing_candidates,
             topology_issues=request.topology_issues,
+            app_context=request.app_context,
         )
         return {
             "status": "success",
@@ -693,5 +716,24 @@ async def review_proactive_summary(request: ProactiveSummaryRequest):
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+@router.get("/review/provider_status")
+async def review_provider_status():
+    """Expose the selected assistant mode without exposing credentials.
+
+    The Flutter companion uses this read-only signal before the first chat so
+    its header does not briefly claim Local mode while the configured Gemini
+    provider is already active.
+    """
+    try:
+        provider = get_assistant_provider()
+        return {
+            "status": "ok",
+            "provider_mode": provider.provider_name,
+            "display_mode": provider.display_mode_name,
+        }
+    except Exception as exc:
+        return {"status": "error", "provider_mode": "local", "message": str(exc)}
 
 
