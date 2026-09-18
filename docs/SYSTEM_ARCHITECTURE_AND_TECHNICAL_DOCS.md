@@ -45,7 +45,7 @@ graph TB
 
     subgraph AI_Agent["지능형 진단 & 에이전트 계층"]
         Agent_Diag["엑셀 불일치 AI 진단 에이전트 (excel_discrepancy_agent.py)"]
-        Agent_Chat["도면 검수 대화형 어시스턴트 (chat_reviewer.py)"]
+        Agent_Chat["도면 검수 AI 어시스턴트 (chat_reviewer.py)"]
         Agent_Evidence["시각적 근거 생성기 (object_reviewer.py)"]
         LLM["Google Gemini API (gemini-3.5-flash-lite / Fallback)"]
     end
@@ -227,7 +227,7 @@ sequenceDiagram
 | `POST` | `/review/detect_connections` | 단선도 선로 골격화 및 결선 추적 | `document_id`, `confirmed_nodes` | `lines`, `annotated_nodes` |
 | `POST` | `/review/verify_objects_gate` | 1단계 객체 검수 게이트 검증 | `document_id`, `working_nodes`, `human_completeness_confirmed` | `gate_status` (`VERIFIED`/`BLOCKED`), `blockers` |
 | `POST` | `/review/verify_final_gate` | 최종 위상 검증 및 VerifiedSLD 확정 | `document_id`, `working_nodes`, `working_lines` | `gate_status`, `verified_sld`, `topology_issues` |
-| `POST` | `/review/agent_chat` | 도면 컨텍스트 기반 AI 챗봇 질의 | `document_id`, `message`, `working_nodes`, `working_lines` | `reply`, `suggested_actions` |
+| `POST` | `/review/agent_chat` | 도면 컨텍스트 기반 AI 검토 도우미 질의 | `document_id`, `message`, `working_nodes`, `working_lines` | `reply_ko`, `agent_status`, `context_summary` |
 | `POST` | `/upload_excel` | 계통 엑셀 파일 업로드 및 파싱 | `file: UploadFile` (.xlsx 파일) | `parsed_case` (buses, branches, gens, transformers) |
 | `GET` | `/load_default_excel` | 기본 표준 엑셀 케이스 불러오기 | 없음 | 기본 `case24_psse` 또는 `ac_case25` 데이터 |
 | `POST` | `/apply_excel_to_elements` | 엑셀 데이터를 도면 요소에 주입 및 불일치 검증 | `elements: List`, `excel_data: Dict` | `elements` (주입완료), `mismatch_report` |

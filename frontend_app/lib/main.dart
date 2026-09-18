@@ -561,15 +561,15 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(Icons.manage_search, color: Colors.purple, size: 20),
+                    Icon(Icons.history_edu, color: Colors.purple, size: 20),
                     SizedBox(width: 10),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text("Agent Activity (의사결정 감사 로그)", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF0F172A))),
+                          Text("활동기록 (Agent Activity - 추론 과정 및 감사 로그)", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF0F172A))),
                           SizedBox(height: 2),
-                          Text("AI가 왜 특정 부품을 의심(Suspicious)으로 판정했는지 단계별 추론 과정과 검수 이력을 실시간으로 투명하게 확인합니다.", style: TextStyle(fontSize: 12, color: Colors.black87)),
+                          Text("AI가 왜 특정 설비를 의심(Suspicious)으로 판정했는지, 어떤 규칙과 근거로 문제를 탐지했는지 단계별 사고 과정(Reasoning Steps)과 도구 실행 이력을 실시간으로 투명하게 확인합니다.", style: TextStyle(fontSize: 12, color: Colors.black87)),
                         ],
                       ),
                     ),
@@ -585,9 +585,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text("Agent Chat (실시간 대화형 검수 협업)", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF0F172A))),
+                          Text("AI도우미 (Review Assistant - 상황 맞춤 진단 및 검수 가이드)", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF0F172A))),
                           SizedBox(height: 2),
-                          Text("검수 AI 에이전트에게 '3번 모선에 연결된 부하 확인해줘', '선로 누락 보정해줘'와 같이 자연어로 질의하고 수정할 수 있습니다.", style: TextStyle(fontSize: 12, color: Colors.black87)),
+                          Text("도면의 객체나 선로를 선택한 후 원클릭 추천 칩(우선순위 요약, 다음 단계 가이드, 의심 판정 근거, 클래스 변경 시 계통 영향 분석)을 눌러 실시간 진단 조언을 확인할 수 있습니다. (자연어로 도면을 자동 수정하는 봇이 아니며, 실제 객체 승인·수정·제외는 검수 패널의 전용 조작 버튼으로 안전하게 진행합니다.)", style: TextStyle(fontSize: 12, color: Colors.black87)),
                         ],
                       ),
                     ),
