@@ -57,7 +57,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   static const int _linePageSize = 10;
   int _linePage = 0;
 
-  // Bus Number Mapping Review (Phase 3)
+  // Bus Number Mapping Review (Phase 2)
   String _busFilterStatus = 'ALL'; // ALL, UNCERTAIN, VERIFIED
   int _busPage = 0;
   static const int _busPageSize = 7;
@@ -778,7 +778,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     }
   }
 
-  // --- Step 4: Connection Detection ---
+  // --- Phase 3: Connection Detection & Review ---
 
   Future<void> _proceedToConnectionReview() async {
     if (!_isObjectVerified || _document == null) {
@@ -1173,9 +1173,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     try {
       final stageStr = _currentPhase == ReviewPhase.objectReview
           ? "OBJECT_REVIEW"
-          : (_currentPhase == ReviewPhase.connectionReview
-                ? "CONNECTION_REVIEW"
-                : "FINAL");
+          : (_currentPhase == ReviewPhase.busMappingReview
+              ? "BUS_MAPPING_REVIEW"
+              : (_currentPhase == ReviewPhase.connectionReview
+                  ? "CONNECTION_REVIEW"
+                  : "FINAL"));
 
       final res = await _apiService.sendAgentChat(
         documentId: _document!.documentId,
@@ -4407,7 +4409,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     );
   }
 
-  // --- Step 6: Bus Number Mapping & Review (Phase 3) ---
+  // --- Phase 2: Bus Number Mapping & Review ---
 
   bool _isLinkingBusNumbers = false;
 

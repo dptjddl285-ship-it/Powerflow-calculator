@@ -35,12 +35,18 @@
 - **포트 인식 기반 선로 추적**: 이진화·스켈레톤화와 실제 선 픽셀 경로 추적을 결합하여 직선·굴절·교차 선로를 분석하고, 각 객체의 유효 연결 포트와 도착 모선을 자동 매핑.
 - **전기적 토폴로지 검증**: 모선의 다중 연결, 부하·발전기의 단일 인입선, 변압기의 방향별 독립 포트를 반영하여 검출 결과를 편집 가능한 `nodes`/`lines` 그래프로 변환.
 
-### 2. ⚡ 자체 개발 Full AC Newton-Raphson 전력 조류계산 솔버
-- **정밀 복소 어드미턴스 행렬($Y_{\\text{bus}}$) 구축**: 송전선로 $\\pi$-등가회로의 병렬 서셉턴스(B/2), 변압기 탭비(Tap Ratio) 오프노미널 모델링 지원.
-- **야코비안(Jacobian) 행렬 방정식 계산**: $\\begin{bmatrix} \\Delta P \\\\ \\Delta Q \\end{bmatrix} = \\begin{bmatrix} J_{11} & J_{12} \\\\ J_{21} & J_{22} \\end{bmatrix} \\begin{bmatrix} \\Delta \\theta \\\\ \\Delta |V| \\end{bmatrix}$ 반복 수렴 알고리즘을 NumPy 벡터화 연산으로 최적화.
-- **산업 표준 검증**: IEEE 24-bus RTS 계통에서 **4회 반복(Iteration)** 만에 최대 잔차 $4 \\times 10^{-8}$ 수준으로 안정적 수렴 확인.
+### 2. 🛡️ 4단계 AI-인간 협업 도면 검수 파이프라인 (Staged Review Gate)
+- **Phase 1 [① 객체 검수 (Object Review)]**: YOLOv11 + CV 하이브리드 엔진이 검출한 모선(Bus), 발전기(Gen), 부하(Load), 변압기(Tr)의 바운딩 박스와 AI 신뢰도(Confidence) 검증. 의심 객체(Suspicious) 분류 및 수동 추가/보정 (Gate 1).
+- **Phase 2 [② 모선 번호 매핑 (Bus Mapping Review)]**: 도면 텍스트 OCR 및 기하학적 공간 근접도(Spatial Distance)를 결합하여 각 모선에 고유 번호(Bus Number)를 1:1 부여하고 인접 발전기/부하로 자동 전파 (Gate 2).
+- **Phase 3 [③ 선로 결선 검수 (Connection Review)]**: 확정된 모선 노드를 기반으로 픽셀 스켈레톤화 및 선로 추적(detect_connections)을 실행하여 송전선로(Branch), 변압기, 인입선 결선 검수. 모호 결선(Ambiguous) 수동 교정 및 단선/고립 모선 토폴로지 검증 (Gate 3).
+- **Phase 4 [④ 최종 확인 & 엑셀 대조 (Verified Final & Excel Cross-Check)]**: 무결점 `VerifiedSLD` 확정 요약 확인, 전력계통 엑셀 파일(.xlsx)과 도면 설비 제원(Bus/Branch/Gen/Load) 자동 교차 대조 및 불일치 AI 진단 후 캔버스 전송.
 
-### 3. 🎨 웹 기반 인터랙티브 CAD 편집 체계 (Flutter Web)
+### 3. ⚡ 자체 개발 Full AC Newton-Raphson 전력 조류계산 솔버
+- **정밀 복소 어드미턴스 행렬($Y_{\text{bus}}$) 구축**: 송전선로 $\pi$-등가회로의 병렬 서셉턴스(B/2), 변압기 탭비(Tap Ratio) 오프노미널 모델링 지원.
+- **야코비안(Jacobian) 행렬 방정식 계산**: $\begin{bmatrix} \Delta P \\ \Delta Q \end{bmatrix} = \begin{bmatrix} J_{11} & J_{12} \\ J_{21} & J_{22} \end{bmatrix} \begin{bmatrix} \Delta \theta \\ \Delta |V| \end{bmatrix}$ 반복 수렴 알고리즘을 NumPy 벡터화 연산으로 최적화.
+- **산업 표준 검증**: IEEE 24-bus RTS 계통에서 **4회 반복(Iteration)** 만에 최대 잔차 $4 \times 10^{-8}$ 수준으로 안정적 수렴 확인.
+
+### 4. 🎨 웹 기반 인터랙티브 CAD 편집 체계 (Flutter Web)
 - **Direct Drag & Tight Hitbox**: 심볼 몸체를 마우스로 직접 선택하여 이동하는 직관적인 드래그앤드롭 및 기하학적 바운딩 박스 기반의 조작 영역 최적화.
 - **키보드 단축키 정렬 체계**:
   - `↑ / ↓ / ← / →`: 1px 단위 심볼 미세 정렬 (텍스트 필드 포커스 시 커서 이동 자동 분기)
@@ -51,7 +57,7 @@
 - **심볼 회전 시 글자 역회전(Counter-Rotation) 보정**: 부하 화살표나 변압기가 90°/180°/270°로 회전하더라도 라벨 텍스트와 발전기 기호(`G`, `S`, `SC`)는 화면 기준 수평(정방향, Left-to-Right)을 유지하도록 회전 시 라벨 방향 자동 보정.
 - **선로 개수 정밀 동기화**: 발전기/부하 인입선(Feeder Leads)을 스마트하게 제외하고, 실제 송전선로 및 변압기 선로(34개 브랜치)만 상단 배지와 인스펙터에 일원화 표시.
 
-### 4. 🔗 Dual Mapping 해소 및 클린 아키텍처 리팩토링
+### 5. 🔗 Dual Mapping 해소 및 클린 아키텍처 리팩토링
 - 프론트엔드와 백엔드에 분산되어 있던 중복 엑셀 파서(770줄)를 백엔드(`ExcelCaseImporter`)로 일원화하여 데이터 파이프라인의 정합성 확보.
 - 단일 거대 파일(4,750줄)이었던 `main.dart`에서 `InspectorPanel`(1,350줄)과 도면 모델(`DrawingElement`)을 독립 모듈로 추출하여 유지보수성 극대화.
 

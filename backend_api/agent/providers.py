@@ -257,20 +257,32 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
             if stage == "OBJECT_REVIEW":
                 suspicious_count = len([n for n in w_nodes if n.get("review_status") == "SUSPICIOUS"])
                 open_cand_count = len([c for c in cands if c.get("status") == "OPEN"])
-                reply = "🧭 **[다음 단계 진행 가이드 - 객체 검수]:**\n"
+                reply = "🧭 **[다음 단계 진행 가이드 - ① 객체 검수]:**\n"
                 reply += f"1. 우선 검토 객체 확인 (남은 의심 객체: **{suspicious_count}개**)\n"
                 reply += f"2. 누락 설비 후보 확인 (남은 미확인 후보: **{open_cand_count}개**)\n"
                 reply += "3. 정상 객체는 상단 **[정상 객체 일괄 승인]**으로 승인\n"
                 reply += "4. 하단 **'도면 전체 대조 확인'** 체크박스 선택\n"
-                reply += "5. **[객체 검수 완료 (Gate 통과)]** 클릭 ➔ **[다음: 결선 인식]** 시작"
-            else:
+                reply += "5. **[객체 검수 완료 (Gate 1 통과)]** 클릭 ➔ **[다음: ② 모선 번호 매핑]** 단계로 이동"
+            elif stage in ("BUS_MAPPING_REVIEW", "BUS_MAPPING"):
+                uncertain_buses = len([n for n in w_nodes if n.get("class") == "bus" and (n.get("bus_number") is None or n.get("bus_number_status") == "UNCERTAIN")])
+                reply = "🧭 **[다음 단계 진행 가이드 - ② 모선 번호 매핑]:**\n"
+                reply += f"1. 도면 OCR 및 공간 좌표 기반 모선 번호 부여 상태 점검 (미해결/불확실: **{uncertain_buses}개**)\n"
+                reply += "2. 필요 시 AI 자동 번호 링크 또는 수동으로 모선 번호 입력/보정\n"
+                reply += "3. **[모선 번호 승인 (Gate 2 통과)]** 클릭 ➔ **[다음: ③ 선로 결선 검수]** 단계로 이동"
+            elif stage in ("CONNECTION_REVIEW", "CONNECTION"):
                 ambiguous_count = len([l for l in w_lines if l.get("review_status") == "AMBIGUOUS"])
                 error_count = len([i for i in issues if i.get("severity") == "error"])
-                reply = "🧭 **[다음 단계 진행 가이드 - 결선 검수]:**\n"
-                reply += f"1. 결선 오류 선로 해결 (남은 오류: **{ambiguous_count}개**)\n"
-                reply += f"2. 토폴로지 결함 해결 (남은 결함: **{error_count}개**)\n"
+                reply = "🧭 **[다음 단계 진행 가이드 - ③ 선로 결선 검수]:**\n"
+                reply += f"1. 결선 오류 선로 해결 (남은 모호 선로: **{ambiguous_count}개**)\n"
+                reply += f"2. 토폴로지 결함(단선, 고립 모선) 해결 (남은 결함: **{error_count}개**)\n"
                 reply += "3. 정상 선로는 **[정상 결선 일괄 승인]**으로 승인\n"
-                reply += "4. **[회로도 검증 완료 (Final Gate)]** 클릭 ➔ VerifiedSLD 생성 및 Canvas Handoff"
+                reply += "4. **[결선 검수 완료 (Gate 3 통과)]** 클릭 ➔ **[다음: ④ 최종 확인 & 엑셀]** 단계로 이동"
+            else:
+                reply = "🧭 **[다음 단계 진행 가이드 - ④ 최종 확인 & 엑셀 대조]:**\n"
+                reply += "1. 최종 정합성이 검증된 VerifiedSLD 다이어그램 요약 확인\n"
+                reply += "2. 계통 엑셀 파일(.xlsx)을 업로드하여 도면과 설비 제원 교차 대조\n"
+                reply += "3. 불일치 감지 시 AI 진단 리포트 확인 후 원클릭 자동 보정\n"
+                reply += "4. **[캔버스로 전송]** 클릭 ➔ 메인 작업 영역으로 이동하여 즉시 AC 조류계산 시뮬레이션 실행"
 
             return {
                 "reply_ko": reply,
