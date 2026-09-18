@@ -313,6 +313,386 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
     );
   }
 
+  void _showUserGuideDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        clipBehavior: Clip.antiAlias,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 720, maxHeight: 660),
+          child: DefaultTabController(
+            length: 3,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Header
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                  color: const Color(0xFF0F172A),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF4F46E5).withOpacity(0.3),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: const Color(0xFF818CF8), width: 1.5),
+                        ),
+                        child: const Icon(Icons.menu_book_rounded, color: Colors.cyanAccent, size: 22),
+                      ),
+                      const SizedBox(width: 14),
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              "PowerLens Pro 사용 설명서 & 가이드",
+                              style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
+                            ),
+                            SizedBox(height: 2),
+                            Text(
+                              "단축키 및 전력계통 해석 조작 안내",
+                              style: TextStyle(color: Colors.white70, fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close, color: Colors.white70),
+                        tooltip: "닫기",
+                        onPressed: () => Navigator.of(ctx).pop(),
+                      ),
+                    ],
+                  ),
+                ),
+                // TabBar
+                Container(
+                  color: const Color(0xFF1E293B),
+                  child: const TabBar(
+                    indicatorColor: Colors.cyanAccent,
+                    indicatorWeight: 3,
+                    labelColor: Colors.cyanAccent,
+                    unselectedLabelColor: Colors.white60,
+                    labelStyle: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                    tabs: [
+                      Tab(icon: Icon(Icons.keyboard, size: 18), text: "키보드 단축키"),
+                      Tab(icon: Icon(Icons.mouse, size: 18), text: "마우스 & 캔버스 조작"),
+                      Tab(icon: Icon(Icons.account_tree_outlined, size: 18), text: "계통 해석 순서"),
+                    ],
+                  ),
+                ),
+                // Tab Content
+                Expanded(
+                  child: Container(
+                    color: Colors.white,
+                    child: TabBarView(
+                      children: [
+                        _buildShortcutsTab(),
+                        _buildCanvasControlsTab(),
+                        _buildWorkflowTab(),
+                      ],
+                    ),
+                  ),
+                ),
+                // Footer
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade50,
+                    border: Border(top: BorderSide(color: Colors.grey.shade200)),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.lightbulb_outline, size: 16, color: Colors.amber),
+                          const SizedBox(width: 6),
+                          Text(
+                            "Tip: 요소를 선택한 뒤 'R' 키를 누르면 90°씩 회전합니다.",
+                            style: TextStyle(fontSize: 12, color: Colors.blueGrey.shade800, fontWeight: FontWeight.w600),
+                          ),
+                        ],
+                      ),
+                      ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF0F172A),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                        ),
+                        onPressed: () => Navigator.of(ctx).pop(),
+                        child: const Text("닫기", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildShortcutsTab() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildShortcutSectionTitle("🎯 부품 회전 및 편집 조작 (핵심)"),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.indigo.shade50,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.indigo.shade200),
+            ),
+            child: Column(
+              children: [
+                _buildShortcutItem("R", "선택한 부품 90° 회전 (모선 가로/세로 전환, 발전기/부하/변압기 각도 회전)", isHighlight: true),
+                const Divider(height: 14),
+                _buildShortcutItem("Del / Backspace", "선택한 부품 즉시 삭제"),
+                const Divider(height: 14),
+                _buildShortcutItem("방향키 (↑ ↓ ← →)", "선택 부품 1px 미세 이동 (Shift 누르면 10px씩 고속 이동)"),
+                const Divider(height: 14),
+                _buildShortcutItem("Ctrl + Z  /  Ctrl + Y", "실행 취소 (Undo)  /  다시 실행 (Redo)"),
+                const Divider(height: 14),
+                _buildShortcutItem("F  또는  Space", "도면 전체 화면 맞춤 (Zoom to Fit)"),
+                const Divider(height: 14),
+                _buildShortcutItem("Esc", "선택 해제 또는 현재 도구 취소"),
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
+          _buildShortcutSectionTitle("🛠️ 도구 빠른 선택 (단일 키)"),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.grey.shade50,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.grey.shade200),
+            ),
+            child: Column(
+              children: [
+                _buildShortcutItem("V", "선택 및 이동 도구 (Move Tool)"),
+                const Divider(height: 14),
+                _buildShortcutItem("B", "모선 (Bus) 그리기 도구"),
+                const Divider(height: 14),
+                _buildShortcutItem("G", "발전기 (Generator) 배치 도구"),
+                const Divider(height: 14),
+                _buildShortcutItem("L", "부하 (Load) 배치 도구"),
+                const Divider(height: 14),
+                _buildShortcutItem("T", "변압기 (Transformer) 배치 도구"),
+                const Divider(height: 14),
+                _buildShortcutItem("W", "송전선로 연결 도구 (Wire / Line)"),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildShortcutSectionTitle(String title) {
+    return Text(
+      title,
+      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+    );
+  }
+
+  Widget _buildShortcutItem(String keys, String desc, {bool isHighlight = false}) {
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: isHighlight ? const Color(0xFF4F46E5) : Colors.white,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: isHighlight ? const Color(0xFF4338CA) : Colors.grey.shade300),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.04),
+                blurRadius: 2,
+                offset: const Offset(0, 1),
+              ),
+            ],
+          ),
+          child: Text(
+            keys,
+            style: TextStyle(
+              fontSize: 11.5,
+              fontWeight: FontWeight.bold,
+              color: isHighlight ? Colors.white : const Color(0xFF0F172A),
+              fontFamily: 'monospace',
+            ),
+          ),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Text(
+            desc,
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: isHighlight ? FontWeight.bold : FontWeight.w500,
+              color: isHighlight ? const Color(0xFF3730A3) : Colors.black87,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCanvasControlsTab() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildGuideCard(
+            icon: Icons.mouse,
+            iconColor: Colors.blueAccent,
+            title: "마우스 조작 및 캔버스 탐색",
+            items: const [
+              "마우스 휠 스크롤: 캔버스 확대(+) 및 축소(-)가 마우스 커서 위치를 중심으로 부드럽게 동작합니다.",
+              "우클릭 드래그 or 휠 클릭 드래그: 캔버스 무한 공간을 상하좌우로 자유롭게 이동(Pan)합니다.",
+              "좌클릭: 부품을 클릭하면 선택되며 우측에 속성 패널(Inspector)이 자동으로 열립니다.",
+              "드래그 이동: 선택한 부품을 원하는 위치로 끌어서 직관적으로 재배치할 수 있습니다.",
+            ],
+          ),
+          const SizedBox(height: 16),
+          _buildGuideCard(
+            icon: Icons.timeline,
+            iconColor: Colors.teal,
+            title: "선로 연결 및 형태 정형화 (Smart Routing)",
+            items: const [
+              "선로 도구(W)를 선택한 뒤 연결할 첫 번째 모선을 클릭하고, 대상 모선을 클릭하면 자동으로 연결선이 생성됩니다.",
+              "상단 마술봉(선로 정형화) 메뉴에서 '자연스러운 직선화' 또는 '90° 직각(맨해튼) 정형화'를 클릭하면 손그림 배선이 깔끔하게 정돈됩니다.",
+            ],
+          ),
+          const SizedBox(height: 16),
+          _buildGuideCard(
+            icon: Icons.tune,
+            iconColor: Colors.purple,
+            title: "부품 속성 편집 (Inspector Panel)",
+            items: const [
+              "우측 패널에서 모선 종류(Slack, PV, PQ), 기준 전압, 목표 전압을 설정할 수 있습니다.",
+              "발전기 및 부하의 발전량(MW/MVAR)과 송전선로 직렬 임피던스(R, X, B)를 즉시 수정 가능합니다.",
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildWorkflowTab() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildStepCard(
+            step: "1",
+            title: "계통 구성 (직접 그리기 또는 엑셀 가져오기)",
+            desc: "좌측 도구(B: 모선, W: 선로, G: 발전기, L: 부하)로 계통을 직접 설계하거나, 상단 [엑셀 가져오기]를 눌러 IEEE 24모선(case24_psse.xlsx) 등 표준 케이스를 즉시 로드할 수 있습니다.",
+            color: Colors.blue,
+          ),
+          const SizedBox(height: 14),
+          _buildStepCard(
+            step: "2",
+            title: "기준 모선(Slack) 및 파라미터 확인",
+            desc: "계통 내 최소 1개의 모선은 슬랙 모선(Slack Bus, V=1.0 pu, θ=0°)으로 지정되어야 합니다. 각 발전기의 유효전력(PG)과 부하량(PD, QD)을 우측 속성 패널에서 확인합니다.",
+            color: Colors.amber.shade800,
+          ),
+          const SizedBox(height: 14),
+          _buildStepCard(
+            step: "3",
+            title: "조류계산 실행 (AC Newton-Raphson)",
+            desc: "상단 우측의 파란색 [조류계산 실행] 버튼을 클릭합니다. 백엔드 전력 조류 해석 엔진이 4블록 야코비 행렬과 극좌표계 전력방정식을 풀어 1초 내에 수렴 결과를 도출합니다.",
+            color: Colors.green,
+          ),
+          const SizedBox(height: 14),
+          _buildStepCard(
+            step: "4",
+            title: "결과 확인 및 엑셀 보고서 다운로드",
+            desc: "캔버스 위에 각 선로를 흐르는 유효전력/무효전력(MW/MVAR)과 방향 화살표가 표시됩니다. 상단 [수치 결과표] 버튼을 누르면 모선별 전압 크기/위상각 및 총 계통 손실을 확인하고 엑셀로 내려받을 수 있습니다.",
+            color: Colors.purple,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGuideCard({required IconData icon, required Color iconColor, required String title, required List<String> items}) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.grey.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: iconColor, size: 20),
+              const SizedBox(width: 8),
+              Text(title, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold, color: Color(0xFF0F172A))),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ...items.map((it) => Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text("• ", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blueGrey)),
+                Expanded(child: Text(it, style: const TextStyle(fontSize: 12.5, color: Colors.black87, height: 1.4))),
+              ],
+            ),
+          )),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStepCard({required String step, required String title, required String desc, required Color color}) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CircleAvatar(
+            radius: 14,
+            backgroundColor: color,
+            child: Text(step, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold, color: color)),
+                const SizedBox(height: 4),
+                Text(desc, style: const TextStyle(fontSize: 12.5, color: Colors.black87, height: 1.4)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _saveState() {
     historyStack.add(elements.map((e) => e.copy()).toList()); redoStack.clear();
     if (historyStack.length > 30) historyStack.removeAt(0);
@@ -2637,21 +3017,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           _paletteItem(Tool.line, Icons.polyline, "선로", "W"),
           _paletteItem(Tool.text, Icons.text_fields, "라벨", ""),
           _actionPaletteItem(
-            Icons.rotate_right,
-            "회전 (R)",
-            const Color(0xFF2563EB),
-            () {
-              if (selectedElement != null) {
-                _rotateElement(selectedElement!);
-              } else {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text("먼저 회전할 요소(모선, 발전기, 부하, 변압기)를 클릭해 선택해주세요."),
-                    duration: Duration(seconds: 1),
-                  ),
-                );
-              }
-            },
+            Icons.menu_book_rounded,
+            "설명서",
+            const Color(0xFF4F46E5),
+            _showUserGuideDialog,
           ),
           const Divider(indent: 8, endIndent: 8, height: 16),
           _actionPaletteItem(
@@ -2778,11 +3147,6 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
               icon: const Icon(Icons.remove, size: 20),
               tooltip: "화면 축소 (-)",
               onPressed: () => _zoom(1.0 / 1.2),
-            ),
-            IconButton(
-              icon: const Icon(Icons.fit_screen, size: 20, color: Colors.blue),
-              tooltip: "도면 전체 화면 맞춤 (F / Space)",
-              onPressed: _zoomToFit,
             ),
             Container(height: 20, width: 1, color: Colors.grey.shade300, margin: const EdgeInsets.symmetric(horizontal: 4)),
             IconButton(

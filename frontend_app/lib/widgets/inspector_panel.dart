@@ -498,6 +498,13 @@ class _InspectorPanelState extends State<InspectorPanel> {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (widget.onRotateSelected != null &&
+                      (e.type == Tool.bus || e.type == Tool.generator || e.type == Tool.load || e.type == Tool.transformer))
+                    IconButton(
+                      icon: const Icon(Icons.rotate_right, size: 20, color: Color(0xFF2563EB)),
+                      tooltip: "90° 회전 (R)",
+                      onPressed: widget.onRotateSelected,
+                    ),
                   IconButton(
                     icon: const Icon(Icons.close, size: 20),
                     tooltip: "선택 해제 (Esc)",
