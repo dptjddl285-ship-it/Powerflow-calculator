@@ -320,9 +320,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         clipBehavior: Clip.antiAlias,
         child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 720, maxHeight: 660),
+          constraints: const BoxConstraints(maxWidth: 750, maxHeight: 680),
           child: DefaultTabController(
-            length: 3,
+            length: 4,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -335,11 +335,11 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                       Container(
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
-                          color: const Color(0xFF4F46E5).withOpacity(0.3),
+                          color: Colors.purpleAccent.withOpacity(0.25),
                           borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: const Color(0xFF818CF8), width: 1.5),
+                          border: Border.all(color: Colors.purpleAccent, width: 1.5),
                         ),
-                        child: const Icon(Icons.menu_book_rounded, color: Colors.cyanAccent, size: 22),
+                        child: const Icon(Icons.auto_awesome, color: Colors.amberAccent, size: 22),
                       ),
                       const SizedBox(width: 14),
                       const Expanded(
@@ -347,12 +347,12 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              "PowerLens Pro 사용 설명서 & 가이드",
+                              "PowerLens Pro 가이드 · AI 도면 검수실 (메인)",
                               style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
                             ),
                             SizedBox(height: 2),
                             Text(
-                              "단축키 및 전력계통 해석 조작 안내",
+                              "AI 멀티에이전트 도면 검수 & AC 조류계산 완벽 가이드",
                               style: TextStyle(color: Colors.white70, fontSize: 12),
                             ),
                           ],
@@ -370,15 +370,18 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                 Container(
                   color: const Color(0xFF1E293B),
                   child: const TabBar(
-                    indicatorColor: Colors.cyanAccent,
+                    isScrollable: true,
+                    tabAlignment: TabAlignment.start,
+                    indicatorColor: Colors.purpleAccent,
                     indicatorWeight: 3,
-                    labelColor: Colors.cyanAccent,
+                    labelColor: Colors.purpleAccent,
                     unselectedLabelColor: Colors.white60,
                     labelStyle: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                     tabs: [
-                      Tab(icon: Icon(Icons.keyboard, size: 18), text: "키보드 단축키"),
-                      Tab(icon: Icon(Icons.mouse, size: 18), text: "마우스 & 캔버스 조작"),
+                      Tab(icon: Icon(Icons.auto_awesome, size: 18), text: "AI 도면 검수실 (메인)"),
                       Tab(icon: Icon(Icons.account_tree_outlined, size: 18), text: "계통 해석 순서"),
+                      Tab(icon: Icon(Icons.keyboard, size: 18), text: "키보드 단축키 (R: 회전)"),
+                      Tab(icon: Icon(Icons.mouse, size: 18), text: "마우스 & 캔버스 조작"),
                     ],
                   ),
                 ),
@@ -388,9 +391,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                     color: Colors.white,
                     child: TabBarView(
                       children: [
+                        _buildAiReviewTab(ctx),
+                        _buildWorkflowTab(),
                         _buildShortcutsTab(),
                         _buildCanvasControlsTab(),
-                        _buildWorkflowTab(),
                       ],
                     ),
                   ),
@@ -407,10 +411,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                     children: [
                       Row(
                         children: [
-                          const Icon(Icons.lightbulb_outline, size: 16, color: Colors.amber),
+                          const Icon(Icons.auto_awesome, size: 16, color: Colors.purpleAccent),
                           const SizedBox(width: 6),
                           Text(
-                            "Tip: 요소를 선택한 뒤 'R' 키를 누르면 90°씩 회전합니다.",
+                            "💡 Tip: 상단 [AI 도면 검수실] 버튼을 누르면 즉시 검수실로 이동합니다.",
                             style: TextStyle(fontSize: 12, color: Colors.blueGrey.shade800, fontWeight: FontWeight.w600),
                           ),
                         ],
@@ -432,6 +436,217 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _buildAiReviewTab(BuildContext ctx) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Banner
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF4F46E5), Color(0xFF7C3AED)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: [
+                BoxShadow(color: Colors.purple.withOpacity(0.25), blurRadius: 8, offset: const Offset(0, 3)),
+              ],
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.auto_awesome, color: Colors.amberAccent, size: 28),
+                ),
+                const SizedBox(width: 14),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        "AI 도면 검수실이란?",
+                        style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        "손그림/CAD 단선도 이미지와 계통 엑셀 데이터 사이의 불일치(부품 누락, 잘못된 선로 연결, 모선 번호 오류)를 멀티에이전트 AI가 스스로 발견하고 정밀 교정해주는 핵심 기능입니다.",
+                        style: TextStyle(color: Colors.white, fontSize: 12.5, height: 1.4),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Action Button to directly enter
+          Center(
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF7C3AED),
+                foregroundColor: Colors.white,
+                elevation: 2,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              ),
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                _openReviewPage();
+              },
+              icon: const Icon(Icons.open_in_new, size: 18, color: Colors.amberAccent),
+              label: const Text("✨ 지금 AI 도면 검수실 열기", style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold)),
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          _buildShortcutSectionTitle("🔍 4단계 체계적 검수 프로세스 (Workflow)"),
+          const SizedBox(height: 10),
+          _buildReviewPhaseCard(
+            phaseNum: "Phase 1",
+            title: "객체 검수 (Object Review)",
+            desc: "도면 이미지에서 추출된 모선(Bus), 발전기(Gen), 부하(Load), 변압기(Tr)의 인식 영역(바운딩 박스)과 신뢰도(Confidence)를 확인합니다. 미인식된 부품은 추가하고 오인식된 부품은 수정/제외합니다.",
+            color: Colors.blue,
+            icon: Icons.filter_center_focus,
+          ),
+          const SizedBox(height: 12),
+          _buildReviewPhaseCard(
+            phaseNum: "Phase 2",
+            title: "연결성 검수 (Connection Review)",
+            desc: "송전선로와 인입선이 모선 간에 물리적으로 올바르게 연결되었는지 검증합니다. 단선, 고립된 모선(Islanded Bus), 잘못 연결된 선로를 AI가 자동 판별합니다.",
+            color: Colors.teal,
+            icon: Icons.polyline,
+          ),
+          const SizedBox(height: 12),
+          _buildReviewPhaseCard(
+            phaseNum: "Phase 3",
+            title: "모선 번호 매핑 (Bus Mapping Review)",
+            desc: "도면 상의 모선 위치와 엑셀 데이터 시트(bus, branch)의 모선 번호를 1:1로 매핑합니다. 엑셀과 도면 사이의 불일치(Discrepancy)를 원클릭 자동 보정합니다.",
+            color: Colors.amber.shade900,
+            icon: Icons.swap_horiz,
+          ),
+          const SizedBox(height: 12),
+          _buildReviewPhaseCard(
+            phaseNum: "Phase 4",
+            title: "검증 완료 및 캔버스 전송 (Verified SLD)",
+            desc: "검증을 통과한 무결점 계통 데이터를 캔버스로 자동 배치하여, 즉시 안전하고 신뢰할 수 있는 AC 조류계산을 수행할 수 있습니다.",
+            color: Colors.green,
+            icon: Icons.verified,
+          ),
+          const SizedBox(height: 20),
+
+          _buildShortcutSectionTitle("🤖 검수실 전용 Agentic AI 협업 기능 (우측 패널)"),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: Colors.purple.shade50,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.purple.shade200),
+            ),
+            child: const Column(
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.manage_search, color: Colors.purple, size: 20),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text("Agent Activity (의사결정 감사 로그)", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF0F172A))),
+                          SizedBox(height: 2),
+                          Text("AI가 왜 특정 부품을 의심(Suspicious)으로 판정했는지 단계별 추론 과정과 검수 이력을 실시간으로 투명하게 확인합니다.", style: TextStyle(fontSize: 12, color: Colors.black87)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                Divider(height: 16),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.chat_bubble_outline, color: Colors.purple, size: 20),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text("Agent Chat (실시간 대화형 검수 협업)", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF0F172A))),
+                          SizedBox(height: 2),
+                          Text("검수 AI 에이전트에게 '3번 모선에 연결된 부하 확인해줘', '선로 누락 보정해줘'와 같이 자연어로 질의하고 수정할 수 있습니다.", style: TextStyle(fontSize: 12, color: Colors.black87)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildReviewPhaseCard({
+    required String phaseNum,
+    required String title,
+    required String desc,
+    required Color color,
+    required IconData icon,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.3)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Text(
+              phaseNum,
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(icon, size: 16, color: color),
+                    const SizedBox(width: 6),
+                    Text(title, style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold, color: color)),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(desc, style: const TextStyle(fontSize: 12.5, color: Colors.black87, height: 1.4)),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -2877,11 +3092,6 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
           tooltip: "다시실행 (Ctrl+Y)",
           onPressed: redoStack.isNotEmpty ? _redo : null,
         ),
-        IconButton(
-          icon: const Icon(Icons.fit_screen, color: Colors.cyanAccent, size: 20),
-          tooltip: "도면 전체 화면 맞춤 (F / Space)",
-          onPressed: _zoomToFit,
-        ),
         PopupMenuButton<String>(
           tooltip: "선로 형태 보정 및 정형화",
           icon: const Icon(Icons.auto_fix_high, color: Colors.cyanAccent, size: 20),
@@ -3147,6 +3357,11 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
               icon: const Icon(Icons.remove, size: 20),
               tooltip: "화면 축소 (-)",
               onPressed: () => _zoom(1.0 / 1.2),
+            ),
+            IconButton(
+              icon: const Icon(Icons.fit_screen, size: 20, color: Colors.blue),
+              tooltip: "도면 전체 화면 맞춤 (F / Space)",
+              onPressed: _zoomToFit,
             ),
             Container(height: 20, width: 1, color: Colors.grey.shade300, margin: const EdgeInsets.symmetric(horizontal: 4)),
             IconButton(
