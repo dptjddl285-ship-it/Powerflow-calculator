@@ -12,6 +12,8 @@
 
 [프로젝트 개요](#-프로젝트-개요) • [핵심 기술 성과](#-핵심-엔지니어링-성과) • [시스템 아키텍처](#-시스템-아키텍처) • [검증 및 벤치마크](#-수치해석-검증-및-성능) • [빠른 시작 가이드](#-빠른-시작-가이드)
 
+> 👥 **Team Continuation**: See [`TEAM_HANDOFF.md`](./TEAM_HANDOFF.md) for full project architecture, Lensy AI status, run guides, and next priorities.
+
 </div>
 
 ---
