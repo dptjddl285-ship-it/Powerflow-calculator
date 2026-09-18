@@ -2306,6 +2306,46 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                 children: [
                   _buildCanvas(),
                   _buildCanvasViewControls(),
+                  if (!isInspectorOpen)
+                    Positioned(
+                      right: 0,
+                      top: 16,
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: () => setState(() => isInspectorOpen = true),
+                          borderRadius: const BorderRadius.only(
+                            topLeft: Radius.circular(8),
+                            bottomLeft: Radius.circular(8),
+                          ),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF0F172A),
+                              borderRadius: const BorderRadius.only(
+                                topLeft: Radius.circular(8),
+                                bottomLeft: Radius.circular(8),
+                              ),
+                              boxShadow: [
+                                BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 6, offset: const Offset(-2, 2)),
+                              ],
+                              border: Border.all(color: Colors.white24),
+                            ),
+                            child: const Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.chevron_left, size: 18, color: Colors.cyanAccent),
+                                SizedBox(width: 4),
+                                Text(
+                                  "속성 패널 열기",
+                                  style: TextStyle(color: Colors.white, fontSize: 11.5, fontWeight: FontWeight.bold),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -2341,6 +2381,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                     onSmoothLine: _smoothSelectedLine,
                     onRestoreRawLine: _restoreSelectedRawLine,
                     onClose: () => setState(() => selectedElement = null),
+                    onCollapse: () => setState(() => isInspectorOpen = false),
                     onBusRenamed: _handleBusRenamed,
                     onClearAll: _confirmClearCanvas,
                   ),

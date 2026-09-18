@@ -26,12 +26,13 @@ class InspectorPanel extends StatefulWidget {
     this.onRotateSelected,
     this.onStraightenLine,
     this.onSmoothLine,
-    this.onRestoreRawLine,
     required this.onClose,
+    this.onCollapse,
     required this.onBusRenamed,
     required this.onClearAll,
   });
 
+  final VoidCallback? onCollapse;
   final VoidCallback? onStraightenLine;
   final VoidCallback? onSmoothLine;
   final VoidCallback? onRestoreRawLine;
@@ -213,7 +214,7 @@ class _InspectorPanelState extends State<InspectorPanel> {
               IconButton(
                 icon: const Icon(Icons.chevron_right),
                 tooltip: "패널 접기",
-                onPressed: widget.onClose,
+                onPressed: widget.onCollapse ?? widget.onClose,
               ),
             ],
           ),
@@ -493,10 +494,21 @@ class _InspectorPanelState extends State<InspectorPanel> {
                   ],
                 ),
               ),
-              IconButton(
-                icon: const Icon(Icons.close, size: 20),
-                tooltip: "선택 해제 (Esc)",
-                onPressed: widget.onClose,
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 20),
+                    tooltip: "선택 해제 (Esc)",
+                    onPressed: widget.onClose,
+                  ),
+                  if (widget.onCollapse != null)
+                    IconButton(
+                      icon: const Icon(Icons.chevron_right, size: 22),
+                      tooltip: "패널 접기",
+                      onPressed: widget.onCollapse,
+                    ),
+                ],
               ),
             ],
           ),
