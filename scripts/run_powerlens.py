@@ -33,6 +33,49 @@ def free_port(port: int):
     except Exception:
         pass
 
+
+def open_in_incognito(url: str):
+    """Opens the target URL in an incognito / private browsing window to prevent stale cache and residual data."""
+    candidates = [
+        # Chrome
+        (r"C:\Program Files\Google\Chrome\Application\chrome.exe", ["--incognito"]),
+        (r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe", ["--incognito"]),
+        (os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"), ["--incognito"]),
+        # Edge (Windows native)
+        (r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", ["--inprivate"]),
+        (r"C:\Program Files\Microsoft\Edge\Application\msedge.exe", ["--inprivate"]),
+        # Brave
+        (r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe", ["--incognito"]),
+        (os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\Application\brave.exe"), ["--incognito"]),
+        # Firefox
+        (r"C:\Program Files\Mozilla Firefox\firefox.exe", ["-private-window"]),
+        (r"C:\Program Files (x86)\Mozilla Firefox\firefox.exe", ["-private-window"]),
+    ]
+
+    for exe_path, flags in candidates:
+        if os.path.exists(exe_path):
+            try:
+                subprocess.Popen([exe_path] + flags + [url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                browser_name = Path(exe_path).stem.capitalize()
+                print(f"\n🔒 {browser_name} 시크릿 모드(Incognito)로 브라우저를 실행했습니다: {url}")
+                return
+            except Exception:
+                continue
+
+    # Fallback to shell start commands
+    for cmd in [f'start chrome --incognito "{url}"', f'start msedge --inprivate "{url}"']:
+        try:
+            res = subprocess.run(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if res.returncode == 0:
+                print(f"\n🔒 시크릿 모드 브라우저로 자동 실행했습니다: {url}")
+                return
+        except Exception:
+            continue
+
+    # Ultimate fallback to default browser
+    print(f"\n🌐 기본 웹 브라우저로 실행합니다: {url}")
+    webbrowser.open(url)
+
 def main():
     print("=" * 65)
     print("⚡ PowerLens Pro - 원클릭 통합 실행기 (One-Click Launcher)")
@@ -59,11 +102,10 @@ def main():
     print("▶ [2/2] Flutter 웹 프론트엔드 서버 구동 중... (http://localhost:58640)")
     frontend_proc = subprocess.Popen(frontend_cmd, cwd=str(PROJECT_ROOT))
 
-    # 3. Wait and open browser
+    # 3. Wait and open browser in Incognito / InPrivate mode
     time.sleep(2)
     url = "http://localhost:58640"
-    print(f"\n🌐 기본 웹 브라우저를 자동으로 실행합니다: {url}")
-    webbrowser.open(url)
+    open_in_incognito(url)
 
     print("\n" + "=" * 65)
     print("✅ PowerLens Pro 시스템이 정상 가동되었습니다!")
