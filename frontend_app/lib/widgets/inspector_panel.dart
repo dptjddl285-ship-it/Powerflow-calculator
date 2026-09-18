@@ -291,18 +291,14 @@ class _InspectorPanelState extends State<InspectorPanel> {
               ),
               child: Column(
                 children: [
-                  _shortcutRow("Del / Backspace", "선택 요소 삭제"),
-                  _shortcutRow("R", "선택 요소 90° 회전"),
-                  _shortcutRow("방향키 (↑↓←→)", "선택 요소 미세 이동"),
+                  _shortcutRow("Del", "선택 요소 삭제 (입력창 보호)"),
+                  _shortcutRow("Ctrl + R", "선택 요소 90° 회전 (Alt+R 가능)"),
+                  _shortcutRow("방향키 (↑↓←→)", "선택 요소 미세 이동 (Shift: 10px)"),
                   _shortcutRow("Esc", "선택 해제 / 도구 취소"),
                   _shortcutRow("Ctrl + Z", "실행 취소 (Undo)"),
                   _shortcutRow("Ctrl + Y", "다시 실행 (Redo)"),
-                  _shortcutRow("V", "선택 및 이동 모드"),
-                  _shortcutRow("B", "모선(Bus) 배치"),
-                  _shortcutRow("G", "발전기 배치"),
-                  _shortcutRow("L", "부하 배치"),
-                  _shortcutRow("T", "변압기 배치"),
-                  _shortcutRow("W", "선로 연결 (Wire)"),
+                  _shortcutRow("Ctrl + Space", "도면 전체 화면 맞춤 (Ctrl+F, Ctrl+0)"),
+                  _shortcutRow("Alt + V / B / G...", "도구 빠른 선택 (Alt + 조합키)"),
                 ],
               ),
             ),
@@ -502,7 +498,7 @@ class _InspectorPanelState extends State<InspectorPanel> {
                       (e.type == Tool.bus || e.type == Tool.generator || e.type == Tool.load || e.type == Tool.transformer))
                     IconButton(
                       icon: const Icon(Icons.rotate_right, size: 20, color: Color(0xFF2563EB)),
-                      tooltip: "90° 회전 (R)",
+                      tooltip: "90° 회전 (Ctrl+R)",
                       onPressed: widget.onRotateSelected,
                     ),
                   IconButton(

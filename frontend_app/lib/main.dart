@@ -157,12 +157,14 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
 
     final isCtrl = HardwareKeyboard.instance.isControlPressed || HardwareKeyboard.instance.isMetaPressed;
     final isShift = HardwareKeyboard.instance.isShiftPressed;
+    final isAlt = HardwareKeyboard.instance.isAltPressed;
 
     final focusedWidget = FocusManager.instance.primaryFocus;
     // Any focus outside canvas on an editable text field means the user is typing
     final isEditingInput = focusedWidget != null && focusedWidget != _canvasFocusNode && (
       focusedWidget.context?.widget is EditableText ||
-      focusedWidget.toString().contains('EditableText')
+      focusedWidget.toString().contains('EditableText') ||
+      focusedWidget.toString().contains('TextField')
     );
 
     if (isEditingInput) {
@@ -170,11 +172,14 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         FocusManager.instance.primaryFocus?.unfocus();
         _canvasFocusNode.requestFocus();
       }
-      // CRITICAL: Return immediately so Backspace, Delete, and shortcuts NEVER delete elements while typing!
+      // CRITICAL: Return immediately so Backspace, Delete, and shortcuts NEVER delete elements or trigger actions while typing!
       return;
     }
 
-    if (event.logicalKey == LogicalKeyboardKey.keyF || event.logicalKey == LogicalKeyboardKey.space) {
+    // Zoom to fit: Ctrl + Space, Ctrl + F, or Ctrl + 0 (Prevents accidental trigger when typing 'F' or Space in labels)
+    if (isCtrl && (event.logicalKey == LogicalKeyboardKey.space ||
+                   event.logicalKey == LogicalKeyboardKey.keyF ||
+                   event.logicalKey == LogicalKeyboardKey.digit0)) {
       _zoomToFit();
       return;
     }
@@ -199,7 +204,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
         _moveElement(selectedElement!, Offset(0, step));
       }
       return;
-    } else if (selectedElement != null && event.logicalKey == LogicalKeyboardKey.keyR) {
+    } else if (selectedElement != null && (isCtrl || isAlt) && event.logicalKey == LogicalKeyboardKey.keyR) {
+      // Rotation now strictly requires Ctrl+R (or Alt+R) combination, preventing single 'R' collisions during label input
       _rotateElement(selectedElement!);
       return;
     } else if (event.logicalKey == LogicalKeyboardKey.escape) {
@@ -218,7 +224,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       }
     } else if (isCtrl && event.logicalKey == LogicalKeyboardKey.keyY) {
       _redo();
-    } else if (!isCtrl) {
+    } else if (isAlt || (isCtrl && isShift)) {
+      // Tool switching requires Alt+Key (or Ctrl+Shift+Key) to prevent single B/G/L/T/W collisions during label typing
       if (event.logicalKey == LogicalKeyboardKey.keyV) {
         setState(() => selectedTool = Tool.move);
       } else if (event.logicalKey == LogicalKeyboardKey.keyB) {
@@ -380,7 +387,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
                     tabs: [
                       Tab(icon: Icon(Icons.auto_awesome, size: 18), text: "AI 도면 검수실 (메인)"),
                       Tab(icon: Icon(Icons.account_tree_outlined, size: 18), text: "계통 해석 순서"),
-                      Tab(icon: Icon(Icons.keyboard, size: 18), text: "키보드 단축키 (R: 회전)"),
+                      Tab(icon: Icon(Icons.keyboard, size: 18), text: "키보드 단축키 (Ctrl+R)"),
                       Tab(icon: Icon(Icons.mouse, size: 18), text: "마우스 & 캔버스 조작"),
                     ],
                   ),
@@ -657,7 +664,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildShortcutSectionTitle("🎯 부품 회전 및 편집 조작 (핵심)"),
+          _buildShortcutSectionTitle("🎯 부품 회전 및 편집 조작 (Ctrl 조합키)"),
           const SizedBox(height: 8),
           Container(
             padding: const EdgeInsets.all(12),
@@ -668,22 +675,22 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
             ),
             child: Column(
               children: [
-                _buildShortcutItem("R", "선택한 부품 90° 회전 (모선 가로/세로 전환, 발전기/부하/변압기 각도 회전)", isHighlight: true),
+                _buildShortcutItem("Ctrl + R", "선택한 부품 90° 회전 (모선 가로/세로 전환, 발전기/부하/변압기 각도 회전, Alt+R 지원)", isHighlight: true),
                 const Divider(height: 14),
-                _buildShortcutItem("Del / Backspace", "선택한 부품 즉시 삭제"),
+                _buildShortcutItem("Del", "선택한 부품 즉시 삭제 (텍스트 입력 중 오동작 방지)"),
                 const Divider(height: 14),
                 _buildShortcutItem("방향키 (↑ ↓ ← →)", "선택 부품 1px 미세 이동 (Shift 누르면 10px씩 고속 이동)"),
                 const Divider(height: 14),
                 _buildShortcutItem("Ctrl + Z  /  Ctrl + Y", "실행 취소 (Undo)  /  다시 실행 (Redo)"),
                 const Divider(height: 14),
-                _buildShortcutItem("F  또는  Space", "도면 전체 화면 맞춤 (Zoom to Fit)"),
+                _buildShortcutItem("Ctrl + Space  /  Ctrl + F", "도면 전체 화면 맞춤 (Zoom to Fit, Ctrl+0 지원)"),
                 const Divider(height: 14),
                 _buildShortcutItem("Esc", "선택 해제 또는 현재 도구 취소"),
               ],
             ),
           ),
           const SizedBox(height: 20),
-          _buildShortcutSectionTitle("🛠️ 도구 빠른 선택 (단일 키)"),
+          _buildShortcutSectionTitle("🛠️ 도구 빠른 선택 (Alt + 조합키)"),
           const SizedBox(height: 8),
           Container(
             padding: const EdgeInsets.all(12),
@@ -694,17 +701,17 @@ class PowerCanvasPageState extends State<PowerCanvasPage> {
             ),
             child: Column(
               children: [
-                _buildShortcutItem("V", "선택 및 이동 도구 (Move Tool)"),
+                _buildShortcutItem("Alt + V (또는 Ctrl+Shift+V)", "선택 및 이동 도구 (Move Tool)"),
                 const Divider(height: 14),
-                _buildShortcutItem("B", "모선 (Bus) 그리기 도구"),
+                _buildShortcutItem("Alt + B (또는 Ctrl+Shift+B)", "모선 (Bus) 그리기 도구"),
                 const Divider(height: 14),
-                _buildShortcutItem("G", "발전기 (Generator) 배치 도구"),
+                _buildShortcutItem("Alt + G (또는 Ctrl+Shift+G)", "발전기 (Generator) 배치 도구"),
                 const Divider(height: 14),
-                _buildShortcutItem("L", "부하 (Load) 배치 도구"),
+                _buildShortcutItem("Alt + L (또는 Ctrl+Shift+L)", "부하 (Load) 배치 도구"),
                 const Divider(height: 14),
-                _buildShortcutItem("T", "변압기 (Transformer) 배치 도구"),
+                _buildShortcutItem("Alt + T (또는 Ctrl+Shift+T)", "변압기 (Transformer) 배치 도구"),
                 const Divider(height: 14),
-                _buildShortcutItem("W", "송전선로 연결 도구 (Wire / Line)"),
+                _buildShortcutItem("Alt + W (또는 Ctrl+Shift+W)", "송전선로 연결 도구 (Wire / Line)"),
               ],
             ),
           ),
