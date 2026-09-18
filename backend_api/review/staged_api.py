@@ -652,7 +652,12 @@ async def review_verify_final_gate(request: VerifyFinalGateRequest):
 # ==========================================
 @router.post("/review/agent_chat")
 async def review_agent_chat(request: AgentChatRequest):
-    print(f"\n💬 [Agent Chat 요청] Document: {request.document_id}, Query: '{request.message}'")
+    # Keep request logs useful without copying arbitrary user text (which may
+    # contain credentials) into the backend log.
+    print(
+        f"\n💬 [Agent Chat 요청] Document: {request.document_id}, "
+        f"Stage: {request.stage}, MessageLength: {len(request.message or '')}"
+    )
     try:
         from agent.chat_reviewer import ChatMessagePayload
         history_payload = [
@@ -679,6 +684,9 @@ async def review_agent_chat(request: AgentChatRequest):
             "document_id": request.document_id,
             "reply_ko": result.get("reply_ko", ""),
             "agent_status": result.get("agent_status", "DETERMINISTIC"),
+            "provider_mode": result.get("provider_mode", "local"),
+            "display_mode": result.get("display_mode", ""),
+            "suggested_actions": result.get("suggested_actions", []),
             "context_summary": result.get("context_summary", {}),
         }
     except Exception as e:
@@ -708,5 +716,24 @@ async def review_proactive_summary(request: ProactiveSummaryRequest):
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+@router.get("/review/provider_status")
+async def review_provider_status():
+    """Expose the selected assistant mode without exposing credentials.
+
+    The Flutter companion uses this read-only signal before the first chat so
+    its header does not briefly claim Local mode while the configured Gemini
+    provider is already active.
+    """
+    try:
+        provider = get_assistant_provider()
+        return {
+            "status": "ok",
+            "provider_mode": provider.provider_name,
+            "display_mode": provider.display_mode_name,
+        }
+    except Exception as exc:
+        return {"status": "error", "provider_mode": "local", "message": str(exc)}
 
 

@@ -685,13 +685,14 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
 
         system_instruction = (
             f"{POWERLENS_SYSTEM_KNOWLEDGE}\n\n"
-            "당신은 전력계통 단선도(Single Line Diagram, SLD) 자동인식 및 검수 보조 AI 어시스턴트(PowerLens)입니다.\n"
-            "사용자의 질문에 대해 첨부된 도면 이미지와 현재 도면 검수 상태(Home/Object Review/Bus Mapping/Connection Review/Final/CAD), "
-            "검출된 전체 설비 목록, 선택된 객체/선로, 토폴로지 유효성 검사 이슈, 누락 설비 후보를 바탕으로 전력공학 지식에 기반하여 전문적이고 명쾌하게 답변하세요.\n\n"
+            "당신은 Lensy라는 이름의 PowerLens 동반자입니다. 전력계통 단선도(SLD) 검수와 조류계산을 처음 쓰는 사람도 이해할 수 있게 도와주세요.\n"
+            "현재 단계, 선택된 객체/선로, 실제 검출 목록, 토폴로지 이슈와 조류계산 준비 상태를 근거로 답하고, 근거가 없는 추측은 하지 마세요.\n\n"
             "답변 지침:\n"
-            "1. 한국어로 정중하고 명확하게 답변하세요.\n"
-            "2. [판단] - [근거 요약] - [추천 액션] 3단계 구조로 자연스럽게 설명하세요.\n"
-            "3. 객체나 선로는 사람이 보기 쉬운 Display Label(예: Bus 4, Load 2, T1, G1, Line 1-2)을 우선 지칭하세요."
+            "1. 자연스럽고 친근한 한국어로 먼저 결론을 말하세요.\n"
+            "2. 간단한 질문은 2~5문장으로 짧게 답하고, 필요한 경우에만 짧은 목록을 사용하세요.\n"
+            "3. [판단], [근거 요약], [추천 액션] 같은 보고서 제목이나 내부 필드명, JSON, Chain-of-Thought를 출력하지 마세요.\n"
+            "4. 객체나 선로는 사람이 보기 쉬운 Display Label(예: Bus 4, Load 2, T1, G1, Line 1-2)을 우선 지칭하세요.\n"
+            "5. 화면 조작 명령은 앱의 안전한 UI 브리지가 처리할 수 있으므로, 실제로 실행되지 않은 조작을 완료했다고 주장하지 마세요."
         )
 
         nodes_summary = []
@@ -722,6 +723,21 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
             "lines_summary": lines_summary,
             "missing_candidates": missing_candidates or [],
             "topology_issues": topology_issues or [],
+            # Only pass the small, non-secret runtime state needed for a
+            # context-aware answer. Never forward environment variables or
+            # credentials from the frontend context.
+            "runtime_app_context": {
+                "current_screen": (app_context or {}).get("current_screen"),
+                "workflow_stage": (app_context or {}).get("workflow_stage", stage),
+                "has_diagram": (app_context or {}).get("has_diagram"),
+                "excel_loaded": (app_context or {}).get("excel_loaded"),
+                "excel_mapping_status": (app_context or {}).get("excel_mapping_status"),
+                "powerflow_ready": (app_context or {}).get("powerflow_ready"),
+                "powerflow_running": (app_context or {}).get("powerflow_running"),
+                "powerflow_converged": (app_context or {}).get("powerflow_converged"),
+                "selected_element": (app_context or {}).get("selected_element"),
+                "current_blockers": (app_context or {}).get("current_blockers", []),
+            },
         }
 
         contents = []

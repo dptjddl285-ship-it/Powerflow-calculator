@@ -29,6 +29,12 @@ class PowerLensAssistantContext {
   final bool? powerflowConverged;
 
   final String? selectedElement;
+  final Map<String, dynamic>? selectedNode;
+  final Map<String, dynamic>? selectedLine;
+  final List<Map<String, dynamic>> workingNodes;
+  final List<Map<String, dynamic>> workingLines;
+  final List<Map<String, dynamic>> missingCandidates;
+  final List<Map<String, dynamic>> topologyIssues;
   final List<String> currentBlockers;
 
   const PowerLensAssistantContext({
@@ -53,6 +59,12 @@ class PowerLensAssistantContext {
     this.powerflowRunning = false,
     this.powerflowConverged,
     this.selectedElement,
+    this.selectedNode,
+    this.selectedLine,
+    this.workingNodes = const [],
+    this.workingLines = const [],
+    this.missingCandidates = const [],
+    this.topologyIssues = const [],
     this.currentBlockers = const [],
   });
 
@@ -78,6 +90,12 @@ class PowerLensAssistantContext {
         'powerflow_running': powerflowRunning,
         if (powerflowConverged != null) 'powerflow_converged': powerflowConverged,
         if (selectedElement != null) 'selected_element': selectedElement,
+        if (selectedNode != null) 'selected_node': selectedNode,
+        if (selectedLine != null) 'selected_line': selectedLine,
+        'working_nodes': workingNodes,
+        'working_lines': workingLines,
+        'missing_candidates': missingCandidates,
+        'topology_issues': topologyIssues,
         'current_blockers': currentBlockers,
       };
 
@@ -103,6 +121,12 @@ class PowerLensAssistantContext {
     bool? powerflowRunning,
     bool? powerflowConverged,
     String? selectedElement,
+    Map<String, dynamic>? selectedNode,
+    Map<String, dynamic>? selectedLine,
+    List<Map<String, dynamic>>? workingNodes,
+    List<Map<String, dynamic>>? workingLines,
+    List<Map<String, dynamic>>? missingCandidates,
+    List<Map<String, dynamic>>? topologyIssues,
     List<String>? currentBlockers,
   }) {
     return PowerLensAssistantContext(
@@ -127,6 +151,12 @@ class PowerLensAssistantContext {
       powerflowRunning: powerflowRunning ?? this.powerflowRunning,
       powerflowConverged: powerflowConverged ?? this.powerflowConverged,
       selectedElement: selectedElement ?? this.selectedElement,
+      selectedNode: selectedNode ?? this.selectedNode,
+      selectedLine: selectedLine ?? this.selectedLine,
+      workingNodes: workingNodes ?? this.workingNodes,
+      workingLines: workingLines ?? this.workingLines,
+      missingCandidates: missingCandidates ?? this.missingCandidates,
+      topologyIssues: topologyIssues ?? this.topologyIssues,
       currentBlockers: currentBlockers ?? this.currentBlockers,
     );
   }

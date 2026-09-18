@@ -10,10 +10,16 @@ class ReviewOverlayView extends StatefulWidget {
   final int originalHeight;
   final List<ReviewNodeItem> nodes;
   final ReviewNodeItem? selectedNode;
+  /// Optional key attached to the selected node's rendered bounding box so a
+  /// coaching companion can follow the actual on-screen target.
+  final GlobalKey? focusTargetKey;
   final Function(ReviewNodeItem) onSelectNode;
   final Function(String nodeId, double dx, double dy)? onNodeOffsetChanged;
   final bool showNodeLabels;
   final bool showLineLabels;
+  final bool busFocusOnly;
+  final bool lineFocusOnly;
+  final bool linesOnlyMode;
 
   // Connection Overlay additions
   final List<ReviewLineItem> lines;
@@ -43,10 +49,14 @@ class ReviewOverlayView extends StatefulWidget {
     required this.originalHeight,
     required this.nodes,
     required this.selectedNode,
+    this.focusTargetKey,
     required this.onSelectNode,
     this.onNodeOffsetChanged,
     this.showNodeLabels = true,
     this.showLineLabels = true,
+    this.busFocusOnly = false,
+    this.lineFocusOnly = false,
+    this.linesOnlyMode = false,
     this.lines = const [],
     this.selectedLine,
     this.onSelectLine,
@@ -308,6 +318,10 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                             lines: widget.lines,
                             scaleX: scaleX,
                             scaleY: scaleY,
+                            lineFocusOnly: widget.lineFocusOnly,
+                            linesOnlyMode: widget.linesOnlyMode,
+                            selectedLineId: widget.selectedLine?.lineId,
+                            endpointNodeIds: lineEndpointNodeIds,
                           ),
                         ),
                       ),
@@ -322,6 +336,7 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                               scaleX: scaleX,
                               scaleY: scaleY,
                               pulseValue: pulseVal,
+                              lineFocusOnly: widget.lineFocusOnly,
                             ),
                           ),
                         ),
@@ -329,6 +344,12 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                       // 4. Line Display Label Badges (Draggable at Midpoints)
                       if (widget.showLineLabels)
                         ...widget.lines.map((line) {
+                          if (widget.busFocusOnly ||
+                              (widget.lineFocusOnly &&
+                                  widget.selectedLine != null &&
+                                  widget.selectedLine?.lineId != line.lineId)) {
+                            return const SizedBox.shrink();
+                          }
                           if (line.path.length < 2) {
                             return const SizedBox.shrink();
                           }
@@ -365,9 +386,9 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                   decoration: BoxDecoration(
                                     color: isLineSelected
                                         ? Colors.yellowAccent
-                                        : const Color(0xFFB71C1C).withValues(
-                                            alpha: 0.9,
-                                          ),
+                                        : const Color(
+                                            0xFFB71C1C,
+                                          ).withValues(alpha: 0.9),
                                     borderRadius: BorderRadius.circular(2),
                                     border: Border.all(
                                       color: isLineSelected
@@ -411,8 +432,22 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                             widget.selectedNode?.id == node.id;
                         final bool isEndpointOfSelectedLine =
                             lineEndpointNodeIds.contains(node.id);
-                        final bool isViolation =
-                            widget.violationNodeIds.contains(node.id);
+                        final bool isViolation = widget.violationNodeIds
+                            .contains(node.id);
+
+                        final bool isBus =
+                            node.className.toLowerCase() == 'bus';
+                        final double nodeDimOpacity =
+                            (widget.linesOnlyMode)
+                            ? (isBus ? 0.12 : 0.025)
+                            : (widget.busFocusOnly && !isBus)
+                            ? 0.02
+                            : (widget.lineFocusOnly &&
+                                  widget.selectedLine != null &&
+                                  !isEndpointOfSelectedLine &&
+                                  !isSelected)
+                            ? 0.0
+                            : 1.0;
 
                         final Color classColor = _getClassColor(node.className);
                         final Color statusColor = _getStatusColor(
@@ -422,102 +457,153 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                         final double labelBaseX =
                             renderLeft + node.labelOffsetDx;
                         final double labelBaseY =
-                            renderTop - 12 + node.labelOffsetDy;
+                            renderTop -
+                            (widget.busFocusOnly && isBus && isSelected
+                                ? 20
+                                : 12) +
+                            node.labelOffsetDy;
 
                         final bool isHumanAdded = node.source.contains(
                           'human_added',
                         );
-                        final bool isRejected =
-                            node.reviewStatus == 'REJECTED';
+                        final bool isRejected = node.reviewStatus == 'REJECTED';
 
                         return Stack(
                           clipBehavior: Clip.none,
                           children: [
                             // Bounding Box Rect
                             Positioned(
+                              key: isSelected ? widget.focusTargetKey : null,
                               left: renderLeft,
                               top: renderTop,
-                              child: GestureDetector(
-                                onTap: () {
-                                  if (widget.isManualAddLineMode) {
-                                    if (widget.manualLineStartNode == null) {
+                              child: Opacity(
+                                opacity: nodeDimOpacity,
+                                child: GestureDetector(
+                                  onTap: () {
+                                    if (widget.isManualAddLineMode) {
+                                      if (widget.manualLineStartNode == null) {
+                                        widget.onSelectNode(node);
+                                      } else if (widget
+                                              .manualLineStartNode!
+                                              .id !=
+                                          node.id) {
+                                        widget.onManualAddLineComplete?.call(
+                                          widget.manualLineStartNode!,
+                                          node,
+                                        );
+                                      }
+                                    } else {
                                       widget.onSelectNode(node);
-                                    } else if (widget.manualLineStartNode!.id !=
-                                        node.id) {
-                                      widget.onManualAddLineComplete?.call(
-                                        widget.manualLineStartNode!,
-                                        node,
-                                      );
                                     }
-                                  } else {
-                                    widget.onSelectNode(node);
-                                  }
-                                },
+                                  },
                                   child: Container(
                                     width: renderW,
                                     height: renderH,
                                     decoration: BoxDecoration(
                                       color: isSelected
-                                          ? Colors.yellowAccent.withValues(alpha: 0.2 + 0.15 * pulseVal)
+                                          ? Colors.yellowAccent.withValues(
+                                              alpha: 0.2 + 0.15 * pulseVal,
+                                            )
                                           : (isViolation
-                                              ? Colors.redAccent.withValues(alpha: 0.25 + 0.2 * pulseVal)
-                                              : (isEndpointOfSelectedLine
-                                                  ? Colors.cyanAccent.withValues(alpha: 0.25 + 0.2 * pulseVal)
-                                                  : classColor.withValues(alpha: 0.08))),
+                                                ? Colors.redAccent.withValues(
+                                                    alpha:
+                                                        0.25 + 0.2 * pulseVal,
+                                                  )
+                                                : (isEndpointOfSelectedLine
+                                                      ? Colors.cyanAccent
+                                                            .withValues(
+                                                              alpha:
+                                                                  0.25 +
+                                                                  0.2 *
+                                                                      pulseVal,
+                                                            )
+                                                      : classColor.withValues(
+                                                          alpha: 0.08,
+                                                        ))),
                                       border: Border.all(
                                         color: isSelected
                                             ? Colors.yellowAccent
                                             : (isViolation
-                                                ? Colors.redAccent
-                                                : (isEndpointOfSelectedLine
-                                                      ? Colors.cyanAccent
-                                                      : (isRejected
-                                                          ? Colors.redAccent
-                                                          : classColor))),
+                                                  ? Colors.redAccent
+                                                  : (isEndpointOfSelectedLine
+                                                        ? Colors.cyanAccent
+                                                        : (isRejected
+                                                              ? Colors.redAccent
+                                                              : classColor))),
                                         width: isSelected
                                             ? (2.0 + 1.2 * pulseVal)
                                             : (isViolation
-                                                ? (2.2 + 1.5 * pulseVal)
-                                                : (isEndpointOfSelectedLine
-                                                      ? (2.2 + 1.8 * pulseVal)
-                                                      : 1.2)),
+                                                  ? (2.2 + 1.5 * pulseVal)
+                                                  : (isEndpointOfSelectedLine
+                                                        ? (2.2 + 1.8 * pulseVal)
+                                                        : 1.2)),
                                       ),
                                       borderRadius: BorderRadius.circular(2),
                                       boxShadow: isSelected
                                           ? [
                                               BoxShadow(
-                                                color: Colors.yellowAccent.withValues(alpha: 0.5 + 0.4 * pulseVal),
-                                                blurRadius: 6.0 + 6.0 * pulseVal,
-                                                spreadRadius: 1.0 + 1.5 * pulseVal,
+                                                color: Colors.yellowAccent
+                                                    .withValues(
+                                                      alpha:
+                                                          0.5 + 0.4 * pulseVal,
+                                                    ),
+                                                blurRadius:
+                                                    6.0 + 6.0 * pulseVal,
+                                                spreadRadius:
+                                                    1.0 + 1.5 * pulseVal,
                                               ),
                                             ]
                                           : (isViolation
-                                              ? [
-                                                  BoxShadow(
-                                                    color: Colors.redAccent.withValues(alpha: 0.6 + 0.35 * pulseVal),
-                                                    blurRadius: 8.0 + 8.0 * pulseVal,
-                                                    spreadRadius: 2.0 + 2.0 * pulseVal,
-                                                  ),
-                                                ]
-                                              : (isEndpointOfSelectedLine
-                                                  ? [
-                                                      BoxShadow(
-                                                        color: const Color(0xFF00E5FF).withValues(alpha: 0.6 + 0.35 * pulseVal),
-                                                        blurRadius: 8.0 + 8.0 * pulseVal,
-                                                        spreadRadius: 2.0 + 2.0 * pulseVal,
-                                                      ),
-                                                    ]
-                                                  : null)),
+                                                ? [
+                                                    BoxShadow(
+                                                      color: Colors.redAccent
+                                                          .withValues(
+                                                            alpha:
+                                                                0.6 +
+                                                                0.35 * pulseVal,
+                                                          ),
+                                                      blurRadius:
+                                                          8.0 + 8.0 * pulseVal,
+                                                      spreadRadius:
+                                                          2.0 + 2.0 * pulseVal,
+                                                    ),
+                                                  ]
+                                                : (isEndpointOfSelectedLine
+                                                      ? [
+                                                          BoxShadow(
+                                                            color:
+                                                                const Color(
+                                                                  0xFF00E5FF,
+                                                                ).withValues(
+                                                                  alpha:
+                                                                      0.6 +
+                                                                      0.35 *
+                                                                          pulseVal,
+                                                                ),
+                                                            blurRadius:
+                                                                8.0 +
+                                                                8.0 * pulseVal,
+                                                            spreadRadius:
+                                                                2.0 +
+                                                                2.0 * pulseVal,
+                                                          ),
+                                                        ]
+                                                      : null)),
                                     ),
                                   ),
                                 ),
                               ),
+                            ),
 
-                              // Draggable Label Badge
-                              if (widget.showNodeLabels)
-                                Positioned(
-                                  left: labelBaseX,
-                                  top: labelBaseY,
+                            // Draggable Label Badge
+                            if (widget.showNodeLabels &&
+                                !widget.linesOnlyMode &&
+                                (nodeDimOpacity >= 0.5 || isSelected))
+                              Positioned(
+                                left: labelBaseX,
+                                top: labelBaseY,
+                                child: Opacity(
+                                  opacity: nodeDimOpacity,
                                   child: GestureDetector(
                                     onTap: () => widget.onSelectNode(node),
                                     onPanUpdate: (details) {
@@ -530,111 +616,188 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                     child: MouseRegion(
                                       cursor: SystemMouseCursors.move,
                                       child: Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 2.5,
-                                          vertical: 0.5,
+                                        padding: EdgeInsets.symmetric(
+                                          horizontal:
+                                              (widget.busFocusOnly &&
+                                                  isBus &&
+                                                  isSelected)
+                                              ? 6.0
+                                              : 2.5,
+                                          vertical:
+                                              (widget.busFocusOnly &&
+                                                  isBus &&
+                                                  isSelected)
+                                              ? 2.5
+                                              : 0.5,
                                         ),
                                         decoration: BoxDecoration(
-                                          color: isSelected
-                                              ? Colors.yellowAccent
-                                              : (isViolation
-                                                  ? Colors.redAccent
-                                                  : (isEndpointOfSelectedLine
-                                                      ? Colors.cyanAccent
-                                                      : classColor.withValues(
-                                                          alpha: 0.92,
-                                                        ))),
-                                          borderRadius: BorderRadius.circular(2),
+                                          color:
+                                              (widget.busFocusOnly &&
+                                                  isBus &&
+                                                  isSelected)
+                                              ? const Color(0xFF2563EB)
+                                              : (isSelected
+                                                    ? Colors.yellowAccent
+                                                    : (isViolation
+                                                          ? Colors.redAccent
+                                                          : (isEndpointOfSelectedLine
+                                                                ? Colors
+                                                                      .cyanAccent
+                                                                : classColor
+                                                                      .withValues(
+                                                                        alpha:
+                                                                            0.92,
+                                                                      )))),
+                                          borderRadius: BorderRadius.circular(
+                                            4,
+                                          ),
                                           border: Border.all(
                                             color: isSelected
-                                                ? Colors.orangeAccent
+                                                ? (widget.busFocusOnly && isBus
+                                                      ? Colors.white
+                                                      : Colors.orangeAccent)
                                                 : (isViolation
-                                                    ? Colors.white
-                                                    : (isEndpointOfSelectedLine
-                                                        ? Colors.white
-                                                        : statusColor)),
+                                                      ? Colors.white
+                                                      : (isEndpointOfSelectedLine
+                                                            ? Colors.white
+                                                            : statusColor)),
                                             width: isSelected
-                                                ? 1.2
-                                                : (isViolation || isEndpointOfSelectedLine
-                                                    ? (1.2 + 0.8 * pulseVal)
-                                                    : 0.6),
+                                                ? 1.5
+                                                : (isViolation ||
+                                                          isEndpointOfSelectedLine
+                                                      ? (1.2 + 0.8 * pulseVal)
+                                                      : 0.6),
                                           ),
-                                          boxShadow: isEndpointOfSelectedLine || isViolation
+                                          boxShadow:
+                                              (widget.busFocusOnly &&
+                                                  isBus &&
+                                                  isSelected)
                                               ? [
                                                   BoxShadow(
-                                                    color: (isViolation ? Colors.redAccent : const Color(0xFF00E5FF)).withValues(alpha: 0.6 * pulseVal),
-                                                    blurRadius: 4.0 + 4.0 * pulseVal,
+                                                    color: const Color(
+                                                      0xFF2563EB,
+                                                    ).withValues(alpha: 0.6),
+                                                    blurRadius: 8.0,
+                                                    spreadRadius: 1.5,
                                                   ),
                                                 ]
-                                              : null,
+                                              : (isEndpointOfSelectedLine ||
+                                                        isViolation
+                                                    ? [
+                                                        BoxShadow(
+                                                          color:
+                                                              (isViolation
+                                                                      ? Colors
+                                                                            .redAccent
+                                                                      : const Color(
+                                                                          0xFF00E5FF,
+                                                                        ))
+                                                                  .withValues(
+                                                                    alpha:
+                                                                        0.6 *
+                                                                        pulseVal,
+                                                                  ),
+                                                          blurRadius:
+                                                              4.0 +
+                                                              4.0 * pulseVal,
+                                                        ),
+                                                      ]
+                                                    : null),
                                         ),
                                         child: Row(
                                           mainAxisSize: MainAxisSize.min,
                                           children: [
                                             Icon(
                                               _getClassIcon(node.className),
-                                              size: 8.0,
-                                              color: (isSelected || isEndpointOfSelectedLine)
-                                                  ? Colors.black87
-                                                  : Colors.white,
-                                            ),
-                                          const SizedBox(width: 2.0),
-                                          Text(
-                                            node.effectiveDisplayLabel,
-                                            style: TextStyle(
+                                              size:
+                                                  (widget.busFocusOnly &&
+                                                      isBus &&
+                                                      isSelected)
+                                                  ? 12.0
+                                                  : 8.0,
                                               color:
-                                                  (isSelected ||
-                                                      isEndpointOfSelectedLine)
-                                                  ? Colors.black87
-                                                  : Colors.white,
-                                              fontSize: 7.2,
-                                              fontWeight: FontWeight.bold,
-                                              decoration: isRejected
-                                                  ? TextDecoration.lineThrough
-                                                  : null,
+                                                  (widget.busFocusOnly &&
+                                                      isBus &&
+                                                      isSelected)
+                                                  ? Colors.white
+                                                  : ((isSelected ||
+                                                            isEndpointOfSelectedLine)
+                                                        ? Colors.black87
+                                                        : Colors.white),
                                             ),
-                                          ),
-                                          if (isHumanAdded) ...[
-                                            const SizedBox(width: 1.5),
-                                            Container(
-                                              padding:
-                                                  const EdgeInsets.symmetric(
-                                                    horizontal: 2,
-                                                    vertical: 0.2,
-                                                  ),
-                                              decoration: BoxDecoration(
-                                                color: Colors.purpleAccent,
-                                                borderRadius:
-                                                    BorderRadius.circular(1.5),
+                                            const SizedBox(width: 2.0),
+                                            Text(
+                                              (widget.busFocusOnly &&
+                                                      isBus &&
+                                                      isSelected)
+                                                  ? "Bus #${node.busNumber ?? node.id}"
+                                                  : node.effectiveDisplayLabel,
+                                              style: TextStyle(
+                                                color:
+                                                    (widget.busFocusOnly &&
+                                                        isBus &&
+                                                        isSelected)
+                                                    ? Colors.white
+                                                    : ((isSelected ||
+                                                              isEndpointOfSelectedLine)
+                                                          ? Colors.black87
+                                                          : Colors.white),
+                                                fontSize:
+                                                    (widget.busFocusOnly &&
+                                                        isBus &&
+                                                        isSelected)
+                                                    ? 11.0
+                                                    : 7.2,
+                                                fontWeight: FontWeight.bold,
+                                                decoration: isRejected
+                                                    ? TextDecoration.lineThrough
+                                                    : null,
                                               ),
-                                              child: const Text(
-                                                "HUMAN",
-                                                style: TextStyle(
-                                                  color: Colors.white,
-                                                  fontSize: 6.5,
-                                                  fontWeight: FontWeight.bold,
+                                            ),
+                                            if (isHumanAdded) ...[
+                                              const SizedBox(width: 1.5),
+                                              Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 2,
+                                                      vertical: 0.2,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: Colors.purpleAccent,
+                                                  borderRadius:
+                                                      BorderRadius.circular(
+                                                        1.5,
+                                                      ),
+                                                ),
+                                                child: const Text(
+                                                  "HUMAN",
+                                                  style: TextStyle(
+                                                    color: Colors.white,
+                                                    fontSize: 6.5,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
                                                 ),
                                               ),
-                                            ),
+                                            ],
+                                            if (node.reviewStatus ==
+                                                'CONFIRMED') ...[
+                                              const SizedBox(width: 1.5),
+                                              const Icon(
+                                                Icons.check_circle,
+                                                size: 8,
+                                                color: Colors.greenAccent,
+                                              ),
+                                            ] else if (node.reviewStatus ==
+                                                'SUSPICIOUS') ...[
+                                              const SizedBox(width: 1.5),
+                                              const Icon(
+                                                Icons.warning,
+                                                size: 8,
+                                                color: Colors.orangeAccent,
+                                              ),
+                                            ],
                                           ],
-                                          if (node.reviewStatus ==
-                                              'CONFIRMED') ...[
-                                            const SizedBox(width: 1.5),
-                                            const Icon(
-                                              Icons.check_circle,
-                                              size: 8,
-                                              color: Colors.greenAccent,
-                                            ),
-                                          ] else if (node.reviewStatus ==
-                                              'SUSPICIOUS') ...[
-                                            const SizedBox(width: 1.5),
-                                            const Icon(
-                                              Icons.warning,
-                                              size: 8,
-                                              color: Colors.orangeAccent,
-                                            ),
-                                          ],
-                                        ],
+                                        ),
                                       ),
                                     ),
                                   ),
@@ -688,12 +851,20 @@ class _LeaderLinePainter extends CustomPainter {
   final List<ReviewLineItem> lines;
   final double scaleX;
   final double scaleY;
+  final bool lineFocusOnly;
+  final bool linesOnlyMode;
+  final String? selectedLineId;
+  final Set<String> endpointNodeIds;
 
   _LeaderLinePainter({
     required this.nodes,
     required this.lines,
     required this.scaleX,
     required this.scaleY,
+    this.lineFocusOnly = false,
+    this.linesOnlyMode = false,
+    this.selectedLineId,
+    this.endpointNodeIds = const {},
   });
 
   @override
@@ -709,6 +880,12 @@ class _LeaderLinePainter extends CustomPainter {
 
     // Draw Node Leader Lines
     for (var node in nodes) {
+      if (linesOnlyMode) continue;
+      if (lineFocusOnly &&
+          selectedLineId != null &&
+          !endpointNodeIds.contains(node.id)) {
+        continue;
+      }
       if (node.labelOffsetDx.abs() > 6 || node.labelOffsetDy.abs() > 6) {
         final bbox = node.bbox;
         if (bbox.length < 4) continue;
@@ -727,6 +904,11 @@ class _LeaderLinePainter extends CustomPainter {
 
     // Draw Line Leader Lines
     for (var line in lines) {
+      if (lineFocusOnly &&
+          selectedLineId != null &&
+          line.lineId != selectedLineId) {
+        continue;
+      }
       if (line.labelOffsetDx.abs() > 6 || line.labelOffsetDy.abs() > 6) {
         if (line.path.length < 2) continue;
         final midIdx = line.path.length ~/ 2;
@@ -756,6 +938,7 @@ class _ConnectionOverlayPainter extends CustomPainter {
   final double scaleX;
   final double scaleY;
   final double pulseValue;
+  final bool lineFocusOnly;
 
   _ConnectionOverlayPainter({
     required this.lines,
@@ -763,6 +946,7 @@ class _ConnectionOverlayPainter extends CustomPainter {
     required this.scaleX,
     required this.scaleY,
     required this.pulseValue,
+    this.lineFocusOnly = false,
   });
 
   @override
@@ -777,8 +961,11 @@ class _ConnectionOverlayPainter extends CustomPainter {
       double strokeWidth;
 
       if (isSelected) {
-        strokeColor = Colors.yellowAccent;
-        strokeWidth = 3.5 + pulseValue * 1.5;
+        strokeColor = const Color(0xFF00E5FF); // Bright cyan for focused line
+        strokeWidth = 4.2 + pulseValue * 1.5;
+      } else if (lineFocusOnly && selectedLine != null) {
+        strokeColor = Colors.grey.withValues(alpha: 0.18);
+        strokeWidth = 1.0;
       } else if (status == 'REJECTED') {
         strokeColor = Colors.grey.withValues(alpha: 0.4);
         strokeWidth = 1.5;

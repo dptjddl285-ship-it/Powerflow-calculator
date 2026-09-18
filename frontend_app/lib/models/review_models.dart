@@ -58,15 +58,18 @@ class ReviewNodeItem {
     if (cls == 'bus') {
       if (busNumber != null) return "Bus $busNumber";
       if (displayNumber != null) return "Bus $displayNumber";
-      if (displayLabel != null && displayLabel!.isNotEmpty) return displayLabel!;
+      if (displayLabel != null && displayLabel!.isNotEmpty)
+        return displayLabel!;
       return id.toUpperCase();
     } else if (cls.contains('gen')) {
       if (busNumber != null) return "G_$busNumber";
-      if (displayLabel != null && displayLabel!.isNotEmpty) return displayLabel!;
+      if (displayLabel != null && displayLabel!.isNotEmpty)
+        return displayLabel!;
       return id.toUpperCase();
     } else if (cls.contains('load')) {
       if (busNumber != null) return "Load_$busNumber";
-      if (displayLabel != null && displayLabel!.isNotEmpty) return displayLabel!;
+      if (displayLabel != null && displayLabel!.isNotEmpty)
+        return displayLabel!;
       return id.toUpperCase();
     }
     if (displayLabel != null && displayLabel!.isNotEmpty) {
@@ -96,9 +99,12 @@ class ReviewNodeItem {
           .toList();
     }
 
-    int? bNum = (json['bus_number'] as num?)?.toInt() ??
+    int? bNum =
+        (json['bus_number'] as num?)?.toInt() ??
         (json['display_bus_no'] as num?)?.toInt() ??
-        (json['parameters'] is Map ? (json['parameters']['bus_number'] as num?)?.toInt() : null);
+        (json['parameters'] is Map
+            ? (json['parameters']['bus_number'] as num?)?.toInt()
+            : null);
 
     return ReviewNodeItem(
       id: json['id']?.toString() ?? '',
@@ -117,11 +123,16 @@ class ReviewNodeItem {
       metadata: json['metadata'] is Map<String, dynamic>
           ? json['metadata']
           : {},
-      displayLabel: json['display_name']?.toString() ?? json['display_label']?.toString(),
+      displayLabel:
+          json['display_name']?.toString() ?? json['display_label']?.toString(),
       displayNumber: (json['display_number'] as num?)?.toInt(),
       suggestedBusNumber: (json['suggested_bus_number'] as num?)?.toInt(),
       busNumber: bNum,
-      busNumberStatus: json['bus_number_status']?.toString() ?? (json['parameters'] is Map ? json['parameters']['bus_number_status']?.toString() : null),
+      busNumberStatus:
+          json['bus_number_status']?.toString() ??
+          (json['parameters'] is Map
+              ? json['parameters']['bus_number_status']?.toString()
+              : null),
       busNumberReasons: bReasons,
       connectedBusNumber: (json['connected_bus_number'] as num?)?.toInt(),
       connectedBusId: json['connected_bus_id']?.toString(),
@@ -665,12 +676,14 @@ class ChatMessageItem {
   final String text;
   final DateTime timestamp;
   final String? agentStatus;
+  final String? providerMode;
 
   ChatMessageItem({
     required this.role,
     required this.text,
     DateTime? timestamp,
     this.agentStatus,
+    this.providerMode,
   }) : timestamp = timestamp ?? DateTime.now();
 
   Map<String, String> toPayload() {

@@ -24,9 +24,17 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
   final ScrollController _scrollController = ScrollController();
   final PowerLensAIService _aiService = PowerLensAIService();
 
+  double _panelWidth = 380;
+  double _panelHeight = 520;
+  bool _isMaximized = false;
+  Offset? _resizeOrigin;
+  double _resizeOriginWidth = 380;
+  double _resizeOriginHeight = 520;
+
   @override
   void initState() {
     super.initState();
+    _aiService.refreshProviderStatus();
     _aiService.ensureInitialGreeting(widget.assistantContext.workflowStage);
     _aiService.notifyStageChange(widget.assistantContext);
   }
@@ -60,6 +68,7 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
   }
 
   void _handleSend([String? presetText]) {
+    if (_aiService.isLoading) return;
     final query = presetText ?? _inputController.text;
     if (query.trim().isEmpty) return;
     _inputController.clear();
@@ -71,16 +80,21 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
 
-    final content = Column(
-      children: [
-        _buildHeader(),
-        _buildQuickActions(),
-        const Divider(height: 1, color: Color(0xFFE2E8F0)),
-        Expanded(child: _buildMessageList()),
-        if (_aiService.isLoading) _buildLoadingIndicator(),
-        const Divider(height: 1, color: Color(0xFFE2E8F0)),
-        _buildInputRow(),
-      ],
+    final content = AnimatedBuilder(
+      animation: _aiService,
+      builder: (context, _) => Column(
+        children: [
+          _buildHeader(),
+          _buildQuickActions(),
+          const Divider(height: 1, color: Color(0xFFE2E8F0)),
+          Expanded(child: _buildMessageList()),
+          if (_aiService.isLoading) _buildLoadingIndicator(),
+          if (_aiService.lastFailedQuery != null && !_aiService.isLoading)
+            _buildRetryBanner(),
+          const Divider(height: 1, color: Color(0xFFE2E8F0)),
+          _buildInputRow(),
+        ],
+      ),
     );
 
     if (widget.isMobile) {
@@ -102,10 +116,21 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
       );
     }
 
-    // Desktop Overlay Panel
+    // Desktop overlay panel. The handle is intentionally small and placed at
+    // the bottom-right so resizing never competes with chat controls.
+    final screenSize = MediaQuery.of(context).size;
+    final maxWidth = (screenSize.width * 0.76).clamp(380.0, 980.0).toDouble();
+    final maxHeight = (screenSize.height * 0.84).clamp(520.0, 760.0).toDouble();
+    final panelWidth = _isMaximized
+        ? maxWidth
+        : _panelWidth.clamp(320.0, maxWidth).toDouble();
+    final panelHeight = _isMaximized
+        ? maxHeight
+        : _panelHeight.clamp(420.0, maxHeight).toDouble();
+
     return Container(
-      width: 380,
-      height: 520,
+      width: panelWidth,
+      height: panelHeight,
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
@@ -120,14 +145,73 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: content,
+        child: Stack(
+          children: [
+            Positioned.fill(child: content),
+            Positioned(
+              right: 0,
+              bottom: 0,
+              child: _buildResizeHandle(maxWidth, maxHeight),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildResizeHandle(double maxWidth, double maxHeight) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.resizeDownRight,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onPanStart: (details) {
+          if (_isMaximized) return;
+          _resizeOrigin = details.globalPosition;
+          _resizeOriginWidth = _panelWidth;
+          _resizeOriginHeight = _panelHeight;
+        },
+        onPanUpdate: (details) {
+          if (_isMaximized || _resizeOrigin == null) return;
+          setState(() {
+            _panelWidth =
+                (_resizeOriginWidth +
+                        details.globalPosition.dx -
+                        _resizeOrigin!.dx)
+                    .clamp(320.0, maxWidth)
+                    .toDouble();
+            _panelHeight =
+                (_resizeOriginHeight +
+                        details.globalPosition.dy -
+                        _resizeOrigin!.dy)
+                    .clamp(420.0, maxHeight)
+                    .toDouble();
+          });
+        },
+        onPanEnd: (_) => _resizeOrigin = null,
+        child: const SizedBox(
+          width: 26,
+          height: 26,
+          child: Align(
+            alignment: Alignment.bottomRight,
+            child: Padding(
+              padding: EdgeInsets.all(5),
+              child: Icon(
+                Icons.drag_handle,
+                size: 15,
+                color: Color(0xFF94A3B8),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
 
   Widget _buildHeader() {
+    final bool isGemini = _aiService.geminiStatus == 'CONNECTED';
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
       decoration: const BoxDecoration(
         gradient: LinearGradient(
           colors: [Color(0xFF0F172A), Color(0xFF1E293B)],
@@ -138,45 +222,192 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
       child: Row(
         children: [
           Container(
-            padding: const EdgeInsets.all(6),
+            width: 32,
+            height: 32,
             decoration: BoxDecoration(
               gradient: const LinearGradient(
-                colors: [Color(0xFF3B82F6), Color(0xFF8B5CF6)],
+                colors: [Color(0xFF38BDF8), Color(0xFF2563EB)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
               ),
-              borderRadius: BorderRadius.circular(8),
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white30, width: 1),
             ),
-            child: const Icon(Icons.auto_awesome, color: Colors.white, size: 16),
+            child: const Icon(
+              Icons.smart_toy_rounded,
+              color: Colors.white,
+              size: 18,
+            ),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  "PowerLens AI",
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14,
-                    letterSpacing: -0.2,
-                  ),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      "Lensy AI",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 14,
+                        letterSpacing: -0.2,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 1.5,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isGemini
+                            ? const Color(0x3322C55E)
+                            : const Color(0x3338BDF8),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: isGemini
+                              ? const Color(0xFF22C55E)
+                              : const Color(0xFF38BDF8),
+                          width: 0.8,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: BoxDecoration(
+                              color: isGemini
+                                  ? const Color(0xFF22C55E)
+                                  : const Color(0xFF38BDF8),
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            isGemini ? "Gemini 연결됨" : "로컬 도우미 모드",
+                            style: TextStyle(
+                              color: isGemini
+                                  ? const Color(0xFF86EFAC)
+                                  : const Color(0xFFBAE6FD),
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
                 Text(
-                  "도면 분석 & 조류계산 전역 어시스턴트",
+                  "앱 조작 및 계통 검수 동반자",
                   style: TextStyle(
                     color: Colors.white.withOpacity(0.7),
-                    fontSize: 11,
+                    fontSize: 10.5,
                   ),
                 ),
               ],
             ),
           ),
+          if (!widget.isMobile)
+            IconButton(
+              icon: Icon(
+                _isMaximized ? Icons.close_fullscreen : Icons.open_in_full,
+                color: Colors.white70,
+                size: 18,
+              ),
+              tooltip: _isMaximized ? "채팅 패널 크기 복원" : "채팅 패널 크게 보기",
+              onPressed: () => setState(() => _isMaximized = !_isMaximized),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+            ),
+          if (!widget.isMobile) const SizedBox(width: 8),
+          IconButton(
+            icon: const Icon(
+              Icons.help_outline,
+              color: Colors.white60,
+              size: 18,
+            ),
+            tooltip: "AI 연결 상태 안내",
+            onPressed: () => _showApiStatusDialog(context, isGemini),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+          ),
+          const SizedBox(width: 8),
           IconButton(
             icon: const Icon(Icons.close, color: Colors.white70, size: 20),
             tooltip: "닫기",
             onPressed: widget.onClose,
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showApiStatusDialog(BuildContext context, bool isGemini) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0F172A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            Icon(
+              isGemini ? Icons.check_circle : Icons.info_outline,
+              color: isGemini ? Colors.greenAccent : Colors.cyanAccent,
+              size: 22,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              isGemini ? "Gemini AI 연결 상태" : "로컬 도우미 모드 동작 중",
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              isGemini
+                  ? "✅ 백엔드를 통해 Google Gemini 모델과 실시간 연결되어 자연스러운 심층 추론 대화를 제공하고 있습니다."
+                  : "⚡ 현재 백엔드 로컬 도우미 모드로 동작 중입니다.\n\n"
+                        "• 도면 이동, 샘플 불러오기, 단계 전환, 조류계산 실행 등 모든 앱 조작 명령은 로컬 규칙으로 100% 정상 작동합니다.\n"
+                        "• 백엔드 .env 파일에 GEMINI_API_KEY를 등록하시면 실시간 생성형 AI 추론 기능이 활성화됩니다.",
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 13,
+                height: 1.5,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2563EB),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            child: const Text(
+              "확인",
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
           ),
         ],
       ),
@@ -205,13 +436,19 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
                     color: Color(0xFF2563EB),
                   ),
                 ),
-                avatar: const Icon(Icons.lightbulb_outline, size: 13, color: Color(0xFF2563EB)),
+                avatar: const Icon(
+                  Icons.bolt,
+                  size: 13,
+                  color: Color(0xFF2563EB),
+                ),
                 backgroundColor: Colors.white,
                 side: const BorderSide(color: Color(0xFFBFDBFE)),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 visualDensity: VisualDensity.compact,
-                onPressed: () => _handleSend(act),
+                onPressed: _aiService.isLoading ? null : () => _handleSend(act),
               ),
             );
           }).toList(),
@@ -223,18 +460,18 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
   List<String> _getStageActionButtons(String stage) {
     switch (stage) {
       case 'HOME':
-        return ['다음에 뭐 해?', '현재 상태 요약', '지원 도면 안내'];
+        return ['샘플 도면 불러줘', '사진 다시 넣을래', '이 단계에서 뭘 해야 해?'];
       case 'OBJECT_REVIEW':
-        return ['다음에 뭐 해?', '현재 상태 요약', '검토 필요 항목'];
+        return ['검토 필요 항목', '다음 단계로 넘어가', '이 단계에서 뭘 해야 해?'];
       case 'BUS_MAPPING':
-        return ['다음에 뭐 해?', '미지정 모선 확인', '현재 상태 요약'];
+        return ['미지정 모선 확인', '다음 단계로 넘어가', '이 단계에서 뭘 해야 해?'];
       case 'CONNECTION_REVIEW':
-        return ['다음에 뭐 해?', '연결 오류 점검', '현재 상태 요약'];
+        return ['연결 오류 점검', '다음 단계로 넘어가', '이 단계에서 뭘 해야 해?'];
       case 'FINAL':
       case 'FINAL_CAD':
-        return ['다음에 뭐 해?', '엑셀 제원 연결 방법', '조류계산 조건'];
+        return ['조류계산 해줘', '흐름 방향 보여줘', '이 단계에서 뭘 해야 해?'];
       default:
-        return ['다음에 뭐 해?', '현재 상태 요약'];
+        return ['처음 화면으로 돌아가줘', '다음 단계로 가자', '이 단계에서 뭘 해야 해?'];
     }
   }
 
@@ -270,11 +507,14 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
           const SizedBox(
             width: 14,
             height: 14,
-            child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF2563EB)),
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Color(0xFF2563EB),
+            ),
           ),
           const SizedBox(width: 8),
           Text(
-            "AI 답변 생성 중...",
+            "확인하고 있어요…",
             style: TextStyle(fontSize: 11, color: Colors.blueGrey.shade600),
           ),
         ],
@@ -282,7 +522,38 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
     );
   }
 
+  Widget _buildRetryBanner() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      color: const Color(0xFFFFFBEB),
+      child: Row(
+        children: [
+          const Icon(Icons.cloud_off, size: 15, color: Color(0xFFD97706)),
+          const SizedBox(width: 6),
+          const Expanded(
+            child: Text(
+              "응답이 늦어졌어요. 다시 시도할까요?",
+              style: TextStyle(fontSize: 11, color: Color(0xFF92400E)),
+            ),
+          ),
+          TextButton(
+            onPressed: () =>
+                _aiService.retryLastMessage(widget.assistantContext),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text("다시 시도", style: TextStyle(fontSize: 11)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildInputRow() {
+    final isDisabled = _aiService.isLoading;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       color: Colors.white,
@@ -297,26 +568,35 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
               ),
               child: TextField(
                 controller: _inputController,
+                enabled: !isDisabled,
                 textInputAction: TextInputAction.send,
                 onSubmitted: (_) => _handleSend(),
                 decoration: const InputDecoration(
                   hintText: "질문을 입력하세요 (예: 다음에 뭐 해?)...",
                   hintStyle: TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
                   border: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  contentPadding: EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
                   isDense: true,
                 ),
-                style: const TextStyle(fontSize: 12.5, color: Color(0xFF0F172A)),
+                style: const TextStyle(
+                  fontSize: 12.5,
+                  color: Color(0xFF0F172A),
+                ),
               ),
             ),
           ),
           const SizedBox(width: 6),
           Material(
-            color: const Color(0xFF2563EB),
+            color: isDisabled
+                ? const Color(0xFF94A3B8)
+                : const Color(0xFF2563EB),
             shape: const CircleBorder(),
             child: InkWell(
               customBorder: const CircleBorder(),
-              onTap: () => _handleSend(),
+              onTap: isDisabled ? null : () => _handleSend(),
               child: const Padding(
                 padding: EdgeInsets.all(8.0),
                 child: Icon(Icons.send_rounded, color: Colors.white, size: 16),

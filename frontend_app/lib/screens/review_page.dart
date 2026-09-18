@@ -4,25 +4,32 @@ import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/review_models.dart';
 import '../models/powerlens_assistant_context.dart';
+import '../services/powerlens_ai_service.dart';
 import '../services/review_api_service.dart';
 import '../widgets/review_overlay.dart';
 import '../widgets/powerlens_ai/powerlens_ai_button.dart';
 import '../widgets/powerlens_ai/powerlens_ai_panel.dart';
 
-enum ReviewPhase { objectReview, connectionReview, busMappingReview, verifiedFinal }
-
-enum RightPanelTab { detailReview, agentActivity, agentChat }
+enum ReviewPhase {
+  objectReview,
+  connectionReview,
+  busMappingReview,
+  verifiedFinal,
+}
 
 class ObjectReviewPage extends StatefulWidget {
   final Function(Map<String, dynamic> verifiedSldData)? onProceedToCanvas;
+  final Future<bool> Function()? onRequestHome;
   final Uint8List? initialImageBytes;
   final String? initialFilename;
 
   const ObjectReviewPage({
     super.key,
     this.onProceedToCanvas,
+    this.onRequestHome,
     this.initialImageBytes,
     this.initialFilename,
   });
@@ -35,8 +42,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   final ReviewApiService _apiService = ReviewApiService();
 
   ReviewPhase _currentPhase = ReviewPhase.objectReview;
-  RightPanelTab _activeRightTab = RightPanelTab.detailReview;
-
   ReviewDocument? _document;
   List<ReviewNodeItem> _workingNodes = [];
   List<ReviewLineItem> _workingLines = [];
@@ -68,8 +73,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   String _busFilterStatus = 'ALL'; // ALL, UNCERTAIN, VERIFIED
   int _busPage = 0;
   static const int _busPageSize = 7;
-  final TextEditingController _busNumberEditController = TextEditingController();
+  final TextEditingController _busNumberEditController =
+      TextEditingController();
   Map<String, dynamic>? _importedExcelData;
+
+  // UX Simplification & Focus Modes
+  bool _busFocusOnly = true;
+  bool _lineFocusOnly = true;
+  bool _showAllBusesList = false;
+  bool _showAllLinesList = false;
+  bool _showTopologyDetails = false;
+  final FocusNode _reviewKeyFocusNode = FocusNode();
 
   // Loading & Modes
   bool _isLoading = false;
@@ -142,7 +156,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   // Statistics (Bus Number Mapping)
   List<ReviewNodeItem> get _busNodes => _workingNodes
-      .where((n) => n.className.toLowerCase() == 'bus' && n.reviewStatus != 'REJECTED')
+      .where(
+        (n) =>
+            n.className.toLowerCase() == 'bus' && n.reviewStatus != 'REJECTED',
+      )
       .toList();
   List<int> get _duplicateBusNumbers {
     final counts = <int, int>{};
@@ -157,14 +174,24 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   int get _busUncertainCount {
     final dups = _duplicateBusNumbers;
     return _busNodes
-        .where((n) => n.busNumberStatus != 'VERIFIED' || n.busNumber == null || dups.contains(n.busNumber))
+        .where(
+          (n) =>
+              n.busNumberStatus != 'VERIFIED' ||
+              n.busNumber == null ||
+              dups.contains(n.busNumber),
+        )
         .length;
   }
 
   int get _busVerifiedCount {
     final dups = _duplicateBusNumbers;
     return _busNodes
-        .where((n) => n.busNumberStatus == 'VERIFIED' && n.busNumber != null && !dups.contains(n.busNumber))
+        .where(
+          (n) =>
+              n.busNumberStatus == 'VERIFIED' &&
+              n.busNumber != null &&
+              !dups.contains(n.busNumber),
+        )
         .length;
   }
 
@@ -177,7 +204,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     final blockers = <String>[];
     final dups = _duplicateBusNumbers;
     if (dups.isNotEmpty) {
-      blockers.add('중복된 모선 번호(${dups.map((n) => "#$n").join(", ")})가 존재합니다. 각각 고유한 번호로 수정해 주세요.');
+      blockers.add(
+        '중복된 모선 번호(${dups.map((n) => "#$n").join(", ")})가 존재합니다. 각각 고유한 번호로 수정해 주세요.',
+      );
     }
     final missingCount = _busNodes.where((n) => n.busNumber == null).length;
     if (missingCount > 0) {
@@ -193,13 +222,33 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     final dups = _duplicateBusNumbers;
     List<ReviewNodeItem> list = List.from(_busNodes);
     if (_busFilterStatus == 'UNCERTAIN') {
-      list = list.where((n) => n.busNumberStatus != 'VERIFIED' || n.busNumber == null || dups.contains(n.busNumber)).toList();
+      list = list
+          .where(
+            (n) =>
+                n.busNumberStatus != 'VERIFIED' ||
+                n.busNumber == null ||
+                dups.contains(n.busNumber),
+          )
+          .toList();
     } else if (_busFilterStatus == 'VERIFIED') {
-      list = list.where((n) => n.busNumberStatus == 'VERIFIED' && n.busNumber != null && !dups.contains(n.busNumber)).toList();
+      list = list
+          .where(
+            (n) =>
+                n.busNumberStatus == 'VERIFIED' &&
+                n.busNumber != null &&
+                !dups.contains(n.busNumber),
+          )
+          .toList();
     }
     list.sort((a, b) {
-      final aIsUncertain = a.busNumberStatus != 'VERIFIED' || a.busNumber == null || dups.contains(a.busNumber);
-      final bIsUncertain = b.busNumberStatus != 'VERIFIED' || b.busNumber == null || dups.contains(b.busNumber);
+      final aIsUncertain =
+          a.busNumberStatus != 'VERIFIED' ||
+          a.busNumber == null ||
+          dups.contains(a.busNumber);
+      final bIsUncertain =
+          b.busNumberStatus != 'VERIFIED' ||
+          b.busNumber == null ||
+          dups.contains(b.busNumber);
       if (aIsUncertain && !bIsUncertain) return -1;
       if (!aIsUncertain && bIsUncertain) return 1;
       final na = a.busNumber ?? 9999;
@@ -269,9 +318,37 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   int get _criticalIssuesCount =>
       _topologyIssues.where((i) => i['severity'] == 'error').length;
 
+  List<ReviewLineItem> get _connectionPriorityMissionLines {
+    final mission = _workingLines
+        .where((line) => line.reviewStatus != 'REJECTED')
+        .toList();
+    int rank(ReviewLineItem line) {
+      if (line.validationIssues.isNotEmpty) return 0;
+      if (line.reviewStatus == 'AMBIGUOUS') return 1;
+      if (line.reviewStatus == 'DETECTED') return 2;
+      return 3;
+    }
+
+    mission.sort((a, b) {
+      final rankDiff = rank(a).compareTo(rank(b));
+      return rankDiff == 0 ? a.lineId.compareTo(b.lineId) : rankDiff;
+    });
+    return mission.take(math.min(5, mission.length)).toList();
+  }
+
+  int get _connectionMissionCompleted => _connectionPriorityMissionLines
+      .where((line) => line.reviewStatus == 'CONFIRMED')
+      .length;
+
+  bool get _connectionMissionComplete {
+    final mission = _connectionPriorityMissionLines;
+    return mission.isEmpty || _connectionMissionCompleted == mission.length;
+  }
+
   bool get _canVerifyFinalGate =>
       _lineAmbiguousCount == 0 &&
       _criticalIssuesCount == 0 &&
+      _connectionMissionComplete &&
       _workingLines.where((l) => l.reviewStatus != 'REJECTED').isNotEmpty;
 
   // Filtered & Sorted Working Lines
@@ -315,14 +392,216 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       list.sort((a, b) => a.lineId.compareTo(b.lineId));
     }
 
+    if (_currentPhase == ReviewPhase.connectionReview &&
+        !_connectionFastMode &&
+        _connSortOption == 'SEVERITY' &&
+        _connFilterStatus == 'ALL') {
+      final priorityIds = _connectionPriorityMissionLines
+          .map((line) => line.lineId)
+          .toSet();
+      list.sort((a, b) {
+        final aPriority = priorityIds.contains(a.lineId);
+        final bPriority = priorityIds.contains(b.lineId);
+        if (aPriority != bPriority) return aPriority ? -1 : 1;
+        return a.lineId.compareTo(b.lineId);
+      });
+    }
+
     return list;
   }
 
   bool _isAiPanelOpen = false;
+  bool _busCompletionPromptVisible = false;
+  bool _connectionFastMode = false;
+  bool _connectionFullOverview = false;
+  bool _connectionLinesOnlyMode = false;
+  final GlobalKey _reviewStackKey = GlobalKey();
+  final GlobalKey _reviewFocusTargetKey = GlobalKey();
+  final GlobalKey _objectFilterKey = GlobalKey();
+  final GlobalKey _objectPrimaryActionKey = GlobalKey();
+  final GlobalKey _busPrimaryActionKey = GlobalKey();
+  final GlobalKey _busWholeApproveKey = GlobalKey();
+  final GlobalKey _connectionMissionKey = GlobalKey();
+  final GlobalKey _connectionPrimaryActionKey = GlobalKey();
+  final GlobalKey _connectionGateKey = GlobalKey();
+  final GlobalKey _finalExcelUploadKey = GlobalKey();
+  final GlobalKey _finalCanvasHandoffKey = GlobalKey();
+  Alignment? _manualLensyAlignment;
+  String? _manualLensyTarget;
+  Alignment? _measuredReviewLensyAlignment;
+  String? _measuredReviewLensyTarget;
+  String? _lastReviewLensySyncTarget;
+  String? _stageGateMessage;
+
+  String get _reviewLensyPresenceState {
+    if (_stageGateMessage != null || _isLoading) return 'thinking';
+    if (_isFinalVerified) return 'success';
+    return 'pointing';
+  }
+
+  String get _lensyCoachTarget {
+    if (_document == null) return 'home_upload';
+    switch (_currentPhase) {
+      case ReviewPhase.objectReview:
+        return _objSuspiciousCount > 0 && _selectedNode != null
+            ? 'object_bbox'
+            : 'object_approve';
+      case ReviewPhase.busMappingReview:
+        return 'bus_input';
+      case ReviewPhase.connectionReview:
+        return _connectionMissionComplete
+            ? 'connection_gate'
+            : 'connection_priority';
+      case ReviewPhase.verifiedFinal:
+        return _importedExcelData == null
+            ? 'final_excel_upload'
+            : 'final_canvas_handoff';
+    }
+  }
+
+  Alignment _reviewLensyAlignment(String target, {required bool isMobile}) {
+    if (isMobile) return const Alignment(0.92, 0.86);
+    switch (target) {
+      case 'home_upload':
+        return const Alignment(0.5, 0.02);
+      case 'object_approve':
+        return const Alignment(0.42, 0.72);
+      case 'object_bbox':
+        return const Alignment(-0.42, 0.18);
+      case 'bus_input':
+        return const Alignment(0.42, 0.42);
+      case 'connection_priority':
+        return const Alignment(0.42, 0.08);
+      case 'connection_gate':
+        return const Alignment(0.42, 0.76);
+      case 'final_excel_upload':
+        return const Alignment(0.52, 0.14);
+      case 'final_canvas_handoff':
+        return const Alignment(0.3, 0.62);
+      default:
+        return const Alignment(0.82, 0.82);
+    }
+  }
+
+  GlobalKey? _reviewCoachTargetKey(String target) {
+    switch (target) {
+      case 'object_bbox':
+        return _reviewFocusTargetKey;
+      case 'object_approve':
+        return _objectPrimaryActionKey;
+      case 'bus_input':
+        return _busPrimaryActionKey;
+      case 'connection_priority':
+        return _connectionMissionKey;
+      case 'connection_gate':
+        return _connectionGateKey;
+      case 'final_excel_upload':
+        return _finalExcelUploadKey;
+      case 'final_canvas_handoff':
+        return _finalCanvasHandoffKey;
+      default:
+        return null;
+    }
+  }
+
+  Alignment? _measureReviewCoachTarget(
+    String target, {
+    required bool isMobile,
+  }) {
+    if (isMobile) return null;
+    final targetKey = _reviewCoachTargetKey(target);
+    final targetBox = targetKey?.currentContext?.findRenderObject() as RenderBox?;
+    final stackBox =
+        _reviewStackKey.currentContext?.findRenderObject() as RenderBox?;
+    if (targetBox == null || stackBox == null || !targetBox.hasSize) {
+      return null;
+    }
+    final stackSize = stackBox.size;
+    if (stackSize.width <= 1 || stackSize.height <= 1) return null;
+
+    final targetOrigin = targetBox.localToGlobal(Offset.zero);
+    final stackOrigin = stackBox.localToGlobal(Offset.zero);
+    final targetCenter = targetOrigin - stackOrigin +
+        Offset(targetBox.size.width / 2, targetBox.size.height / 2);
+    // Put Lensy just to the left/above the measured target so the speech
+    // bubble and pointing arm do not cover the control itself.
+    final companionPosition = targetCenter + const Offset(-118, -48);
+    final x = ((companionPosition.dx / stackSize.width) * 2 - 1)
+        .clamp(-0.94, 0.94)
+        .toDouble();
+    final y = ((companionPosition.dy / stackSize.height) * 2 - 1)
+        .clamp(-0.94, 0.94)
+        .toDouble();
+    return Alignment(x, y);
+  }
+
+  void _scheduleReviewLensyTargetSync() {
+    final target = _lensyCoachTarget;
+    if (_lastReviewLensySyncTarget == target &&
+        _measuredReviewLensyTarget == target &&
+        _measuredReviewLensyAlignment != null) {
+      return;
+    }
+    _lastReviewLensySyncTarget = target;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final isMobile = MediaQuery.of(context).size.width < 768;
+      final measured = _measureReviewCoachTarget(target, isMobile: isMobile);
+      if (measured == null || _manualLensyTarget == target) return;
+      if (_measuredReviewLensyTarget == target &&
+          _measuredReviewLensyAlignment != null &&
+          (_measuredReviewLensyAlignment!.x - measured.x).abs() < 0.01 &&
+          (_measuredReviewLensyAlignment!.y - measured.y).abs() < 0.01) {
+        return;
+      }
+      setState(() {
+        _measuredReviewLensyTarget = target;
+        _measuredReviewLensyAlignment = measured;
+      });
+    });
+  }
+
+  Alignment _effectiveReviewLensyAlignment(
+    String target, {
+    required bool isMobile,
+  }) {
+    if (_manualLensyTarget == target && _manualLensyAlignment != null) {
+      return _manualLensyAlignment!;
+    }
+    if (_measuredReviewLensyTarget == target &&
+        _measuredReviewLensyAlignment != null) {
+      return _measuredReviewLensyAlignment!;
+    }
+    final measured = _measureReviewCoachTarget(target, isMobile: isMobile);
+    if (measured != null) return measured;
+    return _reviewLensyAlignment(target, isMobile: isMobile);
+  }
+
+  void _handleReviewLensyDrag(
+    Offset delta,
+    String target, {
+    required bool isMobile,
+  }) {
+    final size = MediaQuery.of(context).size;
+    final current = _effectiveReviewLensyAlignment(
+      target,
+      isMobile: isMobile,
+    );
+    double clampAlignment(double value) =>
+        value.clamp(-0.94, 0.94).toDouble();
+    setState(() {
+      _manualLensyTarget = target;
+      _manualLensyAlignment = Alignment(
+        clampAlignment(current.x + delta.dx / math.max(size.width / 2, 1)),
+        clampAlignment(current.y + delta.dy / math.max(size.height / 2, 1)),
+      );
+    });
+  }
 
   @override
   void initState() {
     super.initState();
+    PowerLensAIService.instance.registerActionHandler(_handleAppAction);
     if (widget.initialImageBytes != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _processImageBytes(
@@ -335,21 +614,291 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   @override
   void dispose() {
+    PowerLensAIService.instance.unregisterActionHandler(_handleAppAction);
+    _busNumberEditController.dispose();
+    _reviewKeyFocusNode.dispose();
     _chatInputController.dispose();
     _chatScrollController.dispose();
     super.dispose();
   }
 
+  Future<bool> _handleAppAction(
+    PowerLensAppAction action,
+    Map<String, dynamic>? params,
+  ) async {
+    if (!mounted) return false;
+
+    switch (action) {
+      case PowerLensAppAction.goHome:
+        final handled = await widget.onRequestHome?.call() ?? true;
+        if (mounted && Navigator.canPop(context)) {
+          Navigator.pop(context);
+        }
+        return handled;
+      case PowerLensAppAction.triggerPhotoUpload:
+        if (_isLoading) return false;
+        return _pickAndUploadImage();
+      case PowerLensAppAction.triggerExcelUpload:
+        if (_isLoading || _currentPhase != ReviewPhase.verifiedFinal) {
+          return false;
+        }
+        await _importExcelInReview();
+        // Opening the native/web picker is the action requested by the user.
+        // A cancelled picker must not be reported as an unsupported action.
+        return true;
+      case PowerLensAppAction.loadSampleDiagram:
+        if (_isLoading) return false;
+        final previousDocumentId = _document?.documentId;
+        await _loadSampleDiagram();
+        return mounted &&
+            _document?.documentId != null &&
+            _document?.documentId != previousDocumentId;
+      case PowerLensAppAction.showReviewIssues:
+        return _focusReviewIssueForAgent();
+      case PowerLensAppAction.approveCurrentAndNext:
+        return _approveCurrentAndNextForAgent();
+      case PowerLensAppAction.connectionFullReview:
+        return _showConnectionFullReviewForAgent();
+      case PowerLensAppAction.connectionLinesOnly:
+        return _showConnectionLinesOnlyForAgent();
+      case PowerLensAppAction.connectionNextLine:
+        return _showConnectionNextLineForAgent();
+      case PowerLensAppAction.handoffToCanvas:
+        if (_currentPhase != ReviewPhase.verifiedFinal ||
+            _verifiedSld == null) {
+          return false;
+        }
+        _handoffToFlutterCanvas();
+        return true;
+      case PowerLensAppAction.goToNextStage:
+        return _advanceReviewStageForAgent();
+      case PowerLensAppAction.goToPreviousStage:
+        return _returnToPreviousReviewStageForAgent();
+      case PowerLensAppAction.runPowerFlow:
+        if (_currentPhase == ReviewPhase.verifiedFinal &&
+            _verifiedSld != null) {
+          _handoffToFlutterCanvas();
+          return true;
+        }
+        return false;
+      case PowerLensAppAction.showPowerFlowResults:
+        return false;
+      case PowerLensAppAction.explainCurrentStage:
+        return false;
+      case PowerLensAppAction.toggleFlowDirection:
+      case PowerLensAppAction.showFlowDirection:
+      case PowerLensAppAction.hideFlowDirection:
+      case PowerLensAppAction.toggleValueLabels:
+      case PowerLensAppAction.showValueLabels:
+      case PowerLensAppAction.hideValueLabels:
+        // These actions belong to the CAD/power-flow canvas. Returning false
+        // lets the root canvas handler receive them through the handler stack.
+        return false;
+    }
+  }
+
+  bool _focusReviewIssueForAgent() {
+    setState(() {
+      if (_currentPhase == ReviewPhase.objectReview) {
+        final suspicious = _workingNodes
+            .where((node) => node.reviewStatus == 'SUSPICIOUS')
+            .toList();
+        if (suspicious.isNotEmpty) {
+          _objFilterStatus = 'SUSPICIOUS';
+          _objFilterClass = 'ALL';
+          _selectedNode = suspicious.first;
+          _nodePage = 0;
+        }
+      } else if (_currentPhase == ReviewPhase.busMappingReview) {
+        _busFilterStatus = 'UNCERTAIN';
+        _busPage = 0;
+        final uncertain = _filteredAndSortedBusNodes;
+        _selectedNode = uncertain.isNotEmpty ? uncertain.first : null;
+        _selectedLine = null;
+      } else if (_currentPhase == ReviewPhase.connectionReview) {
+        _connectionFullOverview = false;
+        _connectionLinesOnlyMode = false;
+        _connectionFastMode = false;
+        _lineFocusOnly = true;
+        _connFilterStatus = _lineAmbiguousCount > 0
+            ? 'AMBIGUOUS'
+            : 'ERROR_ONLY';
+        _linePage = 0;
+        _showAllLinesList = false;
+        _showTopologyDetails = _topologyIssues.isNotEmpty;
+        final issues = _filteredAndSortedWorkingLines;
+        _selectedLine = issues.isNotEmpty ? issues.first : _selectedLine;
+        _selectedNode = null;
+      }
+    });
+
+    if (_selectedNode?.reviewStatus == 'SUSPICIOUS' &&
+        _selectedNode?.agentExplanation == null) {
+      _triggerAgentReviewNode(_selectedNode!);
+    }
+    if (_currentPhase == ReviewPhase.objectReview &&
+        _objSuspiciousCount == 0 &&
+        _unresolvedCandidatesCount == 0) {
+      _focusNextReviewTask();
+    }
+    return true;
+  }
+
+  bool _showConnectionFullReviewForAgent() {
+    if (_currentPhase != ReviewPhase.connectionReview ||
+        _workingLines.isEmpty) {
+      return false;
+    }
+    setState(() {
+      _connectionFullOverview = true;
+      _connectionLinesOnlyMode = false;
+      _connectionFastMode = true;
+      _lineFocusOnly = false;
+      _connFilterStatus = 'ALL';
+      _connSortOption = 'ID_ASC';
+      _showAllLinesList = true;
+      _selectedLine = null;
+      _selectedNode = null;
+      _selectedTopologyIssue = null;
+      _linePage = 0;
+    });
+    return true;
+  }
+
+  bool _showConnectionLinesOnlyForAgent() {
+    if (_currentPhase != ReviewPhase.connectionReview ||
+        _workingLines.isEmpty) {
+      return false;
+    }
+    setState(() {
+      _connectionFullOverview = false;
+      _connectionLinesOnlyMode = true;
+      _connectionFastMode = true;
+      _lineFocusOnly = false;
+      _connFilterStatus = 'ALL';
+      _connSortOption = 'ID_ASC';
+      _showAllLinesList = true;
+      _selectedLine = null;
+      _selectedNode = null;
+      _selectedTopologyIssue = null;
+      _linePage = 0;
+    });
+    return true;
+  }
+
+  bool _showConnectionNextLineForAgent() {
+    if (_currentPhase != ReviewPhase.connectionReview ||
+        _workingLines.isEmpty) {
+      return false;
+    }
+    setState(() {
+      _connectionFullOverview = false;
+      _connectionLinesOnlyMode = false;
+      _connectionFastMode = false;
+      _lineFocusOnly = true;
+      _connFilterStatus = 'ALL';
+      _connSortOption = 'SEVERITY';
+      _showAllLinesList = false;
+    });
+    _selectNextLine();
+    return true;
+  }
+
+  bool _approveCurrentAndNextForAgent() {
+    switch (_currentPhase) {
+      case ReviewPhase.objectReview:
+        if (_selectedNode == null) return false;
+        _confirmNodeAndNext(_selectedNode!);
+        return true;
+      case ReviewPhase.busMappingReview:
+        if (_selectedNode == null) return false;
+        _approveAndNextBus(_selectedNode!);
+        return true;
+      case ReviewPhase.connectionReview:
+        if (_selectedLine == null) return false;
+        _confirmLineAndNext(_selectedLine!);
+        return true;
+      case ReviewPhase.verifiedFinal:
+        return false;
+    }
+  }
+
+  Future<bool> _advanceReviewStageForAgent() async {
+    if (_isLoading) return false;
+
+    switch (_currentPhase) {
+      case ReviewPhase.objectReview:
+        await _verifyObjectGate();
+        return _currentPhase == ReviewPhase.busMappingReview;
+      case ReviewPhase.busMappingReview:
+        await _proceedToConnectionReview();
+        return _currentPhase == ReviewPhase.connectionReview;
+      case ReviewPhase.connectionReview:
+        await _verifyFinalGate();
+        return _currentPhase == ReviewPhase.verifiedFinal;
+      case ReviewPhase.verifiedFinal:
+        if (_verifiedSld?.status != 'VERIFIED') return false;
+        _handoffToFlutterCanvas();
+        return true;
+    }
+  }
+
+  bool _returnToPreviousReviewStageForAgent() {
+    switch (_currentPhase) {
+      case ReviewPhase.objectReview:
+        return false;
+      case ReviewPhase.busMappingReview:
+        setState(() {
+          _currentPhase = ReviewPhase.objectReview;
+          _selectedLine = null;
+          _objFilterStatus = 'SUSPICIOUS';
+          final nodes = _filteredAndSortedWorkingNodes;
+          _selectedNode = nodes.isNotEmpty
+              ? nodes.first
+              : _workingNodes.firstOrNull;
+        });
+        return true;
+      case ReviewPhase.connectionReview:
+        setState(() {
+          _currentPhase = ReviewPhase.busMappingReview;
+          _selectedLine = null;
+          _busFilterStatus = 'ALL';
+          final buses = _filteredAndSortedBusNodes;
+          _selectedNode = buses.isNotEmpty ? buses.first : null;
+        });
+        return true;
+      case ReviewPhase.verifiedFinal:
+        setState(() {
+          _currentPhase = ReviewPhase.connectionReview;
+          _connectionFullOverview = false;
+          _connectionLinesOnlyMode = false;
+          _connectionFastMode = false;
+          _lineFocusOnly = true;
+          _selectedNode = null;
+          final lines = _filteredAndSortedWorkingLines;
+          _selectedLine = lines.isNotEmpty ? lines.first : null;
+        });
+        return true;
+    }
+  }
+
   PowerLensAssistantContext _buildAssistantContext() {
+    final connectionBlockers = <String>[
+      if (_lineAmbiguousCount > 0) '검토가 필요한 결선 $_lineAmbiguousCount개',
+      ..._topologyIssues.map(
+        (issue) => issue['message']?.toString() ?? '연결 구조 오류',
+      ),
+    ];
+
     return PowerLensAssistantContext(
       currentScreen: 'REVIEW_PAGE',
       workflowStage: _currentPhase == ReviewPhase.objectReview
           ? 'OBJECT_REVIEW'
           : _currentPhase == ReviewPhase.busMappingReview
-              ? 'BUS_MAPPING'
-              : _currentPhase == ReviewPhase.connectionReview
-                  ? 'CONNECTION_REVIEW'
-                  : 'FINAL',
+          ? 'BUS_MAPPING'
+          : _currentPhase == ReviewPhase.connectionReview
+          ? 'CONNECTION_REVIEW'
+          : 'FINAL',
       documentId: _document?.documentId ?? '',
       hasDiagram: _document != null,
       totalObjects: _workingNodes.length,
@@ -362,11 +911,40 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       ambiguousConnections: _lineAmbiguousCount,
       topologyIssueCount: _topologyIssues.length,
       finalVerified: _verifiedSld != null,
+      selectedNode: _selectedNode?.toJson(),
+      selectedLine: _selectedLine?.toJson(),
+      workingNodes: _workingNodes.map((node) => node.toJson()).toList(),
+      workingLines: _workingLines.map((line) => line.toJson()).toList(),
+      missingCandidates: _missingCandidates
+          .map((candidate) => candidate.toJson())
+          .toList(),
+      topologyIssues: _topologyIssues,
+      selectedElement: _currentPhase == ReviewPhase.busMappingReview
+          ? (_selectedNode?.busNumber != null
+                ? "Bus ${_selectedNode!.busNumber}"
+                : _selectedNode?.id)
+          : (_currentPhase == ReviewPhase.connectionReview
+                ? _selectedLine?.effectiveDisplayLabel
+                : _selectedNode?.effectiveDisplayLabel),
       currentBlockers: _currentPhase == ReviewPhase.objectReview
           ? _objectGateBlockers
           : _currentPhase == ReviewPhase.busMappingReview
-              ? _busGateBlockers
-              : _topologyIssues.map((e) => e['message']?.toString() ?? '연결 오류').toList(),
+          ? _busGateBlockers
+          : connectionBlockers,
+    );
+  }
+
+  void _announceReviewStage() {
+    final stage = _currentPhase == ReviewPhase.objectReview
+        ? 'OBJECT_REVIEW'
+        : _currentPhase == ReviewPhase.busMappingReview
+        ? 'BUS_MAPPING'
+        : _currentPhase == ReviewPhase.connectionReview
+        ? 'CONNECTION_REVIEW'
+        : 'FINAL';
+    PowerLensAIService.instance.onStageChanged(
+      stage,
+      _buildAssistantContext(),
     );
   }
 
@@ -389,21 +967,27 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _completenessMessageKo = null;
         _humanCompletenessConfirmed = false;
         _objFilterStatus = 'ALL';
+        _objFilterClass = 'ALL';
+        _nodePage = 0;
         _chatHistory.clear();
       });
 
       final doc = await _apiService.detectObjects(bytes, filename);
+      PowerLensAIService.instance.setProviderMode(
+        doc.proactiveSummary?.providerMode,
+      );
 
       setState(() {
         _document = doc;
         _workingNodes = List.from(doc.nodes);
+        final suspiciousNodes = _workingNodes
+            .where((n) => n.reviewStatus == 'SUSPICIOUS')
+            .toList();
+        _objFilterStatus = suspiciousNodes.isNotEmpty ? 'SUSPICIOUS' : 'ALL';
 
-        if (_workingNodes.isNotEmpty) {
-          _selectedNode = _workingNodes.firstWhere(
-            (n) => n.reviewStatus == 'SUSPICIOUS',
-            orElse: () => _workingNodes.first,
-          );
-        }
+        _selectedNode = suspiciousNodes.isNotEmpty
+            ? suspiciousNodes.first
+            : (_workingNodes.isNotEmpty ? _workingNodes.first : null);
         _isLoading = false;
 
         // Greeting and Proactive Summary in Chat
@@ -416,9 +1000,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             role: "assistant",
             text: summaryMsg,
             agentStatus: "LOCAL_READY",
+            providerMode: doc.proactiveSummary?.providerMode,
           ),
         );
       });
+
+      _announceReviewStage();
 
       // Auto run Global Completeness Review
       _triggerCompletenessReview();
@@ -437,21 +1024,23 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     }
   }
 
-  Future<void> _pickAndUploadImage() async {
+  Future<bool> _pickAndUploadImage() async {
     try {
       final ImagePicker picker = ImagePicker();
       final XFile? file = await picker.pickImage(source: ImageSource.gallery);
-      if (file == null) return;
+      if (file == null) return false;
 
       final Uint8List bytes = await file.readAsBytes();
       final String filename = file.name;
       await _processImageBytes(bytes, filename);
+      return true;
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("이미지 선택 오류: $e"), backgroundColor: Colors.red),
         );
       }
+      return false;
     }
   }
 
@@ -506,8 +1095,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         node,
       );
       setState(() {
-        node.agentExplanation =
-            (res['explanation_ko'] ?? res['message_ko'])?.toString();
+        node.agentExplanation = (res['explanation_ko'] ?? res['message_ko'])
+            ?.toString();
         node.recommendedAction = res['recommended_action']?.toString();
         if (res['suggested_classes'] is List) {
           node.suggestedClasses = (res['suggested_classes'] as List)
@@ -518,14 +1107,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     } catch (e) {
       print("Agent 검수 호출 오류: $e");
     }
-  }
-
-  void _confirmNode(ReviewNodeItem node) {
-    setState(() {
-      node.reviewStatus = 'CONFIRMED';
-      node.source = '${node.source}_human_confirmed';
-    });
-    _selectNextSuspiciousNode();
   }
 
   void _rejectNode(ReviewNodeItem node) {
@@ -628,7 +1209,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     final suspicious = _workingNodes
         .where((n) => n.reviewStatus == 'SUSPICIOUS')
         .toList();
-    if (suspicious.isEmpty) return;
+    if (suspicious.isEmpty) {
+      setState(() => _selectedNode = null);
+      return;
+    }
 
     int currentIdx = _selectedNode != null
         ? suspicious.indexOf(_selectedNode!)
@@ -646,7 +1230,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     final suspicious = _workingNodes
         .where((n) => n.reviewStatus == 'SUSPICIOUS')
         .toList();
-    if (suspicious.isEmpty) return;
+    if (suspicious.isEmpty) {
+      setState(() => _selectedNode = null);
+      return;
+    }
 
     int currentIdx = _selectedNode != null
         ? suspicious.indexOf(_selectedNode!)
@@ -661,26 +1248,338 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   void _selectPreviousNode() {
-    if (_workingNodes.isEmpty) return;
-    int currentIdx = _selectedNode != null
-        ? _workingNodes.indexOf(_selectedNode!)
-        : 0;
-    int prevIdx =
-        (currentIdx - 1 + _workingNodes.length) % _workingNodes.length;
+    final list = _filteredAndSortedWorkingNodes;
+    if (list.isEmpty) return;
+    int currentIdx = _selectedNode != null ? list.indexOf(_selectedNode!) : 0;
+    int prevIdx = (currentIdx - 1 + list.length) % list.length;
     setState(() {
-      _selectedNode = _workingNodes[prevIdx];
+      _selectedNode = list[prevIdx];
+      _nodePage = prevIdx ~/ _nodePageSize;
     });
+    if (_selectedNode!.agentExplanation == null &&
+        _selectedNode!.reviewStatus == 'SUSPICIOUS') {
+      _triggerAgentReviewNode(_selectedNode!);
+    }
   }
 
   void _selectNextNode() {
-    if (_workingNodes.isEmpty) return;
-    int currentIdx = _selectedNode != null
-        ? _workingNodes.indexOf(_selectedNode!)
-        : 0;
-    int nextIdx = (currentIdx + 1) % _workingNodes.length;
+    final list = _filteredAndSortedWorkingNodes;
+    if (list.isEmpty) return;
+    int currentIdx = _selectedNode != null ? list.indexOf(_selectedNode!) : 0;
+    int nextIdx = (currentIdx + 1) % list.length;
     setState(() {
-      _selectedNode = _workingNodes[nextIdx];
+      _selectedNode = list[nextIdx];
+      _nodePage = nextIdx ~/ _nodePageSize;
     });
+    if (_selectedNode!.agentExplanation == null &&
+        _selectedNode!.reviewStatus == 'SUSPICIOUS') {
+      _triggerAgentReviewNode(_selectedNode!);
+    }
+  }
+
+  void _confirmNodeAndNext(ReviewNodeItem node) {
+    setState(() {
+      node.reviewStatus = 'CONFIRMED';
+      node.source = '${node.source}_human_confirmed';
+    });
+    if (_objFilterStatus == 'SUSPICIOUS') {
+      _selectNextSuspiciousNode();
+    } else {
+      _selectNextNode();
+    }
+  }
+
+  // --- Sequential Line Review Methods ---
+  void _selectPreviousLine() {
+    final lines = _filteredAndSortedWorkingLines;
+    if (lines.isEmpty) return;
+    int currentIdx = _selectedLine != null ? lines.indexOf(_selectedLine!) : 0;
+    int prevIdx = (currentIdx - 1 + lines.length) % lines.length;
+    setState(() {
+      _selectedLine = lines[prevIdx];
+      _linePage = prevIdx ~/ _linePageSize;
+      _selectedNode = null;
+      _selectedTopologyIssue = null;
+    });
+  }
+
+  void _selectNextLine() {
+    final lines = _filteredAndSortedWorkingLines;
+    if (lines.isEmpty) return;
+    int currentIdx = _selectedLine != null ? lines.indexOf(_selectedLine!) : -1;
+    int nextIdx = currentIdx + 1;
+    if (nextIdx >= lines.length) {
+      nextIdx = 0;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("✓ 모든 선로를 한 바퀴 검토했습니다."),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+    setState(() {
+      _selectedLine = lines[nextIdx];
+      _linePage = nextIdx ~/ _linePageSize;
+      _selectedNode = null;
+      _selectedTopologyIssue = null;
+    });
+  }
+
+  void _confirmLineAndNext(ReviewLineItem line) {
+    setState(() {
+      line.reviewStatus = 'CONFIRMED';
+      line.source = '${line.source}_human_confirmed';
+    });
+    _triggerTopologyValidation();
+    _selectNextLine();
+  }
+
+  void _rejectLineAndNext(ReviewLineItem line) {
+    final lines = _filteredAndSortedWorkingLines;
+    int currentIdx = lines.indexOf(line);
+    setState(() {
+      _workingLines.removeWhere((item) => item.lineId == line.lineId);
+      final remaining = _filteredAndSortedWorkingLines;
+      if (remaining.isNotEmpty) {
+        int nextIdx = currentIdx.clamp(0, remaining.length - 1);
+        _selectedLine = remaining[nextIdx];
+        _linePage = nextIdx ~/ _linePageSize;
+      } else {
+        _selectedLine = null;
+      }
+      _isFinalVerified = false;
+    });
+    _triggerTopologyValidation();
+  }
+
+  // --- Sequential Bus Review Methods ---
+  void _selectPreviousBus() {
+    final buses = _filteredAndSortedBusNodes;
+    if (buses.isEmpty) return;
+    int currentIdx = _selectedNode != null ? buses.indexOf(_selectedNode!) : 0;
+    int prevIdx = (currentIdx - 1 + buses.length) % buses.length;
+    setState(() {
+      _selectedNode = buses[prevIdx];
+      if (_selectedNode!.busNumber != null) {
+        _busNumberEditController.text = _selectedNode!.busNumber.toString();
+      } else {
+        _busNumberEditController.clear();
+      }
+      _busPage = prevIdx ~/ _busPageSize;
+    });
+  }
+
+  void _selectNextBus() {
+    final buses = _filteredAndSortedBusNodes;
+    if (buses.isEmpty) return;
+    int currentIdx = _selectedNode != null ? buses.indexOf(_selectedNode!) : -1;
+    int nextIdx = currentIdx + 1;
+    if (nextIdx >= buses.length) {
+      nextIdx = 0;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("✓ 모든 모선을 한 바퀴 확인했습니다."),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+    setState(() {
+      _selectedNode = buses[nextIdx];
+      if (_selectedNode!.busNumber != null) {
+        _busNumberEditController.text = _selectedNode!.busNumber.toString();
+      } else {
+        _busNumberEditController.clear();
+      }
+      _busPage = nextIdx ~/ _busPageSize;
+    });
+  }
+
+  void _skipAndNextBus() {
+    _selectNextBus();
+  }
+
+  void _approveAndNextBus(ReviewNodeItem busNode) {
+    final text = _busNumberEditController.text.trim();
+    int? num = int.tryParse(text);
+    if (num == null || num <= 0) {
+      num = busNode.busNumber;
+    }
+    if (num == null || num <= 0) {
+      final match = RegExp(r'\d+').firstMatch(busNode.id);
+      if (match != null) num = int.tryParse(match.group(0)!);
+    }
+
+    if (num != null && num > 0) {
+      final conflictBuses = _busNodes
+          .where((b) => b != busNode && b.busNumber == num)
+          .toList();
+      if (conflictBuses.isNotEmpty) {
+        for (final cb in conflictBuses) {
+          cb.busNumberStatus = 'UNCERTAIN';
+          cb.displayLabel = "Bus $num (중복)";
+          if (!cb.busNumberReasons.contains('DUPLICATE_BUS_NUMBER_$num')) {
+            cb.busNumberReasons.add('DUPLICATE_BUS_NUMBER_$num');
+          }
+        }
+        busNode.busNumberStatus = 'UNCERTAIN';
+        if (!busNode.busNumberReasons.contains('DUPLICATE_BUS_NUMBER_$num')) {
+          busNode.busNumberReasons.add('DUPLICATE_BUS_NUMBER_$num');
+        }
+        _propagateBusNumber(busNode, num, isDuplicate: true);
+      } else {
+        busNode.busNumberStatus = 'VERIFIED';
+        busNode.busNumberReasons.removeWhere(
+          (r) => r.startsWith('DUPLICATE_BUS_NUMBER_'),
+        );
+        _propagateBusNumber(busNode, num, isDuplicate: false);
+      }
+    } else {
+      busNode.busNumberStatus = 'VERIFIED';
+    }
+
+    final completedAllBuses = _canVerifyBusGate;
+    _selectNextBus();
+    if (completedAllBuses) _showBusCompletionPrompt();
+  }
+
+  void _showBusCompletionPrompt() {
+    if (!mounted || _busCompletionPromptVisible) return;
+    _busCompletionPromptVisible = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          title: const Row(
+            children: [
+              Icon(Icons.check_circle, color: Color(0xFF16A34A), size: 24),
+              SizedBox(width: 8),
+              Text(
+                '모선 번호 매핑 완료',
+                style: TextStyle(
+                  color: Color(0xFF0F172A),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          content: const Text(
+            '모든 모선 번호가 고유하게 확인되었습니다.\n이제 선로 결선을 우선순위대로 검수할까요?',
+            style: TextStyle(
+              color: Color(0xFF475569),
+              fontSize: 13,
+              height: 1.45,
+            ),
+          ),
+          actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+          actions: [
+            OutlinedButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('한 번 더 보기'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF2563EB),
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('다음 단계로 이동'),
+            ),
+          ],
+        ),
+      ).then((goNext) {
+        if (!mounted) return;
+        _busCompletionPromptVisible = false;
+        if (goNext == true && _currentPhase == ReviewPhase.busMappingReview) {
+          _proceedToConnectionReview();
+        }
+      });
+    });
+  }
+
+  String _getReviewStageSpeechBubbleText() {
+    if (_stageGateMessage != null && _stageGateMessage!.isNotEmpty) {
+      return _stageGateMessage!;
+    }
+    switch (_currentPhase) {
+      case ReviewPhase.objectReview:
+        final suspCount = _objSuspiciousCount;
+        if (suspCount > 0) {
+          final selectedLabel =
+              _selectedNode?.effectiveDisplayLabel ?? '첫 번째 검토 항목';
+          return "객체를 확인해봤어요. 대부분 괜찮고, 제가 다시 봤으면 하는 것부터 보여드릴게요.\n"
+              "$selectedLabel의 검토 이유를 확인한 뒤 [승인하고 다음] 또는 [제외]를 선택해주세요.";
+        }
+        return "객체를 확인해봤어요. 대부분 괜찮고, 제가 다시 봤으면 하는 것부터 보여드릴게요.\n"
+            "검토 필요 항목이 없으니 아래의 [객체 검수 완료]를 눌러 다음 단계로 가면 돼요.";
+      case ReviewPhase.busMappingReview:
+        return "이번에는 모선 번호만 확인하면 돼요. 전체 승인하거나, 하나씩 넘겨보면서 확인할 수 있어요.\n"
+            "추천하는 방법은 오른쪽의 번호 입력 후 [승인하고 다음 모선으로]를 누르는 거예요.";
+      case ReviewPhase.connectionReview:
+        if (_connectionMissionComplete) {
+          return "전체 연결을 먼저 확인해봤어요. 제가 다시 보는 게 좋다고 판단한 선부터 같이 볼게요.\n"
+              "핵심 검토가 끝났으니 아래 [결선 검수 완료]를 눌러 마지막 확인을 시작해주세요.";
+        }
+        return "전체 연결을 먼저 확인해봤어요. 제가 다시 보는 게 좋다고 판단한 선부터 같이 볼게요.\n"
+            "[핵심 검토]에서 [선로 승인하고 다음]을 누르거나, 전체 선로·한 선씩 보기로 바꿀 수 있어요.";
+      case ReviewPhase.verifiedFinal:
+        return _importedExcelData == null
+            ? "검증이 끝났어요. 이제 엑셀 값을 연결하면 실제 조류계산을 할 수 있어요.\n"
+                "상단 또는 가운데의 [엑셀 파일 선택]을 눌러 계통 제원을 연결해주세요."
+            : "엑셀 값이 연결됐어요. 이제 캔버스로 이동하면 실제 조류계산을 실행할 수 있어요.";
+    }
+  }
+
+  void _handleReviewKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return;
+    final focusedWidget = FocusManager.instance.primaryFocus;
+    final isTyping =
+        focusedWidget != null &&
+        (focusedWidget.context?.widget is EditableText);
+    if (isTyping) {
+      if (event.logicalKey == LogicalKeyboardKey.enter) {
+        if (_currentPhase == ReviewPhase.busMappingReview &&
+            _selectedNode != null) {
+          _approveAndNextBus(_selectedNode!);
+        }
+      }
+      return;
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      if (_currentPhase == ReviewPhase.busMappingReview) {
+        _selectNextBus();
+      } else if (_currentPhase == ReviewPhase.connectionReview) {
+        _selectNextLine();
+      } else if (_currentPhase == ReviewPhase.objectReview) {
+        _selectNextNode();
+      }
+    } else if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+      if (_currentPhase == ReviewPhase.busMappingReview) {
+        _selectPreviousBus();
+      } else if (_currentPhase == ReviewPhase.connectionReview) {
+        _selectPreviousLine();
+      } else if (_currentPhase == ReviewPhase.objectReview) {
+        _selectPreviousNode();
+      }
+    } else if (event.logicalKey == LogicalKeyboardKey.enter) {
+      if (_currentPhase == ReviewPhase.busMappingReview &&
+          _selectedNode != null) {
+        _approveAndNextBus(_selectedNode!);
+      } else if (_currentPhase == ReviewPhase.connectionReview &&
+          _selectedLine != null) {
+        _confirmLineAndNext(_selectedLine!);
+      } else if (_currentPhase == ReviewPhase.objectReview &&
+          _selectedNode != null) {
+        _confirmNodeAndNext(_selectedNode!);
+      }
+    }
   }
 
   void _editNodeDisplayLabel(ReviewNodeItem node) {
@@ -790,10 +1689,48 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     );
   }
 
+  Future<bool> _runReviewStageGate({
+    required bool Function() canProceed,
+    required List<String> Function() blockers,
+  }) async {
+    if (!mounted) return false;
+    setState(() {
+      _stageGateMessage = '잠깐만요. 제가 마지막으로 한번 확인하고 넘어갈게요.';
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 360));
+    if (!mounted) return false;
+    if (!canProceed()) {
+      final remaining = blockers();
+      setState(() {
+        _stageGateMessage = remaining.isEmpty
+            ? '마지막 확인에서 아직 완료되지 않은 항목이 있어요. 제가 해당 위치를 가리킬게요.'
+            : '마지막 확인에서 다음 항목이 남아 있어요:\n• ${remaining.join('\n• ')}';
+      });
+      return false;
+    }
+    return true;
+  }
+
   // --- Step 3: Object Gate Verification ---
 
   Future<void> _verifyObjectGate() async {
     if (_document == null) return;
+
+    final gateReady = await _runReviewStageGate(
+      canProceed: () => _canVerifyObjectGate,
+      blockers: () => _objectGateBlockers,
+    );
+    if (!gateReady) {
+      _focusNextReviewTask();
+      if (mounted) {
+        setState(() {
+          _stageGateMessage = _objectGateBlockers.isEmpty
+              ? '마지막 확인에서 다시 볼 객체를 찾았어요. 제가 첫 번째 항목을 가리켰습니다.'
+              : '마지막 확인에서 다음 항목이 남아 있어요:\n• ${_objectGateBlockers.join('\n• ')}';
+        });
+      }
+      return;
+    }
 
     setState(() {
       _isLoading = true;
@@ -813,6 +1750,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _isLoading = false;
         _isObjectVerified = res['gate_status'] == 'OBJECT_VERIFIED';
         _objectGateMessage = res['message']?.toString();
+        _stageGateMessage = _isObjectVerified
+            ? null
+            : (_objectGateMessage ?? '객체 Gate에서 다시 확인이 필요해요.');
       });
 
       if (mounted) {
@@ -834,7 +1774,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         }
       }
     } catch (e) {
-      setState(() => _isLoading = false);
+      setState(() {
+        _isLoading = false;
+        _stageGateMessage = '객체 마지막 확인에 실패했어요. 잠시 후 다시 시도해주세요.';
+      });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("단계 검증 실패: $e"), backgroundColor: Colors.red),
@@ -855,12 +1798,34 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       );
       return;
     }
+    if (_isLoading) return;
+
+    final gateReady = await _runReviewStageGate(
+      canProceed: () => _canVerifyBusGate,
+      blockers: () => _busGateBlockers,
+    );
+    if (!gateReady) {
+      _focusNextReviewTask();
+      if (mounted) {
+        setState(() {
+          _stageGateMessage = _busGateBlockers.isEmpty
+              ? '마지막 확인에서 다시 볼 모선을 찾았어요. 제가 첫 번째 항목을 가리켰습니다.'
+              : '마지막 확인에서 다음 항목이 남아 있어요:\n• ${_busGateBlockers.join('\n• ')}';
+        });
+      }
+      return;
+    }
 
     setState(() {
       _isLoading = true;
+      _stageGateMessage = '확인됐어요. 선로 연결을 준비하고 있어요.';
       _loadingMessage = "확정 객체 기반 결선 인식 중... 🔗";
       _connFilterStatus = 'ALL';
       _linePage = 0;
+      _connectionFullOverview = false;
+      _connectionLinesOnlyMode = false;
+      _connectionFastMode = false;
+      _lineFocusOnly = true;
     });
 
     try {
@@ -895,11 +1860,20 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _selectedLine = _workingLines.isNotEmpty ? _workingLines.first : null;
         _selectedNode = null;
         _isLoading = false;
+        _stageGateMessage = null;
+        _connectionFullOverview = false;
+        _connectionLinesOnlyMode = false;
+        _connectionFastMode = false;
+        _lineFocusOnly = true;
       });
 
+      _announceReviewStage();
       _triggerTopologyValidation();
     } catch (e) {
-      setState(() => _isLoading = false);
+      setState(() {
+        _isLoading = false;
+        _stageGateMessage = '선로 연결 준비에 실패했어요. 현재 단계에서 다시 확인해주세요.';
+      });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("결선 검출 실패: $e"), backgroundColor: Colors.red),
@@ -925,36 +1899,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     } catch (e) {
       print("토폴로지 검증 오류: $e");
     }
-  }
-
-  void _confirmLine(ReviewLineItem line) {
-    setState(() {
-      line.reviewStatus = 'CONFIRMED';
-      line.source = '${line.source}_human_confirmed';
-    });
-    _triggerTopologyValidation();
-  }
-
-  void _rejectLine(ReviewLineItem line) {
-    setState(() {
-      _workingLines.removeWhere((item) => item.lineId == line.lineId);
-      final remainingVisible = _filteredAndSortedWorkingLines;
-      final pageCount = remainingVisible.isEmpty
-          ? 1
-          : (remainingVisible.length / _linePageSize).ceil();
-      if (_linePage >= pageCount) _linePage = pageCount - 1;
-      _selectedLine = remainingVisible.isNotEmpty
-          ? remainingVisible.first
-          : null;
-      _isFinalVerified = false;
-    });
-    _triggerTopologyValidation();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('${line.effectiveDisplayLabel} 선로를 삭제했습니다.'),
-        backgroundColor: Colors.red.shade700,
-      ),
-    );
   }
 
   void _batchConfirmCleanDetectedLines() {
@@ -1075,9 +2019,31 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   Future<void> _verifyFinalGate() async {
     if (_document == null) return;
+    if (_isLoading) return;
+
+    final gateReady = await _runReviewStageGate(
+      canProceed: () => _canVerifyFinalGate,
+      blockers: () => [
+        if (_lineAmbiguousCount > 0) '검토가 필요한 결선 $_lineAmbiguousCount개 승인 또는 제외',
+        if (_criticalIssuesCount > 0) '연결 구조 오류 $_criticalIssuesCount건 해결',
+        if (!_connectionMissionComplete) 'Lensy 핵심 선로 검토 미션 완료',
+        if (_workingLines.where((l) => l.reviewStatus != 'REJECTED').isEmpty)
+          '사용 가능한 선로가 없음',
+      ],
+    );
+    if (!gateReady) {
+      _focusNextReviewTask();
+      if (mounted) {
+        setState(() {
+          _stageGateMessage = '마지막 확인에서 선로 검토가 더 필요해요. 제가 첫 번째 문제 위치를 가리켰습니다.';
+        });
+      }
+      return;
+    }
 
     setState(() {
       _isLoading = true;
+      _stageGateMessage = '확인됐어요. Verified SLD를 만드는 중이에요.';
       _loadingMessage = "최종 토폴로지 검증 및 VerifiedSLD 생성 중... ⚡";
     });
 
@@ -1092,6 +2058,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       setState(() {
         _isLoading = false;
         _isFinalVerified = res['gate_status'] == 'VERIFIED';
+        _stageGateMessage = _isFinalVerified
+            ? null
+            : '최종 확인에서 다시 검토할 선로가 있어요.';
         if (res['verified_sld'] != null) {
           _verifiedSld = VerifiedSLD.fromJson(
             res['verified_sld'] as Map<String, dynamic>,
@@ -1099,8 +2068,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           _currentPhase = ReviewPhase.verifiedFinal;
         }
       });
+      if (_isFinalVerified) _announceReviewStage();
     } catch (e) {
-      setState(() => _isLoading = false);
+      setState(() {
+        _isLoading = false;
+        _stageGateMessage = '최종 확인에 실패했어요. 현재 선로 상태를 다시 확인해주세요.';
+      });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("최종 검증 오류: $e"), backgroundColor: Colors.red),
@@ -1169,6 +2142,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
       final reply = res['reply_ko']?.toString() ?? "답변을 가져올 수 없습니다.";
       final agentStatus = res['agent_status']?.toString();
+      final providerMode = res['provider_mode']?.toString();
 
       setState(() {
         _chatHistory.add(
@@ -1176,6 +2150,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             role: "assistant",
             text: reply,
             agentStatus: agentStatus,
+            providerMode: providerMode,
           ),
         );
         _isChatLoading = false;
@@ -1260,12 +2235,15 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   @override
   Widget build(BuildContext context) {
+    _scheduleReviewLensyTargetSync();
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
         toolbarHeight: 42,
         elevation: 0,
-        shape: const Border(bottom: BorderSide(color: Color(0xFFE2E8F0), width: 1)),
+        shape: const Border(
+          bottom: BorderSide(color: Color(0xFFE2E8F0), width: 1),
+        ),
         title: SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: Row(
@@ -1298,32 +2276,49 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             "① 객체 검수",
             _currentPhase == ReviewPhase.objectReview,
             _isObjectVerified,
+            onTap: () =>
+                setState(() => _currentPhase = ReviewPhase.objectReview),
           ),
           const Icon(Icons.arrow_right, color: Color(0xFF94A3B8), size: 14),
           _buildPhaseBadge(
             "② 모선 매핑",
             _currentPhase == ReviewPhase.busMappingReview,
             _canVerifyBusGate,
+            onTap: _isObjectVerified ? _proceedToBusMappingReview : null,
           ),
           const Icon(Icons.arrow_right, color: Color(0xFF94A3B8), size: 14),
           _buildPhaseBadge(
             "③ 결선 검수",
             _currentPhase == ReviewPhase.connectionReview,
             _workingLines.isNotEmpty && _lineAmbiguousCount == 0,
+            onTap: _canVerifyBusGate ? _proceedToConnectionReview : null,
           ),
           const Icon(Icons.arrow_right, color: Color(0xFF94A3B8), size: 14),
           _buildPhaseBadge(
             "④ 최종 & 엑셀",
             _currentPhase == ReviewPhase.verifiedFinal,
             _isFinalVerified,
+            onTap: (_workingLines.isNotEmpty && _lineAmbiguousCount == 0)
+                ? _verifyFinalGate
+                : null,
           ),
           const SizedBox(width: 8),
           ElevatedButton.icon(
             onPressed: _importExcelInReview,
-            icon: const Icon(Icons.table_chart, size: 14, color: Color(0xFF0D9488)),
+            icon: const Icon(
+              Icons.table_chart,
+              size: 14,
+              color: Color(0xFF0D9488),
+            ),
             label: Text(
-              _importedExcelData != null ? "엑셀 적용됨 (#${_importedExcelData!['slack_bus_number']})" : "엑셀 불러오기",
-              style: const TextStyle(fontSize: 11, color: Color(0xFF0F172A), fontWeight: FontWeight.bold),
+              _importedExcelData != null
+                  ? "엑셀 적용됨 (#${_importedExcelData!['slack_bus_number']})"
+                  : "엑셀 불러오기",
+              style: const TextStyle(
+                fontSize: 11,
+                color: Color(0xFF0F172A),
+                fontWeight: FontWeight.bold,
+              ),
             ),
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFFF1F5F9),
@@ -1336,9 +2331,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           ),
           const SizedBox(width: 6),
           ElevatedButton.icon(
-            onPressed: _pickAndUploadImage,
+            onPressed: () {
+              _pickAndUploadImage();
+            },
             icon: const Icon(Icons.file_upload, size: 15),
-            label: const Text("도면 이미지 업로드", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+            label: const Text(
+              "도면 이미지 업로드",
+              style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+            ),
             style: ElevatedButton.styleFrom(
               backgroundColor: const Color(0xFF2563EB),
               foregroundColor: Colors.white,
@@ -1349,86 +2349,121 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           const SizedBox(width: 8),
         ],
       ),
-      body: Stack(
-        children: [
-          _document == null
-              ? _buildEmptyUploadArea()
-              : _currentPhase == ReviewPhase.verifiedFinal
-              ? _buildVerifiedFinalView()
-              : _buildMainReviewView(),
-          if (_isLoading)
-            Container(
-              color: Colors.black.withValues(alpha: 0.35),
-              child: Center(
-                child: Card(
-                  color: Colors.white,
-                  elevation: 6,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  child: Padding(
-                    padding: const EdgeInsets.all(24.0),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const CircularProgressIndicator(
-                          color: Color(0xFF2563EB),
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          _loadingMessage ?? "처리 중...",
-                          style: const TextStyle(
-                            color: Color(0xFF0F172A),
-                            fontSize: 14,
-                            fontWeight: FontWeight.bold,
+      body: KeyboardListener(
+        focusNode: _reviewKeyFocusNode,
+        autofocus: true,
+        onKeyEvent: _handleReviewKeyEvent,
+        child: Stack(
+          key: _reviewStackKey,
+          children: [
+            _document == null
+                ? _buildEmptyUploadArea()
+                : _currentPhase == ReviewPhase.verifiedFinal
+                ? _buildVerifiedFinalView()
+                : _buildMainReviewView(),
+            if (_isLoading)
+              Container(
+                color: Colors.black.withValues(alpha: 0.35),
+                child: Center(
+                  child: Card(
+                    color: Colors.white,
+                    elevation: 6,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(24.0),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const CircularProgressIndicator(
+                            color: Color(0xFF2563EB),
                           ),
-                        ),
-                      ],
+                          const SizedBox(height: 16),
+                          Text(
+                            _loadingMessage ?? "처리 중...",
+                            style: const TextStyle(
+                              color: Color(0xFF0F172A),
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-          Positioned(
-            right: 20,
-            bottom: 20,
-            child: PowerLensAIFloatingButton(
-              onPressed: () {
-                final isMobile = MediaQuery.of(context).size.width < 768;
-                if (isMobile) {
-                  showModalBottomSheet(
-                    context: context,
-                    isScrollControlled: true,
-                    backgroundColor: Colors.transparent,
-                    builder: (ctx) => PowerLensAIPanel(
-                      assistantContext: _buildAssistantContext(),
-                      onClose: () => Navigator.pop(ctx),
-                      isMobile: true,
+            Positioned.fill(
+              child: Builder(
+                builder: (context) {
+                  final isMobile = MediaQuery.of(context).size.width < 768;
+                  final coachTarget = _lensyCoachTarget;
+                  return AnimatedAlign(
+                    alignment: _effectiveReviewLensyAlignment(
+                      coachTarget,
+                      isMobile: isMobile,
+                    ),
+                    duration: const Duration(milliseconds: 650),
+                    curve: Curves.easeInOutCubic,
+                    child: PowerLensAIFloatingButton(
+                      coachTarget: coachTarget,
+                      onDragDelta: (delta) => _handleReviewLensyDrag(
+                        delta,
+                        coachTarget,
+                        isMobile: isMobile,
+                      ),
+                      onPressed: () {
+                        if (isMobile) {
+                          showModalBottomSheet(
+                            context: context,
+                            isScrollControlled: true,
+                            backgroundColor: Colors.transparent,
+                            builder: (ctx) => PowerLensAIPanel(
+                              assistantContext: _buildAssistantContext(),
+                              onClose: () => Navigator.pop(ctx),
+                              isMobile: true,
+                            ),
+                          );
+                        } else {
+                          setState(() => _isAiPanelOpen = !_isAiPanelOpen);
+                        }
+                      },
+                      isOpen: _isAiPanelOpen,
+                      isMobile: isMobile,
+                      presenceState: _reviewLensyPresenceState,
+                      alertCount: _objSuspiciousCount > 0
+                          ? _objSuspiciousCount
+                          : null,
+                      speechBubbleText: _getReviewStageSpeechBubbleText(),
+                      coachMessage: _getReviewStageSpeechBubbleText(),
                     ),
                   );
-                } else {
-                  setState(() => _isAiPanelOpen = !_isAiPanelOpen);
-                }
-              },
-              isOpen: _isAiPanelOpen,
-              isMobile: MediaQuery.of(context).size.width < 768,
-              alertCount: _objSuspiciousCount > 0 ? _objSuspiciousCount : null,
-            ),
-          ),
-          if (_isAiPanelOpen && MediaQuery.of(context).size.width >= 768)
-            Positioned(
-              right: 20,
-              bottom: 70,
-              child: PowerLensAIPanel(
-                assistantContext: _buildAssistantContext(),
-                onClose: () => setState(() => _isAiPanelOpen = false),
-                isMobile: false,
+                },
               ),
             ),
-        ],
+            if (_isAiPanelOpen && MediaQuery.of(context).size.width >= 768)
+              Positioned(
+                right: 20,
+                bottom: 130,
+                child: PowerLensAIPanel(
+                  assistantContext: _buildAssistantContext(),
+                  onClose: () => setState(() => _isAiPanelOpen = false),
+                  isMobile: false,
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildPhaseBadge(String label, bool isCurrent, bool isCompleted) {
+  Widget _buildPhaseBadge(
+    String label,
+    bool isCurrent,
+    bool isCompleted, {
+    VoidCallback? onTap,
+  }) {
     Color bg = const Color(0xFFF1F5F9);
     Color text = const Color(0xFF64748B);
     Color border = const Color(0xFFE2E8F0);
@@ -1442,7 +2477,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       border = const Color(0xFF93C5FD);
     }
 
-    return Container(
+    final badge = Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
         color: bg,
@@ -1458,22 +2493,33 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         ),
       ),
     );
+
+    if (onTap != null) {
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(4),
+          child: badge,
+        ),
+      );
+    }
+    return badge;
   }
 
   Widget _buildEmptyUploadArea() {
     return Center(
       child: GestureDetector(
-        onTap: _pickAndUploadImage,
+        onTap: () {
+          _pickAndUploadImage();
+        },
         child: Container(
           width: 550,
           height: 320,
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: const Color(0xFFCBD5E1),
-              width: 1.5,
-            ),
+            border: Border.all(color: const Color(0xFFCBD5E1), width: 1.5),
             boxShadow: const [
               BoxShadow(
                 color: Colors.black12,
@@ -1509,7 +2555,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   ElevatedButton.icon(
-                    onPressed: _pickAndUploadImage,
+                    onPressed: () {
+                      _pickAndUploadImage();
+                    },
                     icon: const Icon(Icons.add_photo_alternate, size: 16),
                     label: const Text("도면 파일 선택"),
                     style: ElevatedButton.styleFrom(
@@ -1524,7 +2572,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   const SizedBox(width: 12),
                   OutlinedButton.icon(
                     onPressed: _loadSampleDiagram,
-                    icon: const Icon(Icons.flash_on, size: 16, color: Color(0xFFD97706)),
+                    icon: const Icon(
+                      Icons.flash_on,
+                      size: 16,
+                      color: Color(0xFFD97706),
+                    ),
                     label: const Text("IEEE-24 샘플로 체험"),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: const Color(0xFFD97706),
@@ -1557,7 +2609,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       setState(() => _isLoading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("샘플 도면 불러오기 실패: $e"), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text("샘플 도면 불러오기 실패: $e"),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     }
@@ -1594,7 +2649,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _unresolvedCandidatesCount == 0 &&
         !_humanCompletenessConfirmed;
     setState(() {
-      _activeRightTab = RightPanelTab.detailReview;
       if (_currentPhase == ReviewPhase.objectReview) {
         final suspicious = _workingNodes
             .where((node) => node.reviewStatus == 'SUSPICIOUS')
@@ -1604,7 +2658,18 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           _objFilterClass = 'ALL';
           _selectedNode = suspicious.first;
         }
-      } else {
+      } else if (_currentPhase == ReviewPhase.busMappingReview) {
+        _busFilterStatus = 'UNCERTAIN';
+        _busPage = 0;
+        final buses = _filteredAndSortedBusNodes;
+        _selectedNode = buses.isNotEmpty ? buses.first : null;
+        _selectedLine = null;
+      } else if (_currentPhase == ReviewPhase.connectionReview) {
+        _connFilterStatus = _lineAmbiguousCount > 0
+            ? 'AMBIGUOUS'
+            : 'ERROR_ONLY';
+        _showAllLinesList = false;
+        _showTopologyDetails = _topologyIssues.isNotEmpty;
         final lines = _filteredAndSortedWorkingLines;
         final nextIndex = lines.indexWhere(
           (line) =>
@@ -1686,6 +2751,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     !line.source.contains('human'),
               )
               .length;
+    final providerMode = _document?.proactiveSummary?.providerMode
+        .toLowerCase();
+    final providerLabel = providerMode?.startsWith('gemini') == true
+        ? 'Gemini'
+        : 'Local';
 
     return Container(
       margin: const EdgeInsets.fromLTRB(8, 2, 8, 2),
@@ -1695,11 +2765,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: const Color(0xFFE2E8F0)),
         boxShadow: const [
-          BoxShadow(
-            color: Colors.black12,
-            blurRadius: 4,
-            offset: Offset(0, 1),
-          ),
+          BoxShadow(color: Colors.black12, blurRadius: 4, offset: Offset(0, 1)),
         ],
       ),
       child: Row(
@@ -1734,9 +2800,37 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 ),
                 Text(
                   isObjectPhase ? '객체 인식 검수' : '결선 및 전기 검수',
-                  style: const TextStyle(color: Color(0xFF64748B), fontSize: 8.5),
+                  style: const TextStyle(
+                    color: Color(0xFF64748B),
+                    fontSize: 8.5,
+                  ),
                 ),
               ],
+            ),
+          ),
+          const SizedBox(width: 6),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+            decoration: BoxDecoration(
+              color: providerLabel == 'Gemini'
+                  ? const Color(0xFFECFDF5)
+                  : const Color(0xFFF8FAFC),
+              borderRadius: BorderRadius.circular(9),
+              border: Border.all(
+                color: providerLabel == 'Gemini'
+                    ? const Color(0xFF86EFAC)
+                    : const Color(0xFFCBD5E1),
+              ),
+            ),
+            child: Text(
+              providerLabel,
+              style: TextStyle(
+                color: providerLabel == 'Gemini'
+                    ? const Color(0xFF15803D)
+                    : const Color(0xFF64748B),
+                fontSize: 9,
+                fontWeight: FontWeight.w800,
+              ),
             ),
           ),
           const SizedBox(width: 6),
@@ -1770,7 +2864,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               hasNextTask ? Icons.arrow_forward_rounded : Icons.check_rounded,
               size: 13,
             ),
-            label: Text(hasNextTask ? '다음 검토' : '정리 완료', style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold)),
+            label: Text(
+              hasNextTask ? '다음 검토' : '정리 완료',
+              style: const TextStyle(
+                fontSize: 10.5,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
             style: OutlinedButton.styleFrom(
               foregroundColor: const Color(0xFF2563EB),
               side: const BorderSide(color: Color(0xFF3B82F6)),
@@ -1809,7 +2909,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                       decoration: const BoxDecoration(
                         color: Colors.white,
                         border: Border(
-                          bottom: BorderSide(color: Color(0xFFE2E8F0), width: 1),
+                          bottom: BorderSide(
+                            color: Color(0xFFE2E8F0),
+                            width: 1,
+                          ),
                         ),
                       ),
                       child: SingleChildScrollView(
@@ -1841,7 +2944,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                       ? const Color(0xFF2563EB)
                                       : const Color(0xFF64748B),
                                   fontSize: 10.5,
-                                  fontWeight: _showCanvasLabels ? FontWeight.bold : FontWeight.normal,
+                                  fontWeight: _showCanvasLabels
+                                      ? FontWeight.bold
+                                      : FontWeight.normal,
                                 ),
                               ),
                               selected: _showCanvasLabels,
@@ -1916,7 +3021,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                   icon: const Icon(Icons.done_all, size: 13),
                                   label: Text(
                                     "정상 객체 승인 ($_objDetectedCount)",
-                                    style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold),
+                                    style: const TextStyle(
+                                      fontSize: 10.5,
+                                      fontWeight: FontWeight.bold,
+                                    ),
                                   ),
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: const Color(0xFF0D9488),
@@ -1951,11 +3059,15 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                               if (_isManualAddMode) ...[
                                 const SizedBox(width: 6),
                                 Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                  ),
                                   decoration: BoxDecoration(
                                     color: const Color(0xFFF8FAFC),
                                     borderRadius: BorderRadius.circular(4),
-                                    border: Border.all(color: const Color(0xFFCBD5E1)),
+                                    border: Border.all(
+                                      color: const Color(0xFFCBD5E1),
+                                    ),
                                   ),
                                   child: DropdownButton<String>(
                                     value: _manualAddClass,
@@ -1997,7 +3109,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                   icon: const Icon(Icons.done_all, size: 13),
                                   label: Text(
                                     "정상 결선 승인 ($_lineDetectedCount)",
-                                    style: const TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold),
+                                    style: const TextStyle(
+                                      fontSize: 10.5,
+                                      fontWeight: FontWeight.bold,
+                                    ),
                                   ),
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: const Color(0xFF0D9488),
@@ -2049,13 +3164,15 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                           children: [
                             Positioned.fill(
                               child: ReviewOverlayView(
+                                focusTargetKey: _reviewFocusTargetKey,
                                 imageBytes: _document!.rawBytes,
                                 imageUrl: _apiService.getOriginalImageUrl(
                                   _document!.documentId,
                                 ),
                                 originalWidth: _document!.image.width,
                                 originalHeight: _document!.image.height,
-                                nodes: (_currentPhase == ReviewPhase.objectReview)
+                                nodes:
+                                    (_currentPhase == ReviewPhase.objectReview)
                                     ? _filteredAndSortedWorkingNodes
                                     : _workingNodes,
                                 selectedNode: _selectedNode,
@@ -2066,15 +3183,21 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                         _manualLineStartNode == null) {
                                       _manualLineStartNode = node;
                                     }
-                                    if (_currentPhase == ReviewPhase.connectionReview) {
-                                      final matchedIssue = _topologyIssues.firstWhere(
-                                        (i) => (i['component_ids'] as List? ?? [])
-                                            .map((e) => e.toString())
-                                            .contains(node.id),
-                                        orElse: () => {},
-                                      );
+                                    if (_currentPhase ==
+                                        ReviewPhase.connectionReview) {
+                                      final matchedIssue = _topologyIssues
+                                          .firstWhere(
+                                            (i) =>
+                                                (i['component_ids'] as List? ??
+                                                        [])
+                                                    .map((e) => e.toString())
+                                                    .contains(node.id),
+                                            orElse: () => {},
+                                          );
                                       _selectedTopologyIssue =
-                                          matchedIssue.isNotEmpty ? matchedIssue : null;
+                                          matchedIssue.isNotEmpty
+                                          ? matchedIssue
+                                          : null;
                                       _selectedLine = null;
                                     }
                                   });
@@ -2096,14 +3219,28 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                 },
                                 showNodeLabels: _showCanvasLabels,
                                 showLineLabels: _showCanvasLabels,
-                                lines: (_currentPhase == ReviewPhase.objectReview)
+                                busFocusOnly:
+                                    (_currentPhase ==
+                                        ReviewPhase.busMappingReview &&
+                                    _busFocusOnly),
+                                lineFocusOnly:
+                                    (_currentPhase ==
+                                        ReviewPhase.connectionReview &&
+                                    _lineFocusOnly),
+                                linesOnlyMode:
+                                    (_currentPhase ==
+                                        ReviewPhase.connectionReview &&
+                                    _connectionLinesOnlyMode),
+                                lines:
+                                    (_currentPhase == ReviewPhase.objectReview)
                                     ? const []
                                     : _workingLines,
                                 selectedLine: _selectedLine,
                                 onSelectLine: (line) {
                                   setState(() {
                                     _selectedLine = line;
-                                    if (_currentPhase == ReviewPhase.connectionReview) {
+                                    if (_currentPhase ==
+                                        ReviewPhase.connectionReview) {
                                       _selectedNode = null;
                                       _selectedTopologyIssue = null;
                                     }
@@ -2131,7 +3268,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                 onManualAddComplete: _handleManualAddComplete,
                                 isManualAddLineMode: _isManualAddLineMode,
                                 manualLineStartNode: _manualLineStartNode,
-                                onManualAddLineComplete: _handleManualAddLineComplete,
+                                onManualAddLineComplete:
+                                    _handleManualAddLineComplete,
                                 violationNodeIds: _topologyIssues
                                     .where((i) => i['severity'] == 'error')
                                     .expand(
@@ -2141,53 +3279,213 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                     .toSet(),
                               ),
                             ),
-                            // Floating HUD on Canvas: Direct Label Toggle
+                            // Floating HUD on Canvas: Direct Label & Focus Toggles
                             Positioned(
                               top: 10,
                               right: 12,
-                              child: Material(
-                                color: Colors.transparent,
-                                child: InkWell(
-                                  onTap: () => setState(() => _showCanvasLabels = !_showCanvasLabels),
-                                  borderRadius: BorderRadius.circular(6),
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withValues(alpha: 0.95),
-                                      borderRadius: BorderRadius.circular(6),
-                                      border: Border.all(
-                                        color: _showCanvasLabels ? const Color(0xFF3B82F6) : const Color(0xFFF59E0B),
-                                        width: 1.2,
-                                      ),
-                                      boxShadow: const [
-                                        BoxShadow(
-                                          color: Colors.black12,
-                                          blurRadius: 4,
-                                          offset: Offset(0, 2),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  if (_currentPhase ==
+                                      ReviewPhase.busMappingReview) ...[
+                                    Material(
+                                      color: Colors.transparent,
+                                      child: InkWell(
+                                        onTap: () => setState(
+                                          () => _busFocusOnly = !_busFocusOnly,
                                         ),
-                                      ],
-                                    ),
-                                    child: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Icon(
-                                          _showCanvasLabels ? Icons.visibility : Icons.visibility_off,
-                                          size: 14,
-                                          color: _showCanvasLabels ? const Color(0xFF2563EB) : const Color(0xFFD97706),
-                                        ),
-                                        const SizedBox(width: 5),
-                                        Text(
-                                          _showCanvasLabels ? "라벨 숨기기" : "라벨 보이기",
-                                          style: TextStyle(
-                                            color: _showCanvasLabels ? const Color(0xFF0F172A) : const Color(0xFFD97706),
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.bold,
+                                        borderRadius: BorderRadius.circular(6),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 10,
+                                            vertical: 6,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: _busFocusOnly
+                                                ? const Color(0xFFEFF6FF)
+                                                : Colors.white.withValues(
+                                                    alpha: 0.95,
+                                                  ),
+                                            borderRadius: BorderRadius.circular(
+                                              6,
+                                            ),
+                                            border: Border.all(
+                                              color: _busFocusOnly
+                                                  ? const Color(0xFF2563EB)
+                                                  : const Color(0xFFCBD5E1),
+                                              width: 1.2,
+                                            ),
+                                            boxShadow: const [
+                                              BoxShadow(
+                                                color: Colors.black12,
+                                                blurRadius: 4,
+                                                offset: Offset(0, 2),
+                                              ),
+                                            ],
+                                          ),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(
+                                                Icons.center_focus_strong,
+                                                size: 14,
+                                                color: _busFocusOnly
+                                                    ? const Color(0xFF2563EB)
+                                                    : const Color(0xFF64748B),
+                                              ),
+                                              const SizedBox(width: 5),
+                                              Text(
+                                                _busFocusOnly
+                                                    ? "버스만 집중 모드 (ON)"
+                                                    : "전체 기기 표시 (OFF)",
+                                                style: TextStyle(
+                                                  color: _busFocusOnly
+                                                      ? const Color(0xFF2563EB)
+                                                      : const Color(0xFF64748B),
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                            ],
                                           ),
                                         ),
-                                      ],
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                  ],
+                                  if (_currentPhase ==
+                                      ReviewPhase.connectionReview) ...[
+                                    Material(
+                                      color: Colors.transparent,
+                                      child: InkWell(
+                                        onTap: () => setState(
+                                          () =>
+                                              _lineFocusOnly = !_lineFocusOnly,
+                                        ),
+                                        borderRadius: BorderRadius.circular(6),
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 10,
+                                            vertical: 6,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: _lineFocusOnly
+                                                ? const Color(0xFFEFF6FF)
+                                                : Colors.white.withValues(
+                                                    alpha: 0.95,
+                                                  ),
+                                            borderRadius: BorderRadius.circular(
+                                              6,
+                                            ),
+                                            border: Border.all(
+                                              color: _lineFocusOnly
+                                                  ? const Color(0xFF0284C7)
+                                                  : const Color(0xFFCBD5E1),
+                                              width: 1.2,
+                                            ),
+                                            boxShadow: const [
+                                              BoxShadow(
+                                                color: Colors.black12,
+                                                blurRadius: 4,
+                                                offset: Offset(0, 2),
+                                              ),
+                                            ],
+                                          ),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(
+                                                Icons.timeline,
+                                                size: 14,
+                                                color: _lineFocusOnly
+                                                    ? const Color(0xFF0284C7)
+                                                    : const Color(0xFF64748B),
+                                              ),
+                                              const SizedBox(width: 5),
+                                              Text(
+                                                _lineFocusOnly
+                                                    ? "선로만 집중 모드 (ON)"
+                                                    : "전체 선로 표시 (OFF)",
+                                                style: TextStyle(
+                                                  color: _lineFocusOnly
+                                                      ? const Color(0xFF0284C7)
+                                                      : const Color(0xFF64748B),
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                  ],
+                                  Material(
+                                    color: Colors.transparent,
+                                    child: InkWell(
+                                      onTap: () => setState(
+                                        () => _showCanvasLabels =
+                                            !_showCanvasLabels,
+                                      ),
+                                      borderRadius: BorderRadius.circular(6),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 10,
+                                          vertical: 6,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white.withValues(
+                                            alpha: 0.95,
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            6,
+                                          ),
+                                          border: Border.all(
+                                            color: _showCanvasLabels
+                                                ? const Color(0xFF3B82F6)
+                                                : const Color(0xFFF59E0B),
+                                            width: 1.2,
+                                          ),
+                                          boxShadow: const [
+                                            BoxShadow(
+                                              color: Colors.black12,
+                                              blurRadius: 4,
+                                              offset: Offset(0, 2),
+                                            ),
+                                          ],
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              _showCanvasLabels
+                                                  ? Icons.visibility
+                                                  : Icons.visibility_off,
+                                              size: 14,
+                                              color: _showCanvasLabels
+                                                  ? const Color(0xFF2563EB)
+                                                  : const Color(0xFFD97706),
+                                            ),
+                                            const SizedBox(width: 5),
+                                            Text(
+                                              _showCanvasLabels
+                                                  ? "라벨 숨기기"
+                                                  : "라벨 보이기",
+                                              style: TextStyle(
+                                                color: _showCanvasLabels
+                                                    ? const Color(0xFF0F172A)
+                                                    : const Color(0xFFD97706),
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
                                     ),
                                   ),
-                                ),
+                                ],
                               ),
                             ),
                           ],
@@ -2200,36 +3498,39 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
               const VerticalDivider(width: 1, color: Color(0xFFE2E8F0)),
 
-              // Right Column: Tabbed Panel (Detail Review vs Agent Chat)
+              // Right Column: One focused review panel. Lensy AI is the only
+              // assistant entry point; legacy activity/chat widgets remain in
+              // the source for compatibility but are intentionally not
+              // exposed as competing tabs here.
               Expanded(
                 flex: 35,
                 child: Container(
                   color: Colors.white,
                   child: Column(
                     children: [
-                      // Panel Tab Header
                       _buildRightPanelHeader(),
                       Expanded(
-                        child: _activeRightTab == RightPanelTab.detailReview
-                            ? Column(
-                                children: [
-                                  Expanded(
-                                    child: SingleChildScrollView(
-                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                                      child: _currentPhase == ReviewPhase.busMappingReview
-                                          ? _buildBusMappingReviewSidePanel()
-                                          : isConnectionPhase
-                                          ? _buildConnectionReviewSidePanel()
-                                          : _buildObjectReviewSidePanel(),
-                                    ),
-                                  ),
-                                  const Divider(color: Color(0xFFE2E8F0), height: 1),
-                                  _buildBottomGateFooter(),
-                                ],
-                              )
-                            : (_activeRightTab == RightPanelTab.agentActivity
-                                ? _buildAgentActivitySidePanel()
-                                : _buildAgentChatSidePanel()),
+                        child: Column(
+                          children: [
+                            Expanded(
+                              child: SingleChildScrollView(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 8,
+                                ),
+                                child:
+                                    _currentPhase ==
+                                        ReviewPhase.busMappingReview
+                                    ? _buildBusMappingReviewSidePanel()
+                                    : isConnectionPhase
+                                    ? _buildConnectionReviewSidePanel()
+                                    : _buildObjectReviewSidePanel(),
+                              ),
+                            ),
+                            const Divider(color: Color(0xFFE2E8F0), height: 1),
+                            _buildBottomGateFooter(),
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -2246,46 +3547,47 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     return Container(
       decoration: const BoxDecoration(
         color: Colors.white,
-        border: Border(
-          bottom: BorderSide(color: Color(0xFFE2E8F0), width: 1),
-        ),
+        border: Border(bottom: BorderSide(color: Color(0xFFE2E8F0), width: 1)),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       child: Row(
         children: [
-          Expanded(
-            child: SegmentedButton<RightPanelTab>(
-              segments: const [
-                ButtonSegment(
-                  value: RightPanelTab.detailReview,
-                  label: Text("검수", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                  icon: Icon(Icons.fact_check_outlined, size: 14),
-                ),
-                ButtonSegment(
-                  value: RightPanelTab.agentActivity,
-                  label: Text("활동기록", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                  icon: Icon(Icons.history_edu, size: 14),
-                ),
-                ButtonSegment(
-                  value: RightPanelTab.agentChat,
-                  label: Text("AI도우미", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                  icon: Icon(Icons.chat_bubble_outline, size: 14),
+          const Icon(
+            Icons.fact_check_outlined,
+            size: 16,
+            color: Color(0xFF2563EB),
+          ),
+          const SizedBox(width: 6),
+          const Text(
+            "현재 검수 작업",
+            style: TextStyle(
+              color: Color(0xFF0F172A),
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const Spacer(),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+            decoration: BoxDecoration(
+              color: const Color(0xFFEFF6FF),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: const Color(0xFFBFDBFE)),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.auto_awesome, size: 12, color: Color(0xFF2563EB)),
+                SizedBox(width: 4),
+                Text(
+                  "Lensy AI 안내",
+                  style: TextStyle(
+                    color: Color(0xFF1D4ED8),
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ],
-              selected: {_activeRightTab},
-              onSelectionChanged: (set) {
-                final selectedTab = set.first;
-                setState(() => _activeRightTab = selectedTab);
-                if (selectedTab == RightPanelTab.agentActivity) {
-                  _fetchAgentRuns();
-                }
-              },
-              style: SegmentedButton.styleFrom(
-                selectedBackgroundColor: const Color(0xFFEFF6FF),
-                selectedForegroundColor: const Color(0xFF2563EB),
-                foregroundColor: const Color(0xFF64748B),
-                side: const BorderSide(color: Color(0xFFE2E8F0)),
-              ),
             ),
           ),
         ],
@@ -2312,128 +3614,170 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   fontSize: 14,
                 ),
               ),
-              // Sort dropdown
-              DropdownButton<String>(
-                value: _objSortOption,
-                dropdownColor: Colors.white,
-                style: const TextStyle(color: Color(0xFF334155), fontSize: 11),
-                underline: const SizedBox.shrink(),
-                items: const [
-                  DropdownMenuItem(value: 'SEVERITY', child: Text("정렬: 위험도순")),
-                  DropdownMenuItem(
-                    value: 'CONFIDENCE_ASC',
-                    child: Text("정렬: 신뢰도낮은순"),
-                  ),
-                  DropdownMenuItem(value: 'ID_ASC', child: Text("정렬: ID순")),
-                ],
-                onChanged: (val) =>
-                    setState(() => _objSortOption = val ?? 'SEVERITY'),
+              Text(
+                _objSuspiciousCount > 0
+                    ? "검토 필요 $_objSuspiciousCount개"
+                    : "자동 확인 가능",
+                style: TextStyle(
+                  color: _objSuspiciousCount > 0
+                      ? const Color(0xFFD97706)
+                      : const Color(0xFF16A34A),
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ],
           ),
-          const SizedBox(height: 6),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
+          const SizedBox(height: 4),
+          // Keep the class filter visible in the beginner path. Detailed
+          // counts, sorting and batch operations remain behind the advanced
+          // disclosure below.
+          Container(
+            key: _objectFilterKey,
+            child: Wrap(
+              spacing: 3.5,
+              runSpacing: 4.0,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                _buildFilterableStatBadge(
-                  "전체 보기",
-                  _workingNodes.length,
-                  const Color(0xFF475569),
-                  'ALL',
+                const Text(
+                  "도면 표시:",
+                  style: TextStyle(color: Color(0xFF64748B), fontSize: 9.5),
                 ),
-                const SizedBox(width: 4),
-                _buildFilterableStatBadge(
-                  "검토 필요",
-                  _objSuspiciousCount,
-                  const Color(0xFFD97706),
-                  'SUSPICIOUS',
-                ),
-                const SizedBox(width: 4),
-                _buildFilterableStatBadge(
-                  "자동 승인",
-                  _workingNodes
-                      .where(
-                        (n) =>
-                            n.reviewStatus == 'CONFIRMED' &&
-                            !n.source.contains('human'),
-                      )
-                      .length,
-                  const Color(0xFF0D9488),
-                  'AUTO_CONFIRMED',
-                ),
-                const SizedBox(width: 4),
-                _buildFilterableStatBadge(
-                  "수동 승인",
-                  _workingNodes
-                      .where(
-                        (n) =>
-                            n.reviewStatus == 'CONFIRMED' &&
-                            n.source.contains('human'),
-                      )
-                      .length,
-                  const Color(0xFF16A34A),
-                  'HUMAN_CONFIRMED',
-                ),
-                const SizedBox(width: 4),
-                _buildFilterableStatBadge(
-                  "미검수",
-                  _objDetectedCount,
-                  const Color(0xFF2563EB),
-                  'DETECTED',
-                ),
-                const SizedBox(width: 4),
-                _buildFilterableStatBadge(
-                  "제외",
-                  _objRejectedCount,
-                  const Color(0xFF64748B),
-                  'REJECTED',
-                ),
-                const SizedBox(width: 4),
-                _buildStatBadge(
-                  "누락 후보",
-                  _unresolvedCandidatesCount,
-                  _unresolvedCandidatesCount > 0
-                      ? const Color(0xFF9333EA)
-                      : const Color(0xFF64748B),
-                ),
+                _buildObjectClassFilter("전체", 'ALL'),
+                _buildObjectClassFilter("Bus", 'bus'),
+                _buildObjectClassFilter("Load", 'load'),
+                _buildObjectClassFilter("Gen", 'generator'),
+                _buildObjectClassFilter("Trans", 'transformer'),
               ],
             ),
           ),
-          Wrap(
-            spacing: 3.5,
-            runSpacing: 4.0,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              const Text(
-                "도면 표시:",
-                style: TextStyle(color: Color(0xFF64748B), fontSize: 9.5),
-              ),
-              _buildObjectClassFilter("전체", 'ALL'),
-              _buildObjectClassFilter("Bus", 'bus'),
-              _buildObjectClassFilter("Load", 'load'),
-              _buildObjectClassFilter("Gen", 'generator'),
-              _buildObjectClassFilter("Trans", 'transformer'),
-            ],
-          ),
-          const SizedBox(height: 6),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed:
-                  _filteredAndSortedWorkingNodes.any(
-                    (node) =>
-                        node.reviewStatus == 'DETECTED' ||
-                        node.reviewStatus == 'SUSPICIOUS',
-                  )
-                  ? _batchConfirmVisibleNodes
-                  : null,
-              icon: const Icon(Icons.done_all, size: 14),
-              label: Text(
-                '현재 표시된 객체 전체 승인 (${_filteredAndSortedWorkingNodes.where((node) => node.reviewStatus != 'REJECTED').length})',
-                style: const TextStyle(fontSize: 10),
+          const SizedBox(height: 4),
+          ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: EdgeInsets.zero,
+            initiallyExpanded: false,
+            title: const Text(
+              "고급: 필터·정렬·일괄 작업",
+              style: TextStyle(
+                color: Color(0xFF64748B),
+                fontSize: 10.5,
+                fontWeight: FontWeight.w600,
               ),
             ),
+            children: [
+              Align(
+                alignment: Alignment.centerRight,
+                child: DropdownButton<String>(
+                  value: _objSortOption,
+                  dropdownColor: Colors.white,
+                  style: const TextStyle(
+                    color: Color(0xFF334155),
+                    fontSize: 11,
+                  ),
+                  underline: const SizedBox.shrink(),
+                  items: const [
+                    DropdownMenuItem(
+                      value: 'SEVERITY',
+                      child: Text("정렬: 위험도순"),
+                    ),
+                    DropdownMenuItem(
+                      value: 'CONFIDENCE_ASC',
+                      child: Text("정렬: 신뢰도낮은순"),
+                    ),
+                    DropdownMenuItem(value: 'ID_ASC', child: Text("정렬: ID순")),
+                  ],
+                  onChanged: (val) =>
+                      setState(() => _objSortOption = val ?? 'SEVERITY'),
+                ),
+              ),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    _buildFilterableStatBadge(
+                      "전체 보기",
+                      _workingNodes.length,
+                      const Color(0xFF475569),
+                      'ALL',
+                    ),
+                    const SizedBox(width: 4),
+                    _buildFilterableStatBadge(
+                      "검토 필요",
+                      _objSuspiciousCount,
+                      const Color(0xFFD97706),
+                      'SUSPICIOUS',
+                    ),
+                    const SizedBox(width: 4),
+                    _buildFilterableStatBadge(
+                      "자동 승인",
+                      _workingNodes
+                          .where(
+                            (n) =>
+                                n.reviewStatus == 'CONFIRMED' &&
+                                !n.source.contains('human'),
+                          )
+                          .length,
+                      const Color(0xFF0D9488),
+                      'AUTO_CONFIRMED',
+                    ),
+                    const SizedBox(width: 4),
+                    _buildFilterableStatBadge(
+                      "수동 승인",
+                      _workingNodes
+                          .where(
+                            (n) =>
+                                n.reviewStatus == 'CONFIRMED' &&
+                                n.source.contains('human'),
+                          )
+                          .length,
+                      const Color(0xFF16A34A),
+                      'HUMAN_CONFIRMED',
+                    ),
+                    const SizedBox(width: 4),
+                    _buildFilterableStatBadge(
+                      "미검수",
+                      _objDetectedCount,
+                      const Color(0xFF2563EB),
+                      'DETECTED',
+                    ),
+                    const SizedBox(width: 4),
+                    _buildFilterableStatBadge(
+                      "제외",
+                      _objRejectedCount,
+                      const Color(0xFF64748B),
+                      'REJECTED',
+                    ),
+                    const SizedBox(width: 4),
+                    _buildStatBadge(
+                      "누락 후보",
+                      _unresolvedCandidatesCount,
+                      _unresolvedCandidatesCount > 0
+                          ? const Color(0xFF9333EA)
+                          : const Color(0xFF64748B),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 6),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed:
+                      _filteredAndSortedWorkingNodes.any(
+                        (node) =>
+                            node.reviewStatus == 'DETECTED' ||
+                            node.reviewStatus == 'SUSPICIOUS',
+                      )
+                      ? _batchConfirmVisibleNodes
+                      : null,
+                  icon: const Icon(Icons.done_all, size: 14),
+                  label: Text(
+                    '현재 표시된 객체 전체 승인 (${_filteredAndSortedWorkingNodes.where((node) => node.reviewStatus != 'REJECTED').length})',
+                    style: const TextStyle(fontSize: 10),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -2441,6 +3785,18 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   Widget _buildObjectReviewSidePanel() {
+    final visibleNodes = _filteredAndSortedWorkingNodes;
+    if (_selectedNode == null && visibleNodes.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _selectedNode != null) return;
+        setState(() {
+          _selectedNode = _filteredAndSortedWorkingNodes.isNotEmpty
+              ? _filteredAndSortedWorkingNodes.first
+              : null;
+        });
+      });
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -2448,21 +3804,33 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         const Divider(color: Color(0xFFE2E8F0), height: 1),
         const SizedBox(height: 12),
 
-        // 1. Global Completeness Review Section
-        _buildGlobalCompletenessSection(),
-        const SizedBox(height: 14),
-
-        // 2. Quick Node Selection Carousel / Chip Row
-        _buildNodeSelectionChips(),
-        const SizedBox(height: 14),
-        const Divider(color: Color(0xFFE2E8F0), height: 1),
-        const SizedBox(height: 14),
-
-        // 3. Selected Node Details Panel
+        // The selected object is the primary card. Queue details and the
+        // whole-diagram completeness view stay available without competing
+        // with the one-by-one review decision.
         if (_selectedNode == null)
           _buildNoSelectionPrompt("객체")
         else
           _buildSelectedNodePanel(),
+        const SizedBox(height: 10),
+        ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: EdgeInsets.zero,
+          initiallyExpanded: false,
+          title: const Text(
+            "고급: 전체 완결성·객체 목록",
+            style: TextStyle(
+              color: Color(0xFF64748B),
+              fontSize: 10.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          children: [
+            _buildGlobalCompletenessSection(),
+            const SizedBox(height: 12),
+            _buildNodeSelectionChips(),
+          ],
+        ),
+        const SizedBox(height: 8),
       ],
     );
   }
@@ -2505,7 +3873,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     tooltip: '이전 페이지',
                     visualDensity: VisualDensity.compact,
                     padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+                    constraints: const BoxConstraints(
+                      minWidth: 24,
+                      minHeight: 24,
+                    ),
                     onPressed: currentPage > 0
                         ? () => setState(() => _nodePage = currentPage - 1)
                         : null,
@@ -2513,13 +3884,19 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   ),
                   Text(
                     '${currentPage + 1}/$pageCount',
-                    style: const TextStyle(color: Color(0xFF64748B), fontSize: 11),
+                    style: const TextStyle(
+                      color: Color(0xFF64748B),
+                      fontSize: 11,
+                    ),
                   ),
                   IconButton(
                     tooltip: '다음 페이지',
                     visualDensity: VisualDensity.compact,
                     padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+                    constraints: const BoxConstraints(
+                      minWidth: 24,
+                      minHeight: 24,
+                    ),
                     onPressed: currentPage < pageCount - 1
                         ? () => setState(() => _nodePage = currentPage + 1)
                         : null,
@@ -2563,8 +3940,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     color: isSelected
                         ? const Color(0xFFF59E0B)
                         : (isSuspicious
-                            ? const Color(0xFFF97316)
-                            : classColor.withValues(alpha: 0.6)),
+                              ? const Color(0xFFF97316)
+                              : classColor.withValues(alpha: 0.6)),
                     width: isSelected ? 1.8 : 1.2,
                   ),
                   borderRadius: BorderRadius.circular(5),
@@ -2572,17 +3949,25 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(_getClassIcon(n.className), size: 11, color: classColor),
+                    Icon(
+                      _getClassIcon(n.className),
+                      size: 11,
+                      color: classColor,
+                    ),
                     const SizedBox(width: 3.5),
                     Text(
                       n.effectiveDisplayLabel,
                       style: TextStyle(
-                        color: isSelected ? const Color(0xFF0F172A) : const Color(0xFF334155),
+                        color: isSelected
+                            ? const Color(0xFF0F172A)
+                            : const Color(0xFF334155),
                         fontSize: 10.5,
                         fontWeight: isSelected
                             ? FontWeight.bold
                             : FontWeight.normal,
-                        decoration: isRejected ? TextDecoration.lineThrough : null,
+                        decoration: isRejected
+                            ? TextDecoration.lineThrough
+                            : null,
                       ),
                     ),
                     if (isSuspicious) ...[
@@ -2590,7 +3975,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                       const Text("⚠️", style: TextStyle(fontSize: 8)),
                     ] else if (isConfirmed) ...[
                       const SizedBox(width: 2.5),
-                      const Icon(Icons.check, size: 10, color: Color(0xFF16A34A)),
+                      const Icon(
+                        Icons.check,
+                        size: 10,
+                        color: Color(0xFF16A34A),
+                      ),
                     ],
                   ],
                 ),
@@ -2698,7 +4087,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               ],
               const Spacer(),
               IconButton(
-                icon: const Icon(Icons.refresh, size: 16, color: Color(0xFF64748B)),
+                icon: const Icon(
+                  Icons.refresh,
+                  size: 16,
+                  color: Color(0xFF64748B),
+                ),
                 tooltip: "완결성 재검사",
                 onPressed: _triggerCompletenessReview,
               ),
@@ -2741,7 +4134,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                         Text(
                           "⚠️ ${_classNameKo(c.suspectedClass)} 누락 후보",
                           style: TextStyle(
-                            color: isOpen ? const Color(0xFF9333EA) : const Color(0xFF64748B),
+                            color: isOpen
+                                ? const Color(0xFF9333EA)
+                                : const Color(0xFF64748B),
                             fontWeight: FontWeight.bold,
                             fontSize: 11,
                           ),
@@ -2753,7 +4148,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                             vertical: 1,
                           ),
                           decoration: BoxDecoration(
-                            color: isOpen ? const Color(0xFF9333EA) : const Color(0xFF94A3B8),
+                            color: isOpen
+                                ? const Color(0xFF9333EA)
+                                : const Color(0xFF94A3B8),
                             borderRadius: BorderRadius.circular(3),
                           ),
                           child: Text(
@@ -2770,7 +4167,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     const SizedBox(height: 4),
                     Text(
                       c.descriptionKo,
-                      style: const TextStyle(color: Color(0xFF1E293B), fontSize: 11),
+                      style: const TextStyle(
+                        color: Color(0xFF1E293B),
+                        fontSize: 11,
+                      ),
                     ),
                     if (isOpen) ...[
                       const SizedBox(height: 6),
@@ -2839,10 +4239,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     final node = _selectedNode!;
     final isSuspicious = node.reviewStatus == 'SUSPICIOUS';
     final classColor = _getClassColor(node.className);
-    final bbox = node.bbox;
-    final bboxStr = bbox.length >= 4
-        ? "중심 (${bbox[0].toInt()}, ${bbox[1].toInt()}) | 크기 ${bbox[2].toInt()} × ${bbox[3].toInt()} px"
-        : "";
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2901,16 +4297,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           ],
         ),
         Text(
-          "내부 ID: ${node.id}  |  클래스: ${node.className.toUpperCase()}  |  신뢰도: ${(node.confidence * 100).toInt()}%",
+          "객체 종류: ${_classNameKo(node.className)}  ·  신뢰도: ${(node.confidence * 100).toInt()}%",
           style: const TextStyle(color: Color(0xFF64748B), fontSize: 11),
         ),
-        if (bboxStr.isNotEmpty) ...[
-          const SizedBox(height: 2),
-          Text(
-            bboxStr,
-            style: const TextStyle(color: Color(0xFF64748B), fontSize: 10),
-          ),
-        ],
         const SizedBox(height: 12),
 
         if (node.reviewReasons.isNotEmpty) ...[
@@ -2919,9 +4308,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             decoration: BoxDecoration(
               color: const Color(0xFFFFFBEB),
               borderRadius: BorderRadius.circular(6),
-              border: Border.all(
-                color: const Color(0xFFFDE68A),
-              ),
+              border: Border.all(color: const Color(0xFFFDE68A)),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -3028,62 +4415,104 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           ),
         ),
         const SizedBox(height: 8),
+        ElevatedButton.icon(
+          key: _objectPrimaryActionKey,
+          onPressed: () => _confirmNodeAndNext(node),
+          icon: const Icon(Icons.check_circle_outline, size: 18),
+          label: const Text(
+            "승인하고 다음 (Enter ➔)",
+            style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF16A34A),
+            foregroundColor: Colors.white,
+            minimumSize: const Size.fromHeight(40),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+
         Row(
           children: [
             Expanded(
-              child: ElevatedButton.icon(
-                onPressed: () => _confirmNode(node),
-                icon: const Icon(Icons.check, size: 16),
-                label: const Text("승인"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF16A34A),
-                  foregroundColor: Colors.white,
+              child: OutlinedButton.icon(
+                onPressed: _selectPreviousNode,
+                icon: const Icon(Icons.arrow_back, size: 13),
+                label: const Text("이전 (◀)", style: TextStyle(fontSize: 11)),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  side: const BorderSide(color: Color(0xFFCBD5E1)),
                 ),
               ),
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: ElevatedButton.icon(
+              child: OutlinedButton(
                 onPressed: () => _rejectNode(node),
-                icon: const Icon(Icons.close, size: 16),
-                label: const Text("제외·삭제"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFDC2626),
-                  foregroundColor: Colors.white,
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  side: const BorderSide(color: Color(0xFFFCA5A5)),
+                ),
+                child: const Text(
+                  "제외/삭제",
+                  style: TextStyle(fontSize: 11, color: Color(0xFFDC2626)),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: _selectNextNode,
+                icon: const Icon(Icons.arrow_forward, size: 13),
+                label: const Text("다음 (▶)", style: TextStyle(fontSize: 11)),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  side: const BorderSide(color: Color(0xFFCBD5E1)),
                 ),
               ),
             ),
           ],
         ),
-        const SizedBox(height: 12),
-
-        // Class Change Chips
-        const Text(
-          "클래스 변경:",
-          style: TextStyle(color: Color(0xFF475569), fontSize: 11),
-        ),
         const SizedBox(height: 6),
-        Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          children: ['bus', 'generator', 'load', 'transformer'].map((cls) {
-            final isCurrent = node.className.toLowerCase() == cls;
-            return ChoiceChip(
-              label: Text(
-                cls.toUpperCase(),
-                style: const TextStyle(fontSize: 11),
-              ),
-              selected: isCurrent,
-              onSelected: (selected) {
-                if (selected) _changeNodeClass(node, cls);
-              },
-              selectedColor: _getClassColor(cls).withValues(alpha: 0.25),
-              backgroundColor: const Color(0xFFF1F5F9),
-              side: BorderSide(
-                color: isCurrent ? _getClassColor(cls) : const Color(0xFFCBD5E1),
-              ),
-            );
-          }).toList(),
+
+        // Class changes remain available for Human-in-the-Loop corrections,
+        // but are intentionally kept out of the beginner default view.
+        ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: EdgeInsets.zero,
+          initiallyExpanded: false,
+          title: const Text(
+            "고급: 객체 종류 수정",
+            style: TextStyle(color: Color(0xFF64748B), fontSize: 10.5),
+          ),
+          children: [
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: ['bus', 'generator', 'load', 'transformer'].map((cls) {
+                final isCurrent = node.className.toLowerCase() == cls;
+                return ChoiceChip(
+                  label: Text(
+                    cls.toUpperCase(),
+                    style: const TextStyle(fontSize: 11),
+                  ),
+                  selected: isCurrent,
+                  onSelected: (selected) {
+                    if (selected) _changeNodeClass(node, cls);
+                  },
+                  selectedColor: _getClassColor(cls).withValues(alpha: 0.25),
+                  backgroundColor: const Color(0xFFF1F5F9),
+                  side: BorderSide(
+                    color: isCurrent
+                        ? _getClassColor(cls)
+                        : const Color(0xFFCBD5E1),
+                  ),
+                );
+              }).toList(),
+            ),
+          ],
         ),
       ],
     );
@@ -3201,37 +4630,310 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     );
   }
 
+  void _focusConnectionMission() {
+    final mission = _connectionPriorityMissionLines;
+    if (mission.isEmpty) return;
+    final firstOpen = mission.firstWhere(
+      (line) => line.reviewStatus != 'CONFIRMED',
+      orElse: () => mission.first,
+    );
+    setState(() {
+      _connectionFullOverview = false;
+      _connectionLinesOnlyMode = false;
+      _connectionFastMode = false;
+      _lineFocusOnly = true;
+      _connFilterStatus = 'ALL';
+      _connSortOption = 'SEVERITY';
+      _showAllLinesList = false;
+      _selectedLine = firstOpen;
+      _selectedNode = null;
+      _selectedTopologyIssue = null;
+      final idx = _filteredAndSortedWorkingLines.indexWhere(
+        (line) => line.lineId == firstOpen.lineId,
+      );
+      _linePage = idx < 0 ? 0 : idx ~/ _linePageSize;
+    });
+  }
+
+  Widget _buildConnectionMissionCard() {
+    final mission = _connectionPriorityMissionLines;
+    final total = mission.length;
+    final completed = _connectionMissionCompleted;
+    final done = _connectionMissionComplete;
+    final progress = total == 0 ? 1.0 : completed / total;
+
+    return Container(
+      key: _connectionMissionKey,
+      padding: const EdgeInsets.all(11),
+      decoration: BoxDecoration(
+        color: done ? const Color(0xFFF0FDF4) : const Color(0xFFEFF6FF),
+        borderRadius: BorderRadius.circular(9),
+        border: Border.all(
+          color: done ? const Color(0xFF86EFAC) : const Color(0xFF93C5FD),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                done ? Icons.task_alt : Icons.flag_outlined,
+                size: 17,
+                color: done ? const Color(0xFF16A34A) : const Color(0xFF2563EB),
+              ),
+              const SizedBox(width: 6),
+              const Expanded(
+                child: Text(
+                  'Lensy 결선 검토 미션',
+                  style: TextStyle(
+                    color: Color(0xFF0F172A),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(
+                  color: done ? const Color(0xFFDCFCE7) : Colors.white,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: done
+                        ? const Color(0xFF86EFAC)
+                        : const Color(0xFFBFDBFE),
+                  ),
+                ),
+                child: Text(
+                  '핵심 검토 $completed/$total',
+                  style: TextStyle(
+                    color: done
+                        ? const Color(0xFF15803D)
+                        : const Color(0xFF1D4ED8),
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            done
+                ? '오류·모호 선로 우선 검토가 끝났습니다. 전체 선로를 빠르게 확인할 수 있어요.'
+                : '오류·모호 선로부터 최대 5개를 먼저 확인합니다. 선택 선로만 캔버스에 남겨집니다.',
+            style: const TextStyle(
+              color: Color(0xFF475569),
+              fontSize: 10.5,
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: 7),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: progress.clamp(0.0, 1.0),
+              minHeight: 5,
+              backgroundColor: Colors.white,
+              valueColor: AlwaysStoppedAnimation(
+                done ? const Color(0xFF16A34A) : const Color(0xFF2563EB),
+              ),
+            ),
+          ),
+          const SizedBox(height: 7),
+          Row(
+            children: [
+              TextButton.icon(
+                onPressed: total == 0 ? null : _focusConnectionMission,
+                icon: const Icon(Icons.center_focus_strong, size: 14),
+                label: const Text('핵심 항목 보기'),
+                style: TextButton.styleFrom(
+                  foregroundColor: const Color(0xFF1D4ED8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 4,
+                  ),
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+              const Spacer(),
+              if (done)
+                ElevatedButton.icon(
+                  onPressed: () => setState(
+                    () => _connectionFastMode = !_connectionFastMode,
+                  ),
+                  icon: const Icon(Icons.flash_on, size: 14),
+                  label: Text(_connectionFastMode ? '전체 빠른 확인 중' : '전체 빠른 확인'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _connectionFastMode
+                        ? const Color(0xFF64748B)
+                        : const Color(0xFF16A34A),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
+                    ),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildConnectionDisplayModeCard() {
+    final linesOnly = _connectionLinesOnlyMode;
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: linesOnly ? const Color(0xFFF0FDFA) : const Color(0xFFFFFBEB),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: linesOnly ? const Color(0xFF99F6E4) : const Color(0xFFFDE68A),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            linesOnly ? Icons.timeline : Icons.grid_view_rounded,
+            size: 17,
+            color: linesOnly ? const Color(0xFF0F766E) : const Color(0xFFB45309),
+          ),
+          const SizedBox(width: 7),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  linesOnly ? '전체 선로만 보기' : '전체 결선 한눈에 보기',
+                  style: const TextStyle(
+                    color: Color(0xFF0F172A),
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  linesOnly
+                      ? '다른 기호의 라벨과 강조를 줄이고 모든 선로를 표시합니다.'
+                      : '전체 선로를 한 번에 확인하고 의심 항목을 우선 요약합니다.',
+                  style: const TextStyle(
+                    color: Color(0xFF475569),
+                    fontSize: 10.5,
+                    height: 1.3,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          TextButton(
+            onPressed: () {
+              _showConnectionNextLineForAgent();
+            },
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFF1D4ED8),
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+              visualDensity: VisualDensity.compact,
+            ),
+            child: const Text('한 선씩 보기', style: TextStyle(fontSize: 10)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildConnectionReviewSidePanel() {
+    final lines = _filteredAndSortedWorkingLines;
+    if (_selectedLine == null &&
+        lines.isNotEmpty &&
+        _selectedTopologyIssue == null &&
+        _selectedNode == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _selectedLine == null && lines.isNotEmpty) {
+          setState(() {
+            _selectedLine = lines.first;
+          });
+        }
+      });
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _buildConnectionQueueHeader(),
+        const SizedBox(height: 8),
+        _buildConnectionMissionCard(),
+        if (_connectionFullOverview || _connectionLinesOnlyMode) ...[
+          const SizedBox(height: 8),
+          _buildConnectionDisplayModeCard(),
+        ],
         const Divider(color: Color(0xFFE2E8F0), height: 1),
         const SizedBox(height: 12),
 
-        // 1. Topology Validation Issues Summary
-        _buildTopologyIssuesSection(),
-        const SizedBox(height: 14),
+        // 1. Hero Sequential Line Review Card
+        if (_selectedLine != null)
+          _buildSelectedLinePanel()
+        else if (_selectedTopologyIssue != null && _selectedNode != null)
+          _buildTopologyIssueDetailPanel()
+        else
+          _buildNoSelectionPrompt("선로"),
 
-        // 2. Topology Issue Detail & Action Panel (when an issue or violated node is selected)
-        if (_selectedTopologyIssue != null && _selectedNode != null) ...[
-          _buildTopologyIssueDetailPanel(),
-          const SizedBox(height: 14),
-          const Divider(color: Color(0xFFE2E8F0), height: 1),
-          const SizedBox(height: 14),
-        ],
-
-        // 3. Line Selection Chips
-        _buildLineSelectionChips(),
         const SizedBox(height: 14),
         const Divider(color: Color(0xFFE2E8F0), height: 1),
-        const SizedBox(height: 14),
+        const SizedBox(height: 10),
 
-        // 4. Selected Line Panel
-        if (_selectedLine == null && (_selectedTopologyIssue == null || _selectedNode == null))
-          _buildNoSelectionPrompt("선로")
-        else if (_selectedLine != null)
-          _buildSelectedLinePanel(),
+        // 2. Collapsible Queue / All Lines List
+        InkWell(
+          onTap: () => setState(() => _showAllLinesList = !_showAllLinesList),
+          borderRadius: BorderRadius.circular(6),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      _showAllLinesList ? Icons.expand_less : Icons.expand_more,
+                      size: 18,
+                      color: const Color(0xFF64748B),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      "전체 선로 대기열 (${lines.length}개)",
+                      style: const TextStyle(
+                        color: Color(0xFF475569),
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                Text(
+                  _showAllLinesList ? "접기" : "펼치기",
+                  style: const TextStyle(
+                    color: Color(0xFF0284C7),
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (_showAllLinesList) ...[
+          const SizedBox(height: 8),
+          _buildLineSelectionChips(),
+        ],
+
+        const SizedBox(height: 12),
+        const Divider(color: Color(0xFFE2E8F0), height: 1),
+        const SizedBox(height: 10),
+
+        // 3. Topology Validation Issues Summary
+        _buildTopologyIssuesSection(),
       ],
     );
   }
@@ -3273,7 +4975,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               ),
               const Spacer(),
               IconButton(
-                icon: const Icon(Icons.refresh, size: 16, color: Color(0xFF64748B)),
+                icon: const Icon(
+                  Icons.refresh,
+                  size: 16,
+                  color: Color(0xFF64748B),
+                ),
                 tooltip: "토폴로지 재검증",
                 onPressed: _triggerTopologyValidation,
               ),
@@ -3294,93 +5000,139 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           ),
           if (_topologyIssues.isNotEmpty) ...[
             const SizedBox(height: 8),
-            ..._topologyIssues.map((iss) {
-              final isError = iss['severity'] == 'error';
-              final isSelected = _selectedTopologyIssue == iss;
-              return Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  onTap: () => _onSelectTopologyIssue(iss),
-                  borderRadius: BorderRadius.circular(6),
-                  child: Container(
-                    margin: const EdgeInsets.only(bottom: 6),
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-                    decoration: BoxDecoration(
-                      color: isSelected
-                          ? (isError
-                              ? const Color(0xFFFEE2E2)
-                              : const Color(0xFFFEF3C7))
-                          : (isError
-                              ? const Color(0xFFFFF1F2)
-                              : const Color(0xFFFFFBEB)),
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(
-                        color: isSelected
-                            ? const Color(0xFFF59E0B)
-                            : (isError
-                                ? const Color(0xFFFCA5A5)
-                                : const Color(0xFFFDE68A)),
-                        width: isSelected ? 1.8 : 1.0,
+            InkWell(
+              onTap: () =>
+                  setState(() => _showTopologyDetails = !_showTopologyDetails),
+              borderRadius: BorderRadius.circular(6),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Icon(
+                      _showTopologyDetails
+                          ? Icons.expand_less
+                          : Icons.expand_more,
+                      size: 16,
+                      color: const Color(0xFF64748B),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      _showTopologyDetails ? "토폴로지 상세 접기" : "토폴로지 상세 보기",
+                      style: const TextStyle(
+                        color: Color(0xFF475569),
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.only(top: 1),
-                          child: Icon(
-                            isError ? Icons.cancel : Icons.warning,
-                            size: 13,
-                            color: isError ? const Color(0xFFDC2626) : const Color(0xFFD97706),
-                          ),
+                  ],
+                ),
+              ),
+            ),
+            if (_showTopologyDetails) ...[
+              const SizedBox(height: 4),
+              ..._topologyIssues.map((iss) {
+                final isError = iss['severity'] == 'error';
+                final isSelected = _selectedTopologyIssue == iss;
+                return Material(
+                  color: Colors.transparent,
+                  child: InkWell(
+                    onTap: () => _onSelectTopologyIssue(iss),
+                    borderRadius: BorderRadius.circular(6),
+                    child: Container(
+                      margin: const EdgeInsets.only(bottom: 6),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 7,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? (isError
+                                  ? const Color(0xFFFEE2E2)
+                                  : const Color(0xFFFEF3C7))
+                            : (isError
+                                  ? const Color(0xFFFFF1F2)
+                                  : const Color(0xFFFFFBEB)),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: isSelected
+                              ? const Color(0xFFF59E0B)
+                              : (isError
+                                    ? const Color(0xFFFCA5A5)
+                                    : const Color(0xFFFDE68A)),
+                          width: isSelected ? 1.8 : 1.0,
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _formatTopologyIssueKo(iss),
-                                style: TextStyle(
-                                  color: const Color(0xFF0F172A),
-                                  fontSize: 10.5,
-                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.only(top: 1),
+                            child: Icon(
+                              isError ? Icons.cancel : Icons.warning,
+                              size: 13,
+                              color: isError
+                                  ? const Color(0xFFDC2626)
+                                  : const Color(0xFFD97706),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _formatTopologyIssueKo(iss),
+                                  style: TextStyle(
+                                    color: const Color(0xFF0F172A),
+                                    fontSize: 10.5,
+                                    fontWeight: isSelected
+                                        ? FontWeight.bold
+                                        : FontWeight.normal,
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(height: 3),
-                              Row(
-                                children: [
-                                  Icon(
-                                    Icons.touch_app,
-                                    size: 10,
-                                    color: isSelected ? const Color(0xFFB45309) : const Color(0xFF64748B),
-                                  ),
-                                  const SizedBox(width: 3),
-                                  Text(
-                                    isSelected
-                                        ? "캔버스 위치 강조됨 · 아래에서 바로 선로 연결"
-                                        : "클릭하여 캔버스 위치 확인 및 선로 연결",
-                                    style: TextStyle(
-                                      color: isSelected ? const Color(0xFFB45309) : const Color(0xFF64748B),
-                                      fontSize: 9.5,
+                                const SizedBox(height: 3),
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.touch_app,
+                                      size: 10,
+                                      color: isSelected
+                                          ? const Color(0xFFB45309)
+                                          : const Color(0xFF64748B),
                                     ),
-                                  ),
-                                ],
+                                    const SizedBox(width: 3),
+                                    Text(
+                                      isSelected
+                                          ? "캔버스 위치 강조됨 · 아래에서 바로 선로 연결"
+                                          : "클릭하여 캔버스 위치 확인 및 선로 연결",
+                                      style: TextStyle(
+                                        color: isSelected
+                                            ? const Color(0xFFB45309)
+                                            : const Color(0xFF64748B),
+                                        fontSize: 9.5,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          if (isSelected)
+                            const Padding(
+                              padding: EdgeInsets.only(left: 4, top: 2),
+                              child: Icon(
+                                Icons.arrow_forward_ios,
+                                size: 11,
+                                color: Color(0xFFB45309),
                               ),
-                            ],
-                          ),
-                        ),
-                        if (isSelected)
-                          const Padding(
-                            padding: EdgeInsets.only(left: 4, top: 2),
-                            child: Icon(Icons.arrow_forward_ios, size: 11, color: Color(0xFFB45309)),
-                          ),
-                      ],
+                            ),
+                        ],
+                      ),
                     ),
                   ),
-                ),
-              );
-            }),
+                );
+              }),
+            ],
           ],
         ],
       ),
@@ -3449,9 +5201,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         color: const Color(0xFFF8FAFC),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color: isError
-              ? const Color(0xFFDC2626)
-              : const Color(0xFFF59E0B),
+          color: isError ? const Color(0xFFDC2626) : const Color(0xFFF59E0B),
           width: 1.5,
         ),
       ),
@@ -3463,7 +5213,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color: isError ? const Color(0xFFDC2626) : const Color(0xFFF59E0B),
+                  color: isError
+                      ? const Color(0xFFDC2626)
+                      : const Color(0xFFF59E0B),
                   borderRadius: BorderRadius.circular(4),
                 ),
                 child: Text(
@@ -3488,7 +5240,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 ),
               ),
               IconButton(
-                icon: const Icon(Icons.close, size: 16, color: Color(0xFF64748B)),
+                icon: const Icon(
+                  Icons.close,
+                  size: 16,
+                  color: Color(0xFF64748B),
+                ),
                 tooltip: "닫기",
                 onPressed: () => setState(() => _selectedTopologyIssue = null),
                 visualDensity: VisualDensity.compact,
@@ -3500,7 +5256,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           const SizedBox(height: 8),
           Text(
             _getTopologyIssueExplanation(iss, node),
-            style: const TextStyle(color: Color(0xFF334155), fontSize: 11, height: 1.4),
+            style: const TextStyle(
+              color: Color(0xFF334155),
+              fontSize: 11,
+              height: 1.4,
+            ),
           ),
           const SizedBox(height: 12),
           Row(
@@ -3619,9 +5379,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                       ? color.withValues(alpha: 0.15)
                       : const Color(0xFFF8FAFC),
                   border: Border.all(
-                    color: isSelected
-                        ? color
-                        : const Color(0xFFCBD5E1),
+                    color: isSelected ? color : const Color(0xFFCBD5E1),
                     width: isSelected ? 1.8 : 1.0,
                   ),
                   borderRadius: BorderRadius.circular(6),
@@ -3629,7 +5387,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 child: Text(
                   l.effectiveDisplayLabel,
                   style: TextStyle(
-                    color: isSelected ? const Color(0xFF0F172A) : const Color(0xFF334155),
+                    color: isSelected
+                        ? const Color(0xFF0F172A)
+                        : const Color(0xFF334155),
                     fontSize: 11,
                     fontWeight: isSelected
                         ? FontWeight.bold
@@ -3680,132 +5440,385 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   Widget _buildSelectedLinePanel() {
     final line = _selectedLine!;
+    final lines = _filteredAndSortedWorkingLines;
+    final currentIndex = lines.indexOf(line);
+    final totalCount = lines.length;
     final isAmbiguous = line.reviewStatus == 'AMBIGUOUS';
+    final isConfirmed = line.reviewStatus == 'CONFIRMED';
     final connStr =
         line.endpointsDisplay ??
         (line.connectedTo.isNotEmpty ? line.connectedTo.join(" ↔ ") : "미연결");
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Row(
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: isConfirmed
+              ? const Color(0xFF86EFAC)
+              : (isAmbiguous
+                    ? const Color(0xFFFDE68A)
+                    : const Color(0xFFBAE6FD)),
+          width: 1.5,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 1. Sequential Progress Bar & Indicator
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                "⚡ 선로 결선 확인 (순차 집중 모드)",
+                style: TextStyle(
+                  color: Color(0xFF334155),
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Text(
+                totalCount > 0
+                    ? "$totalCount개 중 ${currentIndex >= 0 ? currentIndex + 1 : 1}번째"
+                    : "",
+                style: const TextStyle(
+                  color: Color(0xFF0284C7),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(3),
+            child: LinearProgressIndicator(
+              value: totalCount > 0
+                  ? (((currentIndex >= 0 ? currentIndex : 0) + 1) / totalCount)
+                        .clamp(0.0, 1.0)
+                  : 1.0,
+              minHeight: 5,
+              backgroundColor: const Color(0xFFE2E8F0),
+              valueColor: const AlwaysStoppedAnimation(Color(0xFF0284C7)),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // 2. Hero Line Banner (Prominent Endpoints & Status)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: isConfirmed
+                    ? const Color(0xFF86EFAC)
+                    : const Color(0xFFBAE6FD),
+                width: 1.5,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color:
+                      (isConfirmed
+                              ? const Color(0xFF16A34A)
+                              : const Color(0xFF0284C7))
+                          .withValues(alpha: 0.08),
+                  blurRadius: 6,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(Icons.timeline, color: Color(0xFF0284C7), size: 20),
-                const SizedBox(width: 6),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color:
+                            (isConfirmed
+                                    ? const Color(0xFF16A34A)
+                                    : const Color(0xFF0284C7))
+                                .withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        Icons.alt_route_rounded,
+                        color: isConfirmed
+                            ? const Color(0xFF16A34A)
+                            : const Color(0xFF0284C7),
+                        size: 22,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            connStr,
+                            style: const TextStyle(
+                              color: Color(0xFF0F172A),
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -0.3,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            "선로 ID: ${line.lineId} (${line.effectiveDisplayLabel})",
+                            style: const TextStyle(
+                              color: Color(0xFF64748B),
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: isConfirmed
+                            ? const Color(0xFFDCFCE7)
+                            : (isAmbiguous
+                                  ? const Color(0xFFFEF3C7)
+                                  : const Color(0xFFE0F2FE)),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: isConfirmed
+                              ? const Color(0xFF86EFAC)
+                              : (isAmbiguous
+                                    ? const Color(0xFFFDE68A)
+                                    : const Color(0xFFBAE6FD)),
+                        ),
+                      ),
+                      child: Text(
+                        isConfirmed
+                            ? "승인 완료"
+                            : (isAmbiguous ? "검토 필요" : "확인 대기"),
+                        style: TextStyle(
+                          color: isConfirmed
+                              ? const Color(0xFF16A34A)
+                              : (isAmbiguous
+                                    ? const Color(0xFFB45309)
+                                    : const Color(0xFF0284C7)),
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+
+          // 3. AI Detection & Tracing Summary
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: const Color(0xFFE2E8F0)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
+                  children: [
+                    Icon(
+                      Icons.psychology_outlined,
+                      size: 14,
+                      color: Color(0xFF6366F1),
+                    ),
+                    SizedBox(width: 6),
+                    Text(
+                      "AI 선로 추적 진단:",
+                      style: TextStyle(
+                        color: Color(0xFF334155),
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
                 Text(
-                  line.effectiveDisplayLabel,
+                  "• 추적 알고리즘: ${line.traceMethod}  |  연결 단자: ${line.sourcePort} ➔ ${line.targetPort}",
                   style: const TextStyle(
-                    color: Color(0xFF0F172A),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
+                    color: Color(0xFF475569),
+                    fontSize: 10.5,
                   ),
                 ),
               ],
             ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(
-                color: isAmbiguous
-                    ? const Color(0xFFD97706)
-                    : (line.reviewStatus == 'CONFIRMED'
-                          ? const Color(0xFF16A34A)
-                          : const Color(0xFF0284C7)),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                line.reviewStatus,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 6),
-        Text(
-          "내부 ID: ${line.lineId}  |  연결: $connStr",
-          style: const TextStyle(
-            color: Color(0xFF334155),
-            fontSize: 12,
-            fontWeight: FontWeight.bold,
           ),
-        ),
-        Text(
-          "추적 방식: ${line.traceMethod}  |  단자: ${line.sourcePort} ➔ ${line.targetPort}",
-          style: const TextStyle(color: Color(0xFF64748B), fontSize: 11),
-        ),
-        const SizedBox(height: 12),
+          const SizedBox(height: 10),
 
-        // Action Buttons
-        Row(
-          children: [
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: () => _confirmLine(line),
-                icon: const Icon(Icons.check, size: 16),
-                label: const Text("선로 승인"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF16A34A),
-                  foregroundColor: Colors.white,
-                ),
+          // 4. Reconnect Candidate Chips (if any)
+          if (line.candidateTargets.isNotEmpty) ...[
+            const Text(
+              "연결 대상 Bus 재지정:",
+              style: TextStyle(
+                color: Color(0xFF475569),
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
               ),
             ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: () => _rejectLine(line),
-                icon: const Icon(Icons.close, size: 16),
-                label: const Text("선로 제외·삭제"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFDC2626),
-                  foregroundColor: Colors.white,
-                ),
-              ),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: line.candidateTargets.map((busId) {
+                return ActionChip(
+                  label: Text("➔ $busId", style: const TextStyle(fontSize: 11)),
+                  onPressed: () {
+                    setState(() {
+                      if (line.connectedTo.length >= 2) {
+                        line.connectedTo[1] = busId;
+                      } else if (line.connectedTo.length == 1) {
+                        line.connectedTo.add(busId);
+                      }
+                      line.reviewStatus = 'CONFIRMED';
+                      line.source = 'human_reconnected';
+                    });
+                    _triggerTopologyValidation();
+                  },
+                );
+              }).toList(),
             ),
+            const SizedBox(height: 10),
           ],
-        ),
-        const SizedBox(height: 12),
 
-        // Reconnect Candidate Chips
-        if (line.candidateTargets.isNotEmpty) ...[
-          const Text(
-            "연결 대상 Bus 재지정:",
-            style: TextStyle(color: Color(0xFF475569), fontSize: 11),
+          // 5. Big Primary Action CTA
+          ElevatedButton.icon(
+            key: _connectionPrimaryActionKey,
+            onPressed: () => _confirmLineAndNext(line),
+            icon: const Icon(Icons.check_circle_outline, size: 18),
+            label: const Text(
+              "선로 승인하고 다음 (Enter ➔)",
+              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF0284C7),
+              foregroundColor: Colors.white,
+              minimumSize: const Size.fromHeight(40),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
           ),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: line.candidateTargets.map((busId) {
-              return ActionChip(
-                label: Text("➔ $busId", style: const TextStyle(fontSize: 11)),
-                onPressed: () {
-                  setState(() {
-                    if (line.connectedTo.length >= 2) {
-                      line.connectedTo[1] = busId;
-                    } else if (line.connectedTo.length == 1) {
-                      line.connectedTo.add(busId);
-                    }
-                    line.reviewStatus = 'CONFIRMED';
-                    line.source = 'human_reconnected';
-                  });
-                  _triggerTopologyValidation();
-                },
-              );
-            }).toList(),
+          const SizedBox(height: 8),
+
+          // 6. Secondary Navigation Row
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _selectPreviousLine,
+                  icon: const Icon(Icons.arrow_back, size: 13),
+                  label: const Text("이전 (◀)", style: TextStyle(fontSize: 11)),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    side: const BorderSide(color: Color(0xFFCBD5E1)),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _rejectLineAndNext(line),
+                  icon: const Icon(
+                    Icons.delete_outline,
+                    size: 13,
+                    color: Color(0xFFDC2626),
+                  ),
+                  label: const Text(
+                    "제외/삭제",
+                    style: TextStyle(fontSize: 11, color: Color(0xFFDC2626)),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    side: const BorderSide(color: Color(0xFFFCA5A5)),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: _selectNextLine,
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    side: const BorderSide(color: Color(0xFFCBD5E1)),
+                  ),
+                  child: const Text(
+                    "건너뛰기",
+                    style: TextStyle(fontSize: 11, color: Color(0xFF64748B)),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _selectNextLine,
+                  icon: const Icon(Icons.arrow_forward, size: 13),
+                  label: const Text("다음 (▶)", style: TextStyle(fontSize: 11)),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    side: const BorderSide(color: Color(0xFFCBD5E1)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+
+          // 7. Beginner Tip Note
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: const Color(0xFFEFF6FF),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: const Color(0xFFBFDBFE)),
+            ),
+            child: const Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.tips_and_updates_outlined,
+                  size: 14,
+                  color: Color(0xFF2563EB),
+                ),
+                SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    "두 부품 간 선로가 올바르면 [선로 승인하고 다음]을 누르세요. 키보드 [Enter] 또는 [➔] 키로 연속 검토할 수 있습니다.",
+                    style: TextStyle(
+                      color: Color(0xFF1E40AF),
+                      fontSize: 10.5,
+                      height: 1.3,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
-      ],
+      ),
     );
   }
 
   // --- Agent Chat Side Panel ---
 
+  // Kept for backwards compatibility with the legacy review implementation;
+  // Lensy's global panel is the only visible assistant entry point now.
+  // ignore: unused_element
   Widget _buildAgentChatSidePanel() {
     return Column(
       children: [
@@ -3823,7 +5836,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               const Icon(Icons.bolt, color: Color(0xFF2563EB), size: 16),
               const SizedBox(width: 6),
               const Text(
-                "AI 도면 검토 도우미 · 로컬 분석",
+                "AI 도면 검토 도우미 · Lensy",
                 style: TextStyle(
                   color: Color(0xFF1D4ED8),
                   fontSize: 11,
@@ -3834,12 +5847,18 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               if (_selectedNode != null)
                 Text(
                   "선택: ${_selectedNode!.effectiveDisplayLabel}",
-                  style: const TextStyle(color: Color(0xFF475569), fontSize: 10),
+                  style: const TextStyle(
+                    color: Color(0xFF475569),
+                    fontSize: 10,
+                  ),
                 ),
               if (_selectedLine != null)
                 Text(
                   "선택: ${_selectedLine!.effectiveDisplayLabel}",
-                  style: const TextStyle(color: Color(0xFF475569), fontSize: 10),
+                  style: const TextStyle(
+                    color: Color(0xFF475569),
+                    fontSize: 10,
+                  ),
                 ),
             ],
           ),
@@ -3891,11 +5910,19 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                           Icon(
                             isUser ? Icons.person : Icons.smart_toy,
                             size: 13,
-                            color: isUser ? Colors.white70 : const Color(0xFF2563EB),
+                            color: isUser
+                                ? Colors.white70
+                                : const Color(0xFF2563EB),
                           ),
                           const SizedBox(width: 4),
                           Text(
-                            isUser ? "나" : "Local Assistant",
+                            isUser
+                                ? "나"
+                                : ((msg.providerMode ?? '')
+                                          .toLowerCase()
+                                          .startsWith('gemini')
+                                      ? "Lensy AI · Gemini"
+                                      : "Lensy AI · Local"),
                             style: TextStyle(
                               color: isUser
                                   ? Colors.white70
@@ -3910,7 +5937,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                       Text(
                         msg.text,
                         style: TextStyle(
-                          color: isUser ? Colors.white : const Color(0xFF0F172A),
+                          color: isUser
+                              ? Colors.white
+                              : const Color(0xFF0F172A),
                           fontSize: 12,
                           height: 1.4,
                         ),
@@ -3928,9 +5957,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
           decoration: const BoxDecoration(
             color: Colors.white,
-            border: Border(
-              top: BorderSide(color: Color(0xFFE2E8F0), width: 1),
-            ),
+            border: Border(top: BorderSide(color: Color(0xFFE2E8F0), width: 1)),
           ),
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
@@ -3961,16 +5988,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           padding: const EdgeInsets.all(8),
           decoration: const BoxDecoration(
             color: Colors.white,
-            border: Border(
-              top: BorderSide(color: Color(0xFFE2E8F0), width: 1),
-            ),
+            border: Border(top: BorderSide(color: Color(0xFFE2E8F0), width: 1)),
           ),
           child: Row(
             children: [
               Expanded(
                 child: TextField(
                   controller: _chatInputController,
-                  style: const TextStyle(color: Color(0xFF0F172A), fontSize: 12),
+                  style: const TextStyle(
+                    color: Color(0xFF0F172A),
+                    fontSize: 12,
+                  ),
                   decoration: InputDecoration(
                     hintText: "도면, 선택 객체/선로에 대해 질문하세요...",
                     hintStyle: const TextStyle(
@@ -4039,7 +6067,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     final compIds = iss['component_ids'];
     String compsStr = '';
     if (compIds is List && compIds.isNotEmpty) {
-      compsStr = compIds.map((id) => _getDisplayLabelForId(id.toString())).join(' ↔ ');
+      compsStr = compIds
+          .map((id) => _getDisplayLabelForId(id.toString()))
+          .join(' ↔ ');
     }
 
     switch (code) {
@@ -4173,6 +6203,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     }
   }
 
+  // Kept for backwards compatibility with existing review activity data.
+  // ignore: unused_element
   Widget _buildAgentActivitySidePanel() {
     if (_isLoadingAgentRuns) {
       return const Center(
@@ -4191,7 +6223,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               const SizedBox(height: 12),
               const Text(
                 '기록된 Agent 활동 이력이 없습니다.',
-                style: TextStyle(color: Color(0xFF0F172A), fontSize: 13, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                  color: Color(0xFF0F172A),
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               const SizedBox(height: 6),
               const Text(
@@ -4226,7 +6262,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           final runId = run['run_id']?.toString() ?? 'run_$runIdx';
           final status = run['status']?.toString() ?? 'COMPLETED';
           final patchId = run['selected_patch_id']?.toString() ?? '-';
-          final activityLog = List<dynamic>.from(run['activity_log'] ?? const []);
+          final activityLog = List<dynamic>.from(
+            run['activity_log'] ?? const [],
+          );
 
           final isAwaiting = status == 'AWAITING_APPROVAL';
 
@@ -4242,16 +6280,18 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               ),
             ),
             child: Theme(
-              data: Theme.of(context).copyWith(
-                dividerColor: Colors.transparent,
-              ),
+              data: Theme.of(
+                context,
+              ).copyWith(dividerColor: Colors.transparent),
               child: ExpansionTile(
                 initiallyExpanded: runIdx == 0,
                 leading: Icon(
                   isAwaiting
                       ? Icons.check_circle_outline
                       : Icons.smart_toy_outlined,
-                  color: isAwaiting ? const Color(0xFF16A34A) : const Color(0xFF2563EB),
+                  color: isAwaiting
+                      ? const Color(0xFF16A34A)
+                      : const Color(0xFF2563EB),
                 ),
                 title: Text(
                   'Agent 실행 #${_agentRuns.length - runIdx} (${run['issue_id'] ?? runId})',
@@ -4264,7 +6304,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 subtitle: Text(
                   '최종 판단: ${isAwaiting ? '수정안 승인 대기' : (status == 'NO_IMPROVEMENT' ? '개선 없음' : status)} · Patch: $patchId',
                   style: TextStyle(
-                    color: isAwaiting ? const Color(0xFF16A34A) : const Color(0xFF64748B),
+                    color: isAwaiting
+                        ? const Color(0xFF16A34A)
+                        : const Color(0xFF64748B),
                     fontSize: 11,
                   ),
                 ),
@@ -4301,7 +6343,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                               decoration: BoxDecoration(
                                 color: const Color(0xFFEFF6FF),
                                 shape: BoxShape.circle,
-                                border: Border.all(color: const Color(0xFFBFDBFE)),
+                                border: Border.all(
+                                  color: const Color(0xFFBFDBFE),
+                                ),
                               ),
                               child: Icon(
                                 _agentEventIcon(event),
@@ -4391,13 +6435,22 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       if (res['status'] == 'success' && res['nodes'] is List) {
         final rawNodes = (res['nodes'] as List);
         setState(() {
-          for (int i = 0; i < rawNodes.length && i < _workingNodes.length; i++) {
+          for (
+            int i = 0;
+            i < rawNodes.length && i < _workingNodes.length;
+            i++
+          ) {
             final raw = rawNodes[i];
             final node = _workingNodes[i];
             node.busNumber = (raw['bus_number'] as num?)?.toInt();
-            node.busNumberStatus = raw['bus_number_status']?.toString() ?? 'UNCERTAIN';
-            node.displayLabel = raw['display_name']?.toString() ?? raw['display_label']?.toString() ?? node.displayLabel;
-            node.connectedBusNumber = (raw['connected_bus_number'] as num?)?.toInt();
+            node.busNumberStatus =
+                raw['bus_number_status']?.toString() ?? 'UNCERTAIN';
+            node.displayLabel =
+                raw['display_name']?.toString() ??
+                raw['display_label']?.toString() ??
+                node.displayLabel;
+            node.connectedBusNumber = (raw['connected_bus_number'] as num?)
+                ?.toInt();
             node.connectedBusId = raw['connected_bus_id']?.toString();
             if (raw['id'] != null) {
               node.id = raw['id'].toString();
@@ -4423,7 +6476,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("모선 번호 AI 판독 중 알림: $e"), backgroundColor: Colors.orange),
+          SnackBar(
+            content: Text("모선 번호 AI 판독 중 알림: $e"),
+            backgroundColor: Colors.orange,
+          ),
         );
       }
     } finally {
@@ -4434,6 +6490,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   void _proceedToBusMappingReview() {
     setState(() {
       _currentPhase = ReviewPhase.busMappingReview;
+      _stageGateMessage = null;
       _selectedLine = null;
       _busFilterStatus = 'ALL';
       _busPage = 0;
@@ -4446,14 +6503,21 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       }
     });
 
+    _announceReviewStage();
     // Automatically run AI vision grounding on all working buses (including human-added ones)
     _triggerAiBusLinking();
   }
 
-  void _propagateBusNumber(ReviewNodeItem busNode, int newBusNo, {bool isDuplicate = false}) {
+  void _propagateBusNumber(
+    ReviewNodeItem busNode,
+    int newBusNo, {
+    bool isDuplicate = false,
+  }) {
     setState(() {
       final oldBusId = busNode.id;
-      final existingWithSameId = _workingNodes.where((n) => n.id == "bus_$newBusNo" && n != busNode);
+      final existingWithSameId = _workingNodes.where(
+        (n) => n.id == "bus_$newBusNo" && n != busNode,
+      );
       final newBusId = existingWithSameId.isNotEmpty
           ? "bus_${newBusNo}_${busNode.displayNumber ?? (busNode.hashCode.abs() % 1000)}"
           : "bus_$newBusNo";
@@ -4461,7 +6525,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       busNode.id = newBusId;
       busNode.busNumber = newBusNo;
       busNode.busNumberStatus = isDuplicate ? 'UNCERTAIN' : 'VERIFIED';
-      busNode.displayLabel = isDuplicate ? "Bus $newBusNo (중복)" : "Bus $newBusNo";
+      busNode.displayLabel = isDuplicate
+          ? "Bus $newBusNo (중복)"
+          : "Bus $newBusNo";
 
       // 1. Update line connections referencing the old bus ID
       for (final line in _workingLines) {
@@ -4496,9 +6562,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
                 for (final l in _workingLines) {
                   for (int i = 0; i < l.connectedTo.length; i++) {
-                    if (l.connectedTo[i] == oldOtherId) l.connectedTo[i] = newGenId;
+                    if (l.connectedTo[i] == oldOtherId)
+                      l.connectedTo[i] = newGenId;
                   }
-                  if (l.connectedTo.contains(newBusId) && l.connectedTo.contains(newGenId)) {
+                  if (l.connectedTo.contains(newBusId) &&
+                      l.connectedTo.contains(newGenId)) {
                     l.lineId = "lead_${newBusId}_$newGenId";
                     l.displayLabel = "Line Bus $newBusNo ↔ G_$newBusNo";
                   }
@@ -4513,9 +6581,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
                 for (final l in _workingLines) {
                   for (int i = 0; i < l.connectedTo.length; i++) {
-                    if (l.connectedTo[i] == oldOtherId) l.connectedTo[i] = newLoadId;
+                    if (l.connectedTo[i] == oldOtherId)
+                      l.connectedTo[i] = newLoadId;
                   }
-                  if (l.connectedTo.contains(newBusId) && l.connectedTo.contains(newLoadId)) {
+                  if (l.connectedTo.contains(newBusId) &&
+                      l.connectedTo.contains(newLoadId)) {
                     l.lineId = "lead_${newBusId}_$newLoadId";
                     l.displayLabel = "Line Bus $newBusNo ↔ Load_$newBusNo";
                   }
@@ -4532,7 +6602,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     final buses = _filteredAndSortedBusNodes;
     final totalPages = math.max(1, (buses.length / _busPageSize).ceil());
     final currentPage = _busPage.clamp(0, totalPages - 1);
-    final pageBuses = buses.skip(currentPage * _busPageSize).take(_busPageSize).toList();
+    final pageBuses = buses
+        .skip(currentPage * _busPageSize)
+        .take(_busPageSize)
+        .toList();
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -4541,49 +6614,78 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _buildBusMappingQueueHeader(),
         const SizedBox(height: 12),
 
-        // 2. Selected Bus Detail Editor
-        if (_selectedNode != null && _selectedNode!.className.toLowerCase() == 'bus')
+        // 2. Selected Bus Detail Editor (Sequential 1-by-1 Focus Card)
+        if (_selectedNode != null &&
+            _selectedNode!.className.toLowerCase() == 'bus')
           _buildSelectedBusMappingCard(_selectedNode!)
+        else if (buses.isNotEmpty)
+          _buildSelectedBusMappingCard(buses.first)
         else
           _buildNoSelectionPrompt("모선(Bus)"),
 
         const SizedBox(height: 14),
-        const Divider(color: Color(0xFFE2E8F0), height: 1),
-        const SizedBox(height: 10),
 
-        // 3. Bus Queue List
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              "모선 목록 (${buses.length}개) · ${currentPage + 1}/$totalPages 페이지",
-              style: const TextStyle(
-                color: Color(0xFF475569),
-                fontSize: 12,
-                fontWeight: FontWeight.bold,
-              ),
+        // 3. Collapsible Full Bus Queue List
+        InkWell(
+          onTap: () => setState(() => _showAllBusesList = !_showAllBusesList),
+          borderRadius: BorderRadius.circular(6),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF1F5F9),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: const Color(0xFFCBD5E1)),
             ),
-            if (totalPages > 1)
-              Row(
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.chevron_left, size: 18, color: Color(0xFF64748B)),
-                    onPressed: currentPage > 0
-                        ? () => setState(() => _busPage--)
-                        : null,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  "전체 모선 목록 (${buses.length}개) ${_showAllBusesList ? '접기 ▲' : '펼치기 ▼'}",
+                  style: const TextStyle(
+                    color: Color(0xFF334155),
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.bold,
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.chevron_right, size: 18, color: Color(0xFF64748B)),
-                    onPressed: currentPage < totalPages - 1
-                        ? () => setState(() => _busPage++)
-                        : null,
-                  ),
-                ],
-              ),
-          ],
+                ),
+                Icon(
+                  _showAllBusesList ? Icons.expand_less : Icons.expand_more,
+                  size: 18,
+                  color: const Color(0xFF64748B),
+                ),
+              ],
+            ),
+          ),
         ),
-        const SizedBox(height: 6),
-        ...pageBuses.map((bus) => _buildBusMappingListItem(bus)),
+        if (_showAllBusesList) ...[
+          const SizedBox(height: 8),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                "페이지: ${currentPage + 1}/$totalPages",
+                style: const TextStyle(color: Color(0xFF64748B), fontSize: 11),
+              ),
+              if (totalPages > 1)
+                Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.chevron_left, size: 18),
+                      onPressed: currentPage > 0
+                          ? () => setState(() => _busPage--)
+                          : null,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.chevron_right, size: 18),
+                      onPressed: currentPage < totalPages - 1
+                          ? () => setState(() => _busPage++)
+                          : null,
+                    ),
+                  ],
+                ),
+            ],
+          ),
+          ...pageBuses.map((bus) => _buildBusMappingListItem(bus)),
+        ],
       ],
     );
   }
@@ -4617,28 +6719,47 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                       ? const SizedBox(
                           width: 10,
                           height: 10,
-                          child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFFD97706)),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 1.5,
+                            color: Color(0xFFD97706),
+                          ),
                         )
-                      : const Icon(Icons.refresh, size: 12, color: Color(0xFFD97706)),
+                      : const Icon(
+                          Icons.refresh,
+                          size: 12,
+                          color: Color(0xFFD97706),
+                        ),
                   label: Text(
                     _isLinkingBusNumbers ? "판독 중..." : "AI 번호 판독",
-                    style: const TextStyle(fontSize: 10, color: Color(0xFFD97706), fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                      fontSize: 10,
+                      color: Color(0xFFD97706),
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                   style: OutlinedButton.styleFrom(
                     backgroundColor: Colors.white,
-                    side: const BorderSide(color: Color(0xFFCBD5E1), width: 1.0),
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                    side: const BorderSide(
+                      color: Color(0xFFCBD5E1),
+                      width: 1.0,
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 4,
+                    ),
                     visualDensity: VisualDensity.compact,
                   ),
                 ),
                 const SizedBox(width: 4),
-                ElevatedButton.icon(
+                OutlinedButton.icon(
+                  key: _busWholeApproveKey,
                   onPressed: () {
                     setState(() {
                       final counts = <int, int>{};
                       for (var b in _busNodes) {
                         if (b.busNumber != null) {
-                          counts[b.busNumber!] = (counts[b.busNumber!] ?? 0) + 1;
+                          counts[b.busNumber!] =
+                              (counts[b.busNumber!] ?? 0) + 1;
                         }
                       }
                       int approvedCount = 0;
@@ -4658,14 +6779,18 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                       if (skippedDups > 0) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
-                            content: Text("중복 번호($skippedDups개)는 일괄 승인에서 제외되었습니다. 각각 고유 번호로 지정해 주세요."),
+                            content: Text(
+                              "중복 번호($skippedDups개)는 일괄 승인에서 제외되었습니다. 각각 고유 번호로 지정해 주세요.",
+                            ),
                             backgroundColor: Colors.orange,
                           ),
                         );
                       } else {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
-                            content: Text("✓ $approvedCount개 모선 번호가 모두 승인되었습니다."),
+                            content: Text(
+                              "✓ $approvedCount개 모선 번호가 모두 승인되었습니다.",
+                            ),
                             backgroundColor: Colors.green,
                           ),
                         );
@@ -4674,10 +6799,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   },
                   icon: const Icon(Icons.done_all, size: 12),
                   label: const Text("전체 승인", style: TextStyle(fontSize: 10)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF2563EB),
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF2563EB),
+                    side: const BorderSide(color: Color(0xFF93C5FD)),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 4,
+                    ),
                     visualDensity: VisualDensity.compact,
                   ),
                 ),
@@ -4688,18 +6816,38 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         const SizedBox(height: 8),
         Row(
           children: [
-            _buildBusFilterBadge("전체", _busNodes.length, const Color(0xFF475569), 'ALL'),
+            _buildBusFilterBadge(
+              "전체",
+              _busNodes.length,
+              const Color(0xFF475569),
+              'ALL',
+            ),
             const SizedBox(width: 6),
-            _buildBusFilterBadge("검토 필요", _busUncertainCount, const Color(0xFFD97706), 'UNCERTAIN'),
+            _buildBusFilterBadge(
+              "검토 필요",
+              _busUncertainCount,
+              const Color(0xFFD97706),
+              'UNCERTAIN',
+            ),
             const SizedBox(width: 6),
-            _buildBusFilterBadge("승인 완료", _busVerifiedCount, const Color(0xFF16A34A), 'VERIFIED'),
+            _buildBusFilterBadge(
+              "승인 완료",
+              _busVerifiedCount,
+              const Color(0xFF16A34A),
+              'VERIFIED',
+            ),
           ],
         ),
       ],
     );
   }
 
-  Widget _buildBusFilterBadge(String label, int count, Color color, String filterKey) {
+  Widget _buildBusFilterBadge(
+    String label,
+    int count,
+    Color color,
+    String filterKey,
+  ) {
     final isSelected = _busFilterStatus == filterKey;
     return GestureDetector(
       onTap: () {
@@ -4718,7 +6866,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
-          color: isSelected ? color.withValues(alpha: 0.12) : const Color(0xFFF1F5F9),
+          color: isSelected
+              ? color.withValues(alpha: 0.12)
+              : const Color(0xFFF1F5F9),
           borderRadius: BorderRadius.circular(6),
           border: Border.all(
             color: isSelected ? color : const Color(0xFFCBD5E1),
@@ -4760,6 +6910,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   Widget _buildSelectedBusMappingCard(ReviewNodeItem busNode) {
     final isVerified = busNode.busNumberStatus == 'VERIFIED';
+    final buses = _filteredAndSortedBusNodes;
+    final currentIndex = buses.indexOf(busNode);
+    final totalCount = buses.length;
+
     final connectedGens = <ReviewNodeItem>[];
     final connectedLoads = <ReviewNodeItem>[];
 
@@ -4769,185 +6923,340 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             ? (line.connectedTo.length > 1 ? line.connectedTo[1] : null)
             : line.connectedTo.first;
         if (otherId != null) {
-          final other = _workingNodes.firstWhere((n) => n.id == otherId, orElse: () => busNode);
+          final other = _workingNodes.firstWhere(
+            (n) => n.id == otherId,
+            orElse: () => busNode,
+          );
           if (other.id != busNode.id) {
-            if (other.className.toLowerCase().contains('gen')) connectedGens.add(other);
-            if (other.className.toLowerCase().contains('load')) connectedLoads.add(other);
+            if (other.className.toLowerCase().contains('gen'))
+              connectedGens.add(other);
+            if (other.className.toLowerCase().contains('load'))
+              connectedLoads.add(other);
           }
         }
       }
     }
 
+    final candidates = <int>{};
+    if (busNode.suggestedBusNumber != null)
+      candidates.add(busNode.suggestedBusNumber!);
+    if (busNode.busNumber != null) candidates.add(busNode.busNumber!);
+    if (busNode.displayNumber != null) candidates.add(busNode.displayNumber!);
+    final idDigits = RegExp(r'\d+')
+        .allMatches(busNode.id)
+        .map((m) => int.tryParse(m.group(0)!))
+        .whereType<int>();
+    candidates.addAll(idDigits);
+
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color: isVerified ? const Color(0xFF86EFAC) : const Color(0xFFFCD34D),
+          color: isVerified ? const Color(0xFF86EFAC) : const Color(0xFFBFDBFE),
           width: 1.5,
         ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // 1. Sequential Progress Bar & Indicator
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFEFF6FF),
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(color: const Color(0xFFBFDBFE)),
-                    ),
-                    child: Text(
-                      busNode.id,
-                      style: const TextStyle(color: Color(0xFF2563EB), fontSize: 11, fontWeight: FontWeight.bold),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    busNode.busNumber != null ? "Bus #${busNode.busNumber}" : "Bus (미지정)",
-                    style: const TextStyle(color: Color(0xFF0F172A), fontSize: 14, fontWeight: FontWeight.bold),
-                  ),
-                ],
+              const Text(
+                "⚡ 모선 번호 확인 (순차 집중 모드)",
+                style: TextStyle(
+                  color: Color(0xFF334155),
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: isVerified ? const Color(0xFFDCFCE7) : const Color(0xFFFEF3C7),
-                  borderRadius: BorderRadius.circular(4),
-                  border: Border.all(
-                    color: isVerified ? const Color(0xFF86EFAC) : const Color(0xFFFDE68A),
+              Text(
+                totalCount > 0 ? "$totalCount개 중 ${currentIndex + 1}번째" : "",
+                style: const TextStyle(
+                  color: Color(0xFF2563EB),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(3),
+            child: LinearProgressIndicator(
+              value: totalCount > 0
+                  ? ((currentIndex + 1) / totalCount).clamp(0.0, 1.0)
+                  : 1.0,
+              minHeight: 5,
+              backgroundColor: const Color(0xFFE2E8F0),
+              valueColor: const AlwaysStoppedAnimation(Color(0xFF2563EB)),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // 2. Hero Bus Banner
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: isVerified
+                    ? const Color(0xFF86EFAC)
+                    : const Color(0xFFBFDBFE),
+                width: 1.5,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color:
+                      (isVerified
+                              ? const Color(0xFF16A34A)
+                              : const Color(0xFF2563EB))
+                          .withValues(alpha: 0.08),
+                  blurRadius: 6,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: isVerified
+                        ? const Color(0xFFDCFCE7)
+                        : const Color(0xFFEFF6FF),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    Icons.numbers_rounded,
+                    color: isVerified
+                        ? const Color(0xFF16A34A)
+                        : const Color(0xFF2563EB),
+                    size: 24,
                   ),
                 ),
-                child: Text(
-                  isVerified ? "✓ 검증 완료" : "⚠️ 확인 필요",
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        busNode.busNumber != null
+                            ? "Bus #${busNode.busNumber}"
+                            : "Bus 번호 미지정",
+                        style: const TextStyle(
+                          color: Color(0xFF0F172A),
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: -0.5,
+                        ),
+                      ),
+                      Text(
+                        "도면 객체 ID: ${busNode.id} · ${isVerified ? '✓ 승인 완료' : '⚠️ 확인 필요'}",
+                        style: TextStyle(
+                          color: isVerified
+                              ? const Color(0xFF16A34A)
+                              : const Color(0xFFD97706),
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+
+          // 3. OCR Candidates Chips
+          if (candidates.isNotEmpty) ...[
+            Wrap(
+              spacing: 6,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                const Text(
+                  "추천 번호: ",
                   style: TextStyle(
-                    color: isVerified ? const Color(0xFF16A34A) : const Color(0xFFB45309),
-                    fontSize: 10,
+                    color: Color(0xFF64748B),
+                    fontSize: 11,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
+                ...candidates.map(
+                  (cand) => ActionChip(
+                    visualDensity: VisualDensity.compact,
+                    label: Text(
+                      "#$cand",
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    backgroundColor: const Color(0xFFEFF6FF),
+                    side: const BorderSide(color: Color(0xFF93C5FD)),
+                    onPressed: () {
+                      _busNumberEditController.text = cand.toString();
+                      setState(() {});
+                    },
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+          ],
+
+          // 4. Bus Number Input Field
+          SizedBox(
+            height: 38,
+            child: TextField(
+              controller: _busNumberEditController,
+              keyboardType: TextInputType.number,
+              style: const TextStyle(
+                color: Color(0xFF0F172A),
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
               ),
-            ],
+              decoration: InputDecoration(
+                labelText: "모선 번호 (Bus Number)",
+                labelStyle: const TextStyle(
+                  color: Color(0xFF64748B),
+                  fontSize: 11,
+                ),
+                filled: true,
+                fillColor: Colors.white,
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(6),
+                  borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(6),
+                  borderSide: const BorderSide(
+                    color: Color(0xFF2563EB),
+                    width: 1.5,
+                  ),
+                ),
+              ),
+              onSubmitted: (_) => _approveAndNextBus(busNode),
+            ),
           ),
           const SizedBox(height: 10),
 
-          // Bus Number Input & Apply
+          // 5. Big Primary Action CTA
+          ElevatedButton.icon(
+            key: _busPrimaryActionKey,
+            onPressed: () => _approveAndNextBus(busNode),
+            icon: const Icon(Icons.check_circle_outline, size: 18),
+            label: const Text(
+              "승인하고 다음 모선으로 (Enter ➔)",
+              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF2563EB),
+              foregroundColor: Colors.white,
+              minimumSize: const Size.fromHeight(40),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+
+          // 6. Secondary Navigation Row
           Row(
             children: [
               Expanded(
-                flex: 3,
-                child: SizedBox(
-                  height: 36,
-                  child: TextField(
-                    controller: _busNumberEditController,
-                    keyboardType: TextInputType.number,
-                    style: const TextStyle(color: Color(0xFF0F172A), fontSize: 13, fontWeight: FontWeight.bold),
-                    decoration: InputDecoration(
-                      labelText: "모선 번호 지정 (Bus Number)",
-                      labelStyle: const TextStyle(color: Color(0xFF64748B), fontSize: 10),
-                      filled: true,
-                      fillColor: Colors.white,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(6),
-                        borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(6),
-                        borderSide: const BorderSide(color: Color(0xFF2563EB), width: 1.5),
-                      ),
-                    ),
+                child: OutlinedButton.icon(
+                  onPressed: _selectPreviousBus,
+                  icon: const Icon(Icons.arrow_back, size: 13),
+                  label: const Text("이전 (◀)", style: TextStyle(fontSize: 11)),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    side: const BorderSide(color: Color(0xFFCBD5E1)),
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               Expanded(
-                flex: 2,
-                child: ElevatedButton(
-                  onPressed: () {
-                    final num = int.tryParse(_busNumberEditController.text.trim());
-                    if (num != null && num > 0) {
-                      final conflictBuses = _busNodes.where((b) => b != busNode && b.busNumber == num).toList();
-                      if (conflictBuses.isNotEmpty) {
-                        for (final cb in conflictBuses) {
-                          cb.busNumberStatus = 'UNCERTAIN';
-                          cb.displayLabel = "Bus $num (중복)";
-                          if (!cb.busNumberReasons.contains('DUPLICATE_BUS_NUMBER_$num')) {
-                            cb.busNumberReasons.add('DUPLICATE_BUS_NUMBER_$num');
-                          }
-                        }
-                        busNode.busNumberStatus = 'UNCERTAIN';
-                        if (!busNode.busNumberReasons.contains('DUPLICATE_BUS_NUMBER_$num')) {
-                          busNode.busNumberReasons.add('DUPLICATE_BUS_NUMBER_$num');
-                        }
-                        _propagateBusNumber(busNode, num, isDuplicate: true);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text("⚠️ 중복 감지: #$num번이 이미 다른 모선(${conflictBuses.map((b) => b.id).join(', ')})에 할당되어 있습니다! 중복된 모선들이 모두 [검토 필요] 탭으로 이동되었습니다."),
-                            backgroundColor: Colors.orange[800],
-                            duration: const Duration(seconds: 4),
-                          ),
-                        );
-                      } else {
-                        // Clear any old duplicate reason on this bus
-                        busNode.busNumberReasons.removeWhere((r) => r.startsWith('DUPLICATE_BUS_NUMBER_'));
-                        _propagateBusNumber(busNode, num, isDuplicate: false);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text("✓ Bus $num 설정 및 연결 기기(발전기/부하) 자동 갱신 완료!"),
-                            backgroundColor: Colors.green,
-                          ),
-                        );
-                      }
-                    } else {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text("올바른 양의 정수 번호를 입력해 주세요."), backgroundColor: Colors.red),
-                      );
-                    }
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFD97706),
-                    foregroundColor: Colors.white,
+                child: OutlinedButton(
+                  onPressed: _skipAndNextBus,
+                  style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 8),
+                    side: const BorderSide(color: Color(0xFFCBD5E1)),
                   ),
-                  child: const Text("적용 및 동기화", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                  child: const Text(
+                    "건너뛰기",
+                    style: TextStyle(fontSize: 11, color: Color(0xFF64748B)),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _selectNextBus,
+                  icon: const Icon(Icons.arrow_forward, size: 13),
+                  label: const Text("다음 (▶)", style: TextStyle(fontSize: 11)),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    side: const BorderSide(color: Color(0xFFCBD5E1)),
+                  ),
                 ),
               ),
             ],
           ),
           const SizedBox(height: 10),
 
-          // Connected Devices Summary
+          // 7. Connected Devices Summary
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: const Color(0xFFF1F5F9),
+              color: Colors.white,
               borderRadius: BorderRadius.circular(6),
               border: Border.all(color: const Color(0xFFE2E8F0)),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text("⚡ 연결된 기기 자동 명명 현황:", style: TextStyle(color: Color(0xFF334155), fontSize: 10.5, fontWeight: FontWeight.bold)),
+                const Text(
+                  "⚡ 직결된 발전기/부하 명명 현황:",
+                  style: TextStyle(
+                    color: Color(0xFF334155),
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
                 const SizedBox(height: 4),
                 if (connectedGens.isEmpty && connectedLoads.isEmpty)
-                  const Text("• 직결된 발전기/부하 없음 (단독 모선)", style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10))
+                  const Text(
+                    "• 직결된 발전기/부하 없음 (단독 모선)",
+                    style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10),
+                  )
                 else ...[
                   if (connectedGens.isNotEmpty)
                     Text(
                       "• 발전기: ${connectedGens.map((g) => g.effectiveDisplayLabel).join(', ')}",
-                      style: const TextStyle(color: Color(0xFF16A34A), fontSize: 10.5, fontWeight: FontWeight.bold),
+                      style: const TextStyle(
+                        color: Color(0xFF16A34A),
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   if (connectedLoads.isNotEmpty)
                     Text(
                       "• 부하: ${connectedLoads.map((l) => l.effectiveDisplayLabel).join(', ')}",
-                      style: const TextStyle(color: Color(0xFF0284C7), fontSize: 10.5, fontWeight: FontWeight.bold),
+                      style: const TextStyle(
+                        color: Color(0xFF0284C7),
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                 ],
               ],
@@ -4960,8 +7269,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   Widget _buildBusMappingListItem(ReviewNodeItem busNode) {
     final isSelected = _selectedNode?.id == busNode.id;
-    final isDuplicate = busNode.busNumber != null && _duplicateBusNumbers.contains(busNode.busNumber);
-    final isVerified = busNode.busNumberStatus == 'VERIFIED' && busNode.busNumber != null && !isDuplicate;
+    final isDuplicate =
+        busNode.busNumber != null &&
+        _duplicateBusNumbers.contains(busNode.busNumber);
+    final isVerified =
+        busNode.busNumberStatus == 'VERIFIED' &&
+        busNode.busNumber != null &&
+        !isDuplicate;
 
     return GestureDetector(
       onTap: () {
@@ -4978,16 +7292,16 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         margin: const EdgeInsets.only(bottom: 6),
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
-          color: isSelected
-              ? const Color(0xFFFEF3C7)
-              : const Color(0xFFF8FAFC),
+          color: isSelected ? const Color(0xFFFEF3C7) : const Color(0xFFF8FAFC),
           borderRadius: BorderRadius.circular(6),
           border: Border.all(
             color: isSelected
                 ? const Color(0xFFD97706)
                 : (isDuplicate
-                    ? const Color(0xFFEF4444)
-                    : (isVerified ? const Color(0xFF86EFAC) : const Color(0xFFCBD5E1))),
+                      ? const Color(0xFFEF4444)
+                      : (isVerified
+                            ? const Color(0xFF86EFAC)
+                            : const Color(0xFFCBD5E1))),
             width: isSelected || isDuplicate ? 1.5 : 1.0,
           ),
         ),
@@ -5002,22 +7316,31 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                       : (isVerified ? Icons.check_circle : Icons.help_outline),
                   color: isDuplicate
                       ? const Color(0xFFEF4444)
-                      : (isVerified ? const Color(0xFF16A34A) : const Color(0xFFD97706)),
+                      : (isVerified
+                            ? const Color(0xFF16A34A)
+                            : const Color(0xFFD97706)),
                   size: 16,
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  busNode.busNumber != null ? "Bus #${busNode.busNumber}" : "Bus ? (미인식)",
+                  busNode.busNumber != null
+                      ? "Bus #${busNode.busNumber}"
+                      : "Bus ? (미인식)",
                   style: TextStyle(
                     color: const Color(0xFF0F172A),
                     fontSize: 12,
-                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                    fontWeight: isSelected
+                        ? FontWeight.bold
+                        : FontWeight.normal,
                   ),
                 ),
                 const SizedBox(width: 6),
                 Text(
                   "(${busNode.id})",
-                  style: const TextStyle(color: Color(0xFF64748B), fontSize: 10),
+                  style: const TextStyle(
+                    color: Color(0xFF64748B),
+                    fontSize: 10,
+                  ),
                 ),
               ],
             ),
@@ -5026,12 +7349,16 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               decoration: BoxDecoration(
                 color: isDuplicate
                     ? const Color(0xFFFEE2E2)
-                    : (isVerified ? const Color(0xFFDCFCE7) : const Color(0xFFFEF3C7)),
+                    : (isVerified
+                          ? const Color(0xFFDCFCE7)
+                          : const Color(0xFFFEF3C7)),
                 borderRadius: BorderRadius.circular(4),
                 border: Border.all(
                   color: isDuplicate
                       ? const Color(0xFFFCA5A5)
-                      : (isVerified ? const Color(0xFF86EFAC) : const Color(0xFFFDE68A)),
+                      : (isVerified
+                            ? const Color(0xFF86EFAC)
+                            : const Color(0xFFFDE68A)),
                 ),
               ),
               child: Text(
@@ -5039,7 +7366,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 style: TextStyle(
                   color: isDuplicate
                       ? const Color(0xFFDC2626)
-                      : (isVerified ? const Color(0xFF16A34A) : const Color(0xFFB45309)),
+                      : (isVerified
+                            ? const Color(0xFF16A34A)
+                            : const Color(0xFFB45309)),
                   fontSize: 9.5,
                   fontWeight: FontWeight.bold,
                 ),
@@ -5050,8 +7379,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       ),
     );
   }
-
-
 
   Future<void> _importExcelInReview() async {
     try {
@@ -5072,7 +7399,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       if (bytes == null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("파일 데이터를 읽을 수 없습니다."), backgroundColor: Colors.red),
+            const SnackBar(
+              content: Text("파일 데이터를 읽을 수 없습니다."),
+              backgroundColor: Colors.red,
+            ),
           );
         }
         return;
@@ -5125,14 +7455,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               value: _isCleanAuto ? true : _humanCompletenessConfirmed,
               onChanged: _isCleanAuto
                   ? null
-                  : (val) =>
-                      setState(() => _humanCompletenessConfirmed = val ?? false),
+                  : (val) => setState(
+                      () => _humanCompletenessConfirmed = val ?? false,
+                    ),
               title: Text(
                 _isCleanAuto
                     ? "✓ 전체 도면 대조 완료 (검토 필요 객체 0건으로 자동 확인됨)"
                     : "원본 회로도 전체와의 대조 확인 완료",
                 style: TextStyle(
-                  color: _isCleanAuto ? const Color(0xFF16A34A) : const Color(0xFF0F172A),
+                  color: _isCleanAuto
+                      ? const Color(0xFF16A34A)
+                      : const Color(0xFF0F172A),
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
                 ),
@@ -5145,7 +7478,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               Container(
                 width: double.infinity,
                 margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   color: const Color(0xFFFEF2F2),
                   border: Border.all(color: const Color(0xFFFECACA)),
@@ -5153,7 +7489,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.warning_amber_rounded, size: 16, color: Color(0xFFDC2626)),
+                    const Icon(
+                      Icons.warning_amber_rounded,
+                      size: 16,
+                      color: Color(0xFFDC2626),
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
@@ -5176,7 +7516,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                         });
                       },
                       style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
                         minimumSize: Size.zero,
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
@@ -5214,29 +7557,43 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             const SizedBox(height: 6),
             Row(
               children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _canVerifyObjectGate
-                        ? _verifyObjectGate
-                        : () {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  '아직 완료할 항목: ${_objectGateBlockers.join(', ')}',
-                                ),
-                                backgroundColor: Colors.orange,
-                              ),
-                            );
-                          },
-                    icon: const Icon(Icons.check_circle_outline, size: 16),
-                    label: const Text("객체 검수 완료"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF2563EB),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
+                if (_objSuspiciousCount > 0)
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF7ED),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: const Color(0xFFFED7AA)),
+                      ),
+                      child: const Text(
+                        'Lensy가 검토 필요 객체를 먼저 보여드리고 있어요.\n'
+                        '모든 항목을 승인하거나 제외하면 다음 단계 버튼이 나타납니다.',
+                        style: TextStyle(
+                          color: Color(0xFF9A3412),
+                          fontSize: 11,
+                          height: 1.3,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  )
+                  else
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: _verifyObjectGate,
+                      icon: const Icon(Icons.check_circle_outline, size: 16),
+                      label: const Text("객체 검수 완료"),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF2563EB),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
                     ),
                   ),
-                ),
                 if (_isObjectVerified) ...[
                   const SizedBox(width: 8),
                   ElevatedButton.icon(
@@ -5288,7 +7645,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               children: [
                 Expanded(
                   child: ElevatedButton.icon(
-                    onPressed: _canVerifyBusGate ? _proceedToConnectionReview : null,
+                    onPressed: _proceedToConnectionReview,
                     icon: const Icon(Icons.arrow_forward, size: 16),
                     label: const Text("모선 번호 승인 ➔ 다음: 선로 결선 인식 및 검수"),
                     style: ElevatedButton.styleFrom(
@@ -5315,20 +7672,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           children: [
             Expanded(
               child: ElevatedButton.icon(
-                onPressed: _canVerifyFinalGate
-                    ? _verifyFinalGate
-                    : () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              _criticalIssuesCount > 0
-                                  ? "해결되지 않은 연결 구조 오류($_criticalIssuesCount건)가 남아 있습니다."
-                                  : "검토할 선로가 남아 있습니다.",
-                            ),
-                            backgroundColor: Colors.orange,
-                          ),
-                        );
-                      },
+                key: _connectionGateKey,
+                onPressed: _verifyFinalGate,
                 icon: const Icon(Icons.verified, size: 16),
                 label: const Text("결선 검수 완료 ➔ 다음: 최종 확인 & 엑셀"),
                 style: ElevatedButton.styleFrom(
@@ -5360,10 +7705,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: const Color(0xFF86EFAC),
-              width: 2,
-            ),
+            border: Border.all(color: const Color(0xFF86EFAC), width: 2),
             boxShadow: const [
               BoxShadow(
                 color: Color(0x0F000000),
@@ -5405,8 +7747,16 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
-                    _buildFinalSummaryItem("확정 모선", "${_busNodes.length}개", const Color(0xFF2563EB)),
-                    _buildFinalSummaryItem("확정 결선", "${sld.lines.length}개", const Color(0xFFEA580C)),
+                    _buildFinalSummaryItem(
+                      "확정 모선",
+                      "${_busNodes.length}개",
+                      const Color(0xFF2563EB),
+                    ),
+                    _buildFinalSummaryItem(
+                      "확정 결선",
+                      "${sld.lines.length}개",
+                      const Color(0xFFEA580C),
+                    ),
                     _buildFinalSummaryItem(
                       "발전기/부하",
                       "${_workingNodes.where((n) => n.className.contains('gen') || n.className.contains('load')).length}개",
@@ -5425,7 +7775,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   color: const Color(0xFFF8FAFC),
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(
-                    color: _importedExcelData != null ? const Color(0xFF86EFAC) : const Color(0xFFCBD5E1),
+                    color: _importedExcelData != null
+                        ? const Color(0xFF86EFAC)
+                        : const Color(0xFFCBD5E1),
                     width: 1.5,
                   ),
                 ),
@@ -5437,25 +7789,39 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                       children: [
                         const Row(
                           children: [
-                            Icon(Icons.table_chart, color: Color(0xFF0D9488), size: 20),
+                            Icon(
+                              Icons.table_chart,
+                              color: Color(0xFF0D9488),
+                              size: 20,
+                            ),
                             SizedBox(width: 8),
                             Text(
                               "계통 엑셀 데이터 (.xlsx) 매칭",
-                              style: TextStyle(color: Color(0xFF0F172A), fontSize: 13.5, fontWeight: FontWeight.bold),
+                              style: TextStyle(
+                                color: Color(0xFF0F172A),
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ],
                         ),
                         ElevatedButton.icon(
+                          key: _finalExcelUploadKey,
                           onPressed: _importExcelInReview,
                           icon: const Icon(Icons.file_upload, size: 14),
                           label: Text(
-                            _importedExcelData != null ? "다른 엑셀 다시 불러오기" : "엑셀 파일 선택",
+                            _importedExcelData != null
+                                ? "다른 엑셀 다시 불러오기"
+                                : "엑셀 파일 선택",
                             style: const TextStyle(fontSize: 11),
                           ),
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFF0D9488),
                             foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
                           ),
                         ),
                       ],
@@ -5474,18 +7840,30 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                           children: [
                             Row(
                               children: [
-                                const Icon(Icons.check_circle, color: Color(0xFF16A34A), size: 18),
+                                const Icon(
+                                  Icons.check_circle,
+                                  color: Color(0xFF16A34A),
+                                  size: 18,
+                                ),
                                 const SizedBox(width: 8),
                                 Text(
-                                  _importedExcelData!['summary_title'] ?? "계통 엑셀 데이터 매칭 완료",
-                                  style: const TextStyle(color: Color(0xFF15803D), fontWeight: FontWeight.bold, fontSize: 13),
+                                  _importedExcelData!['summary_title'] ??
+                                      "계통 엑셀 데이터 매칭 완료",
+                                  style: const TextStyle(
+                                    color: Color(0xFF15803D),
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 13,
+                                  ),
                                 ),
                               ],
                             ),
                             const SizedBox(height: 6),
                             Text(
                               "• 슬랙 모선: #${_importedExcelData!['slack_bus_number'] ?? '자동'}  |  모선: ${_importedExcelData!['total_buses'] ?? 0}개  |  발전기: ${_importedExcelData!['total_generators'] ?? 0}개  |  선로/변압기: ${_importedExcelData!['total_branches'] ?? 0}개",
-                              style: const TextStyle(color: Color(0xFF166534), fontSize: 11.5),
+                              style: const TextStyle(
+                                color: Color(0xFF166534),
+                                fontSize: 11.5,
+                              ),
                             ),
                           ],
                         ),
@@ -5505,11 +7883,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   ElevatedButton.icon(
+                    key: _finalCanvasHandoffKey,
                     onPressed: _handoffToFlutterCanvas,
                     icon: const Icon(Icons.open_in_new),
                     label: Text(
-                      _importedExcelData != null ? "엑셀 데이터 적용하여 캔버스로 이동" : "캔버스 편집 화면으로 이동",
-                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                      _importedExcelData != null
+                          ? "엑셀 데이터 적용하여 캔버스로 이동"
+                          : "캔버스 편집 화면으로 이동",
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF16A34A),
@@ -5532,11 +7916,18 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   Widget _buildFinalSummaryItem(String label, String value, Color color) {
     return Column(
       children: [
-        Text(label, style: const TextStyle(color: Color(0xFF64748B), fontSize: 11)),
+        Text(
+          label,
+          style: const TextStyle(color: Color(0xFF64748B), fontSize: 11),
+        ),
         const SizedBox(height: 4),
         Text(
           value,
-          style: TextStyle(color: color, fontSize: 16, fontWeight: FontWeight.bold),
+          style: TextStyle(
+            color: color,
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+          ),
         ),
       ],
     );
@@ -5619,7 +8010,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         : statusFiltered
               .where((node) => node.className.toLowerCase() == classKey)
               .length;
-    final chipColor = classKey == 'ALL' ? const Color(0xFF2563EB) : _getClassColor(classKey);
+    final chipColor = classKey == 'ALL'
+        ? const Color(0xFF2563EB)
+        : _getClassColor(classKey);
     return GestureDetector(
       onTap: () {
         setState(() {
@@ -5718,7 +8111,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       ),
       child: Text(
         "$label: $count",
-        style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold),
+        style: TextStyle(
+          color: color,
+          fontSize: 10,
+          fontWeight: FontWeight.bold,
+        ),
       ),
     );
   }
