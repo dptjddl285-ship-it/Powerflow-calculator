@@ -26,6 +26,7 @@ class InspectorPanel extends StatefulWidget {
     this.onRotateSelected,
     this.onStraightenLine,
     this.onSmoothLine,
+    this.onRestoreRawLine,
     required this.onClose,
     this.onCollapse,
     required this.onBusRenamed,
