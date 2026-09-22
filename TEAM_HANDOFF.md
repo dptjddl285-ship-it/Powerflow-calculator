@@ -18,7 +18,7 @@ PowerLens는 전기 엔지니어가 수작업으로 수시간 동안 도면을 �
 [검출 설비 후보 (Bus, Gen, Load, Tr) + 선로 연결 그래프]
   ↓ (2. Object Review: 저신뢰도/의심 객체 순차 집중 검토)
 [승인된 설비 목록]
-  ↓ (3. Bus Mapping: OCR 번호 매칭 + 모선 집중 검토)
+  ↓ (3. Bus Mapping: Set-of-Mark + Gemini Vision 번호 매칭 + 모선 집중 검토)
 [모선 번호가 확정된 노드]
   ↓ (4. Connection Review: 결선 순차 검토 + 토폴로지 무결성 검증)
 [결선 검증 완료]
@@ -144,9 +144,9 @@ graph TD
    - Human 확인: 1개씩 순차 카드 검토 및 필터 칩 탐색.
    - 다음 Gate: 전체 의심 객체 승인 완료.
 4. **Bus Mapping (모선 번호 검수)**:
-   - 입력: OCR 인식 모선 번호 후보.
+   - 입력: Set-of-Mark + Gemini Vision 판독 모선 번호 후보.
    - 자동 처리: 모선 집중 모드 (선택 모선 외 12% 투명도 감쇄).
-   - Human 확인: `# Bus #X` 영웅 배지 및 OCR 추천 칩 승인 (Enter 키 지원).
+   - Human 확인: `# Bus #X` 영웅 배지 및 자동 판독 추천 칩 승인 (Enter 키 지원).
    - 다음 Gate: 모든 모선 번호 부여 완료.
 5. **Connection Review (결선 검수)**:
    - 입력: 선로 연결 그래프.
@@ -213,7 +213,7 @@ Lensy의 제품 목표는 다음과 같습니다:
 
 ### 2. Bus Mapping (모선 번호 매핑실)
 - `IMPLEMENTED`: 모선 집중 모드 (선택 모선 외 설비 12% 투명도 감쇄)
-- `IMPLEMENTED`: OCR 자동 인식 모선 번호 후보 칩 및 원클릭 적용
+- `IMPLEMENTED`: Set-of-Mark 자동 판독 모선 번호 후보 칩 및 원클릭 적용
 - `IMPLEMENTED`: 1개씩 순차 탐색 카드 (`# Bus #X` 영웅 배지, 상단 진행 바)
 - `IMPLEMENTED`: `[승인하고 다음 모선으로 (Enter ➔)]` 키보드/원클릭 초고속 검수
 - `IMPLEMENTED`: 모든 모선 번호 중복/누락 검증 완료 게이트

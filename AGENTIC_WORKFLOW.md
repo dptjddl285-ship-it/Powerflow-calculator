@@ -102,7 +102,7 @@ flowchart TD
 > **별도 검수 및 진단 기능과의 구분**:  
 > 프로젝트 내의 다음 기능들은 `ReviewToolRegistry`의 에이전트 등록 도구가 아니며, 별도의 검수 단계 및 진단 모듈로 동작합니다:
 > - **중복 노드 병합**: 1단계 객체 검수 파이프라인의 NMS 및 IoU 필터링 로직에서 처리.
-> - **모선 번호 연계 (`auto_link_bus_numbers`)**: 2단계 모선 매핑 라우터 및 [`backend_api/core/bus_number_linker.py`](backend_api/core/bus_number_linker.py)에서 별도 실행.
+> - **모선 번호 연계 (`link_and_validate_bus_numbers`)**: 2단계 모선 매핑 라우터 및 [`backend_api/core/bus_number_linker.py`](backend_api/core/bus_number_linker.py)에서 별도 실행.
 > - **위상 무결성 검증 (`validate_topology_rules`)**: [`backend_api/core/electrical_topology.py`](backend_api/core/electrical_topology.py) 및 `validate_graph()`에서 독립 검증.
 > - **엑셀 제원 불일치 진단 (`diagnose_excel_discrepancy`)**: 4단계 엑셀 대조 모달 및 [`backend_api/agent/excel_discrepancy_agent.py`](backend_api/agent/excel_discrepancy_agent.py)에서 독립 진단.
 
@@ -160,7 +160,7 @@ PowerLens는 안전성이 최우선인 전력 계통 공학의 특성을 반영�
 | 소스 파일 경로 | 기본 모델 식별자 | 환경변수 오버라이드 | 기능 및 역할 |
 | :--- | :--- | :--- | :--- |
 | [`backend_api/agent/providers.py`](backend_api/agent/providers.py) | `gemini-3.5-flash-lite` | `GEMINI_MODEL` | Lensy AI 대화형 어시스턴트 및 UI 하이라이트 타깃 추천 (타임아웃 25초) |
-| [`backend_api/core/bus_number_linker.py`](backend_api/core/bus_number_linker.py) | `gemini-3.5-flash` | - | OCR 공간 텍스트 기반 모선 번호 시각적 매핑 (실패 시 `gemini-3.5-flash-lite` 폴백) |
+| [`backend_api/core/bus_number_linker.py`](backend_api/core/bus_number_linker.py) | `gemini-3.5-flash` | - | Set-of-Mark(B1, B2...) 크롭 콜라주 기반 모선 번호 시각적 판독 (실패 시 `gemini-3.5-flash-lite` 폴백) |
 | [`backend_api/agent/excel_discrepancy_agent.py`](backend_api/agent/excel_discrepancy_agent.py) | `gemini-3.5-flash-lite` | `GEMINI_MODEL` | 도면-엑셀 제원 간 불일치 원인 분석 및 단계별 권장 조치사항 생성 |
 | [`backend_api/agent/object_reviewer.py`](backend_api/agent/object_reviewer.py) | `gemini-3.5-flash-lite` | `GEMINI_MODEL` | 단일 심볼 객체 검수 시 시각적 근거 설명 생성 |
 

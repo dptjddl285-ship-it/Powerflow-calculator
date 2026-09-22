@@ -61,7 +61,9 @@
   - 신뢰도 미달, 객체 중첩(IoU > 0.35), 종횡비 결함 시 의심 객체(`SUSPICIOUS`)로 분류하여 1:1 수동 검수 유도.
   - 정상 객체는 **[정상 객체 승인]** 버튼으로 1클릭 일괄 승인 가능.
 - **Phase 2 [② 모선 번호 매핑 (Bus Mapping Review)]**:
-  - 도면 텍스트 OCR 및 기하학적 공간 근접도(Spatial Distance)를 결합하여 각 모선에 고유 번호(Bus Number) 1:1 부여 및 인접 발전기/부하 자동 전파.
+  - CV 파이프라인에서 검출된 모선 바운딩 박스 주변 국소 영역 크롭에 태그(B1, B2...)를 부여하는 Set-of-Mark(SoM) 콜라주를 생성하고, Gemini Vision(`gemini-3.5-flash`)으로 인쇄 번호를 판독.
+  - 중복 번호, 형식 오류, 미인식 모선에 대해 엄격한 필드 검증을 거쳐 불확실한 모선은 추측하지 않고 `UNCERTAIN` 상태로 보존하여 엔지니어의 수동 검수로 위임.
+  - 확정된 모선 번호는 `propagate_bus_numbers_to_devices`를 통해 인접 발전기/부하/변압기로 일관되게 자동 전파.
 - **Phase 3 [③ 선로 결선 검수 (Connection Review)]**:
   - 픽셀 스켈레톤화 및 선로 추적(Line Tracing)으로 송전선로(Branch), 변압기, 인입선 결선 검수. 모호 결선(Ambiguous) 수동 교정 및 단선/고립 모선 토폴로지 검증.
 - **Phase 4 [④ 최종 확인 & 엑셀 대조 (Verified Final & Excel Cross-Check)]**:
@@ -82,8 +84,9 @@
   - 도면 토폴로지는 100% 보존하면서 엑셀 미정의 선로에 대한 사전 시뮬레이션 차단(`MISSING` 상태) 구현.
   - 무손실 선로($R=0.0, X>0$) 및 $B=0.0$ 정상 수치를 왜곡 없이 보존 (Python Falsy 판정 버그 해결).
 - **일반화된 복회선(Double Circuit) & 2-Port 변압기 토폴로지**:
-  - 특정 모선 번호 하드코딩 없이 복회선 병렬 등가 회로($Z_{eq} = 1/\sum (1/Z_k)$) 자동 합성.
-  - 변압기 물리 연결선(Lead line)과 실제 변압기 2-Port 요소를 분리하여 zero impedance 단락 문제 원천 차단.
+  - 특정 계통/모선 번호 하드코딩 없이 복회선 병렬 등가 회로($Z_{eq} = 1/\sum (1/Z_k)$) 자동 합성.
+  - 변압기는 일반화된 2-Port 요소(`Bus A -> lead line -> Transformer -> lead line -> Bus B`)로 모델링하며, 물리 연결선(Lead line)은 토폴로지 전용 가상 선로(`is_transformer_lead: True`, $rPu=0, xPu=0$)로 식별하여 조류계산 시 일반 송전선로에서 제외(Bypass)함으로써 영임피던스 나눗셈($1/Z$) 발산 문제를 원천 차단.
+  - 양단 리드선 바이패스 후 최종 솔버에는 A-B 간 정확히 1개의 변압기 브랜치만 생성/투입되며, Excel 데이터를 R, X, B, tap ratio, tapFromBus(방향)의 유일한 Source of Truth로 사용하여 min/max 강제 정렬 없이 실제 탭 방향성을 완벽히 보존.
 - **표준 계통 자체 수치해석 검증**: PSS/E나 PowerWorld와의 직접 1:1 비교 대신, IEEE 24-bus RTS 표준 계통 입력 데이터에 대한 자체 AC Newton-Raphson 솔버 수렴성(**4회 반복**, 잔차 $4 \times 10^{-8}$)과 전력 수지 평형($\Delta P_{\text{balance}} = 0.0\text{ MW}$)의 물리적 무결성으로 검증.
 
 ### 5. 🎨 웹 기반 인터랙티브 CAD 편집 체계 (Flutter Web)

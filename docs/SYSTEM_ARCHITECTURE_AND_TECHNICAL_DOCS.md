@@ -12,7 +12,7 @@ PowerLens Pro는 설계 도면(이미지)에서 전력망 토폴로지를 추출
 
 ### 🎯 핵심 설계 원칙 (No-Hallucination & Reality-First)
 1. **정밀성과 투명성**: AI가 도면을 100% 완벽하게 인식할 수 없다는 현실을 인정하고, 4단계 검수 게이트(Gate)를 두어 사용자가 이상치와 결선을 직접 확인하고 수정할 수 있도록 지원합니다.
-2. **전기공학적 무결성**: 단순 그래픽 처리를 넘어 슬랙(Slack) 모선 식별, 동기조상기(P=0) 등가성, 다중 권선 변압기 단자 조합, $\pi$-등가 선로 모델 등 실제 전력 계통 공학 규칙을 엄격히 적용합니다.
+2. **전기공학적 무결성**: 단순 그래픽 처리를 넘어 슬랙(Slack) 모선 식별, 동기조상기(P=0) 등가성, 2-Port 변압기 토폴로지 모델링, $\pi$-등가 선로 모델 등 실제 전력 계통 공학 규칙을 엄격히 적용합니다.
 3. **독립 실행 구조**: 외부 클라우드 DB에 의존하지 않고 로컬 세션 스토어(`session_store.py`)와 메모리 캐시를 기반으로 신속하게 동작하며, Gemini LLM은 원인 진단 및 보조 질의용으로 탑재되어 오프라인 환경에서도 규칙 기반(Rule-based) 폴백으로 완벽하게 자립 구동됩니다.
 
 ---
@@ -46,7 +46,7 @@ graph TB
     subgraph CV_Engine["컴퓨터 비전 & 인식 계층"]
         YOLO["YOLO11/COSLR 객체 검출기 (2026_07_30_coslr.pt)"]
         CV_Rule["특화 CV 검출기 (모선/부하/변압기 휴리스틱)"]
-        OCR_Linker["모선 번호 공간 연계 엔진 (bus_number_linker.py)"]
+        SoM_Linker["Set-of-Mark 모선 번호 인식기 (bus_number_linker.py)"]
         Skeleton["픽셀 골격화 & 선로 추적기 (adaptive_vision_pipeline.py)"]
         Topology["전기 위상 무결성 검증기 (electrical_topology.py)"]
     end
@@ -116,9 +116,12 @@ sequenceDiagram
 
     Note over User, Solver: [단계 2] 모선 번호 매핑 (Bus Mapping Review)
     Front->>Server: POST /review/link_bus_numbers
-    Server->>CV: OCR 번호 검출 및 모선 공간 근접도(Spatial Distance) 연계
-    CV-->>Server: 모선 번호 부여 및 발전기/부하로 모선 번호 전파
-    Server->>Front: 매핑 결과 반환
+    Server->>CV: Bus 바운딩 박스 주변 국소 영역 Set-of-Mark(B1, B2...) 크롭 생성
+    CV->>Agent: Gemini Vision에 그리드 크롭 전달 및 인쇄 번호 판독 요청
+    Agent-->>CV: 태그별 판독 번호 반환
+    CV->>CV: 중복/형식/누락 검증 후 VERIFIED 또는 UNCERTAIN 확정 및 연결 기기 전파
+    CV-->>Server: 번호 부여 노드 및 검증 리포트 반환
+    Server->>Front: 매핑 결과 및 버스 상태 반환
     User->>Front: 번호 확인/수정 후 Gate 2 승인
 
     Note over User, Solver: [단계 3] 선로 결선 검수 (Connection Review)
@@ -171,7 +174,7 @@ sequenceDiagram
 | [`cv_load_detector.py`](../backend_api/core/cv_load_detector.py) | 화살표, 삼각형, 지그재그 패턴을 분석하여 부하(Load) 기호 검출 | `detect_loads_heuristic()` |
 | [`cv_transformer_detector.py`](../backend_api/core/cv_transformer_detector.py) | 2개 맞물린 원형(Two-circle) 및 코일 패턴 분석으로 변압기 검출 | `detect_transformers_heuristic()` |
 | [`adaptive_vision_pipeline.py`](../backend_api/core/adaptive_vision_pipeline.py) | YOLO11 모델(`2026_07_30_coslr.pt`)과 CV 휴리스틱을 NMS(Non-Maximum Suppression)로 앙상블하고 단선도 선로 골격 추적 | `detect_sld_objects_adaptive()`, `detect_sld_connections_adaptive()` |
-| [`bus_number_linker.py`](../backend_api/core/bus_number_linker.py) | OCR 텍스트 바운딩 박스를 검출하고 기하학적 유클리드 거리 및 투영 근접도를 계산하여 모선에 번호 부여 (Gemini 시각적 보조) | `link_and_validate_bus_numbers()`, `propagate_bus_numbers_to_devices()` |
+| [`bus_number_linker.py`](../backend_api/core/bus_number_linker.py) | 모선 bbox 주변 Set-of-Mark(B1, B2...) 크롭 콜라주를 생성하고 Gemini Vision으로 인쇄 번호를 판독하여 중복/형식 검증 후 번호 부여 및 연결 기기 전파 | `link_and_validate_bus_numbers()`, `propagate_bus_numbers_to_devices()` |
 | [`electrical_topology.py`](../backend_api/core/electrical_topology.py) | 기기 단자 스냅핑, 고립된 선로/모선 판정, 양단 단자 연결성 검증 | `build_topology_graph()`, `validate_topology()` |
 
 ### 2) 계통 데이터 연동 및 불일치 검증기 (`backend_api/core/excel_case_importer.py`)
@@ -181,8 +184,9 @@ sequenceDiagram
 * **동기조상기(Synchronous Condenser) 상호 등가 인식**:
   - IEEE 24 RTS 계통의 Bus 14 등 유효전력 출력이 0인 동기조상기($P_g = 0\text{ MW}$)가 도면상 부하(Load) 또는 커패시터 심볼로 작도된 경우, 이를 누락 발전기로 오경보하지 않고 상호 등가 매칭 처리.
   - 중복 기기 자동 생성을 방지하고 `isSynchronousCondenser: True` 플래그 부여.
-* **변압기 다중 모선 연계(Multi-bus Tie Transformers) 조합 정밀 판별**:
-  - 한 변압기 기호에 여러 전압 모선(예: 9-11, 9-12, 10-11, 10-12)이 결선된 경우, `itertools.combinations(conn_buses, 2)`를 생성하여 엑셀 선로/변압기 목록과 완벽히 대조.
+* **일반화된 2-Port 변압기 토폴로지 및 파라미터 매핑**:
+  - 변압기를 2-Port 브랜치 요소(`Bus A -> lead line -> Transformer -> lead line -> Bus B`)로 일반화하여 처리하며, 양단 물리 리드선(`is_transformer_lead: True`, $rPu=0, xPu=0$)은 조류계산 시 일반 송전 브랜치에서 제외(Bypass)하여 영임피던스 나눗셈($1/Z$) 발산을 방지.
+  - 도면 토폴로지로부터 인식된 양단 모선과 엑셀의 변압기 제원(`from_bus`, `to_bus`, `tap_ratio`, `tapFromBus`)을 1:1 대조하여 방향성을 보존하고 유일한 변압기 브랜치로 생성. 특정 계통 번호 하드코딩이나 임의의 브랜치 조합 생성을 배제.
 * **비교 분석 리포트 (`compare_elements_with_excel`)**:
   - `missing_buses`, `surplus_buses`, `missing_branches`, `surplus_branches`, `missing_generators`, `missing_loads`를 분리 추출하고 수치 요약 통계 생성.
 
@@ -236,7 +240,7 @@ sequenceDiagram
 | Method | Endpoint | 설명 | 요청 파라미터 / 바디 | 주요 반환 데이터 |
 | :--- | :--- | :--- | :--- | :--- |
 | `POST` | `/review/detect_objects` | 도면 객체 AI 검출 및 검수 세션 시작 | `file: UploadFile` (도면 이미지) | `document_id`, `nodes`, `review_stage` |
-| `POST` | `/review/link_bus_numbers` | 모선 번호 OCR 추출 및 공간 매핑 | `document_id`, `working_nodes` | `nodes` (모선번호 부여), `bus_report` |
+| `POST` | `/review/link_bus_numbers` | Set-of-Mark + Gemini Vision 기반 모선 번호 인식 및 검증 | `document_id`, `working_nodes` | `nodes` (모선번호 부여), `bus_report` |
 | `POST` | `/review/detect_connections` | 단선도 선로 골격화 및 결선 추적 | `document_id`, `confirmed_nodes` | `lines`, `annotated_nodes` |
 | `POST` | `/review/verify_objects_gate` | 1단계 객체 검수 게이트 검증 | `document_id`, `working_nodes`, `human_completeness_confirmed` | `gate_status` (`VERIFIED`/`BLOCKED`), `blockers` |
 | `POST` | `/review/verify_final_gate` | 최종 위상 검증 및 VerifiedSLD 확정 | `document_id`, `working_nodes`, `working_lines` | `gate_status`, `verified_sld`, `topology_issues` |

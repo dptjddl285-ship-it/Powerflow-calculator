@@ -101,7 +101,7 @@ python backend_api/tests/test_power_flow_solver.py
 | [`test_generalized_circuits_and_transformers.py`](backend_api/tests/test_generalized_circuits_and_transformers.py) | - 모선 번호 하드코딩 없는 일반화된 복회선(Double Circuit) 병렬 합성<br/>- 변압기 물리 인입선(Lead line) 바이패스 및 2-Port 브랜치 합성 검증<br/>- 변압기 tap ratio 및 tapFromBus 방향 보존 검증 | **Pass (8/8)** |
 | [`test_excel_case_importer.py`](backend_api/tests/test_excel_case_importer.py) | - PSSE / Matpower 표준 엑셀 시트 파싱 및 단위 정규화<br/>- 슬랙 모선 자동 탐색 및 동기조상기($P_g=0$) 등가 식별 | **Pass (6/6)** |
 | [`test_power_flow_solver.py`](backend_api/tests/test_power_flow_solver.py) | - 3-Bus 및 IEEE 24-bus RTS 계통에 대한 AC Newton-Raphson 수렴 검증<br/>- 모선 전압 크기/위상각 및 전력 수지 무결성 확인 | **Pass** |
-| [`test_excel_discrepancy_checker.py`](backend_api/tests/test_excel_discrepancy_checker.py) | - 도면 설비 vs 엑셀 설비 간 누락/초과 설비 분리 판별<br/>- 다중 모선 연계 변압기 브랜치 조합 정합성 검증 | **Pass (4/4)** |
+| [`test_excel_discrepancy_checker.py`](backend_api/tests/test_excel_discrepancy_checker.py) | - 도면 설비 vs 엑셀 설비 간 누락/초과 설비 분리 판별<br/>- 2-Port 변압기 및 계통 브랜치 연결 대조 검증 | **Pass (4/4)** |
 
 ---
 
