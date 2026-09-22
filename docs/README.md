@@ -5,15 +5,16 @@
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![Flutter](https://img.shields.io/badge/Flutter-Web-02569B?style=for-the-badge&logo=flutter&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?style=for-the-badge&logo=fastapi&logoColor=white)
-![YOLO](https://img.shields.io/badge/YOLOv11-Computer_Vision-00FFFF?style=for-the-badge&logo=yolo&logoColor=black)
-![Gemini](https://img.shields.io/badge/Gemini_2.5-AI_Agent-orange?style=for-the-badge&logo=google&logoColor=white)
+![YOLO](https://img.shields.io/badge/YOLO11-Computer_Vision-00FFFF?style=for-the-badge&logo=yolo&logoColor=black)
+![Gemini](https://img.shields.io/badge/Gemini_3.5-AI_Agent-orange?style=for-the-badge&logo=google&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
-**AI 기반 전력 단선도(Single-Line Diagram) 자동 객체 인식, LLM 지능형 검수 안내, 웹 CAD 편집 및 고성능 AC Newton-Raphson 조류계산 원스톱 솔루션**
+**PowerLens = AI Vision + Human Review Gate + Agentic Review Workflow + Excel Cross-Check + deterministic AC Power Flow Solver**  
+*AI 기반 전력 단선도(Single-Line Diagram) 자동 객체 인식, LLM 지능형 검수 안내, 웹 CAD 편집 및 고성능 AC Newton-Raphson 조류계산 원스톱 솔루션*
 
-[프로젝트 개요](#-프로젝트-개요-executive-summary) • [핵심 기술 성과](#-핵심-엔지니어링-및-ai-기술-성과) • [시스템 아키텍처](#-시스템-아키텍처-system-architecture) • [검증 및 벤치마크](#-수치해석-검증-및-성능-benchmark-validation) • [빠른 시작 가이드](#-빠른-시작-가이드-quick-start)
+[프로젝트 개요](#-프로젝트-개요-executive-summary) • [핵심 기술 성과](#-핵심-엔지니어링-및-ai-기술-성과) • [에이전트 워크플로우](../AGENTIC_WORKFLOW.md) • [기술 검증 보고서](../EVALUATION.md) • [시스템 아키텍처](#-시스템-아키텍처-system-architecture) • [빠른 시작 가이드](#-빠른-시작-가이드-quick-start)
 
-> 👥 **Team & Docs**: 전체 시스템 상세 설계는 [`docs/SYSTEM_ARCHITECTURE_AND_TECHNICAL_DOCS.md`](./SYSTEM_ARCHITECTURE_AND_TECHNICAL_DOCS.md), 팀 인수인계는 [`../TEAM_HANDOFF.md`](../TEAM_HANDOFF.md), 특허 출원 내용은 [`../PowerLens_특허명세서_공식출원용.md`](../PowerLens_특허명세서_공식출원용.md)를 참조하세요.
+> 👥 **Team & Docs**: 에이전트 상세 구조는 [`../AGENTIC_WORKFLOW.md`](../AGENTIC_WORKFLOW.md), 정량/정성 평가 보고서는 [`../EVALUATION.md`](../EVALUATION.md), 전체 시스템 상세 설계는 [`docs/SYSTEM_ARCHITECTURE_AND_TECHNICAL_DOCS.md`](./SYSTEM_ARCHITECTURE_AND_TECHNICAL_DOCS.md), 팀 인수인계는 [`../TEAM_HANDOFF.md`](../TEAM_HANDOFF.md), 특허 출원 내용은 [`../PowerLens_특허명세서_공식출원용.md`](../PowerLens_특허명세서_공식출원용.md)를 참조하세요.
 
 </div>
 
@@ -21,22 +22,23 @@
 
 ## 📌 프로젝트 개요 (Executive Summary)
 
-전력 계통 해석(Power System Analysis) 분야에서 수십 모선 이상의 전력망 데이터를 구축하려면 단선도(Single-Line Diagram) 도면을 보고 수작업으로 모선 번호, 송전선로 임피던스, 발전기/부하 제원 등을 수치해석 툴(PSS/E, ETAP 등)에 일일이 타이핑해야 했습니다. 이 과정은 수 시간 이상의 노동을 필요로 하며 휴먼 에러로 인한 계통 해석 오류를 빈번하게 유발합니다.
+전력 계통 해석(Power System Analysis) 분야에서 수십 모선 이상의 전력망 데이터를 구축하려면 단선도(Single-Line Diagram) 도면을 보고 수작업으로 모선 번호, 송전선로 임피던스, 발전기/부하 제원 등을 수치해석 툴에 일일이 타이핑해야 했습니다. 이 과정은 수 시간 이상의 노동을 필요로 하며 휴먼 에러로 인한 계통 해석 오류를 빈번하게 유발합니다.
 
 **PowerLens Pro**는 이러한 문제를 해결하기 위해 개발된 **지능형 전력 엔지니어링 웹 CAD & 수치해석 솔루션**입니다.
 
 1. **AI Vision & CV 파이프라인**: 래스터 도면 이미지에서 모선(Bus), 발전기(Gen), 부하(Load), 변압기(Tr), 선로(Line)를 자동 탐지하고 토폴로지를 추출합니다.
 2. **4단계 AI-인간 협업 검수 체계**: 100% 자동화의 오류 가능성을 방어하기 위해 객체 검수 → 모선 매핑 → 선로 결선 → 엑셀 대조의 4단계 검증 게이트(Review Gate)를 제공합니다.
-3. **Gemini LLM 기반 Lensy AI 에이전트**: 하드코딩된 규칙 사전을 배제하고 LLM 자연어 추론을 통해 작업자가 다음에 취해야 할 액션을 실시간으로 유도하며, 화면 내 25개 이상의 UI 버튼을 네온 불빛으로 직관적으로 밝혀줍니다.
+3. **결정론적 Supervisor & Gemini 지능형 어시스턴트**: 결정론적 상태 관리자(`ReviewAgentSupervisor`)가 도구 실행과 패치 프리뷰(`PatchPreview`)를 안전하게 통제하고, Gemini 3.5 기반 어시스턴트가 상황 인지형 조언 및 화면 내 25개 이상의 UI 버튼 네온 점등을 지원합니다.
 4. **웹 기반 인터랙티브 CAD 캔버스**: 직관적인 마우스 드래그앤드롭, 방향키 미세 정렬(1px/10px Nudge), `Ctrl+R` 90도 회전 및 라벨 방향 자동 보정(Counter-Rotation) 기능을 지원합니다.
-5. **자체 구현 Full AC Newton-Raphson 수치해석 엔진**: PSS/E 기준 3모선 및 IEEE 24-bus RTS 표준 계통에서 허용 오차 $10^{-4}$ 이하, 4회 반복 내 수렴 및 전력수지 무결성 검증을 통과했습니다.
+5. **자체 구현 Full AC Newton-Raphson 수치해석 엔진**: 3모선 및 IEEE 24-bus RTS 표준 계통에서 허용 오차 $10^{-4}$ 이하, 4회 반복 내 수렴 및 전력수지 무결성 검증을 통과했습니다.
 
 ---
 
 ## 🏆 핵심 엔지니어링 및 AI 기술 성과
 
-### 1. 🤖 Gemini LLM 기반 지능형 안내 에이전트 (Lensy AI / PowerLens AI)
-- **100% LLM 자연어 추론**: 취약한 키워드 매칭 사전을 완전 폐기하고, 최신 Gemini 2.5 API 기반으로 사용자의 자연어 질문과 의도를 실시간 해석.
+### 1. 🤖 지능형 에이전트 & 자율 검수 체계 (Agentic Review & Lensy AI)
+- **결정론적 감독자 & LLM 하이브리드 아키텍처**: 전체 워크플로우의 안전한 전이와 게이트 제어는 결정론적 `ReviewAgentSupervisor`가 담당하고, 자연어 의도 해석과 상황 진단은 Gemini 3.5 LLM이 분담.
+- **도구 실행 및 안전한 패치 프리뷰 (`PatchPreview`)**: 선로 재추적(`port_aware_retry`), 영역 재분석(`roi_reanalysis`) 등의 특화 도구를 자율 실행하며, 변경 사항은 즉시 덮어쓰지 않고 diff 프리뷰를 생성하여 엔지니어의 최종 승인(Human Apply/Reject)을 거쳐 확정.
 - **상황 인지형 프롬프트 주입**: 현재 작업 단계(Stage), 미승인 객체 수, 의심(Suspicious) 사유, 결선 상태, 누락 후보군을 구조화하여 프롬프트로 전달.
 - **✨ 실시간 UI 네온 하이라이트 (Glowing Target System)**:
   - 질문 의도 및 상태에 맞춰 사용자가 조작해야 할 화면 요소를 반짝이는 네온 애니메이션으로 표시 (`GlowingTargetWrapper`).
@@ -45,7 +47,7 @@
 
 ### 2. 🛡️ 4단계 AI-인간 협업 도면 검수 파이프라인 (Staged Review Gate)
 - **Phase 1 [① 객체 검수 (Object Review)]**:
-  - YOLOv11 + CV 하이브리드 검출. 2단계 신뢰도 임계치 적용:
+  - YOLO11 + CV 하이브리드 검출. 2단계 신뢰도 임계치 적용:
     - *1차 최소 검출 기준*: 클래스별 0.27 ~ 0.50 이상 (도면 노이즈 필터링).
     - *2차 검수 게이트 기준*: 모선 0.60, 발전기 0.55, 부하 0.50, 변압기 0.50 이상 시 정상 객체(`DETECTED`)로 자동 분류.
   - 신뢰도 미달, 객체 중첩(IoU > 0.35), 종횡비 결함 시 의심 객체(`SUSPICIOUS`)로 분류하여 1:1 수동 검수 유도.
@@ -58,14 +60,15 @@
   - 무결점 `VerifiedSLD` 확정 요약 확인, 전력계통 엑셀 파일(.xlsx)과 도면 설비 제원(Bus/Branch/Gen/Load) 자동 교차 대조 및 불일치 AI 진단 모달 제공 후 캔버스 전송.
 
 ### 3. 🧠 AI Vision 기반 단선도 토폴로지 자동 복원
-- **YOLOv11 + OpenCV 하이브리드 객체 인식**: 모선·부하·변압기는 형태와 전기적 연결 조건을 우선 검사하고, YOLOv11은 발전기 탐지와 CV 후보 보완에 활용.
-- **객체 검출 성능 검증**: 26장 별도 정답셋에서 로컬 YOLO 체크포인트와 CV 보정 파이프라인이 IoU 0.40 기준 **Precision 98.07%, Recall 97.95%, F1 98.01%** 기록.
+- **YOLO11 + OpenCV 하이브리드 객체 인식**: 모선·부하·변압기는 형태와 전기적 연결 조건을 우선 검사하고, YOLO11은 발전기 탐지와 CV 후보 보완에 활용.
+- **객체 검출 성능 검증**: 26장 별도 홀드아웃 정답셋에서 YOLO11 파인튜닝 모델과 CV 보정 파이프라인이 IoU 0.40 기준 **Precision 98.07%, Recall 97.95%, F1 98.01% (TP: 764, FP: 15, FN: 16)** 기록.  
+  *(※ 본 수치는 심볼 객체 검출/인식 단계의 정량 지표이며, 전체 토폴로지 연결은 포트 인식 선로 추적 및 사용자 검수 게이트를 거쳐 확정됩니다. 상세 내용은 [`../EVALUATION.md`](../EVALUATION.md) 참조)*
 - **포트 인식 기반 선로 추적**: 이진화·스켈레톤화와 실제 선 픽셀 경로 추적을 결합하여 직선·굴절·교차 선로를 분석하고 유효 연결 포트 매핑.
 
 ### 4. ⚡ 자체 개발 Full AC Newton-Raphson 전력 조류계산 솔버
 - **정밀 복소 어드미턴스 행렬($Y_{\text{bus}}$) 구축**: 송전선로 $\pi$-등가회로의 병렬 서셉턴스(B/2), 변압기 탭비(Tap Ratio) 오프노미널 모델링 지원.
-- **야코비안(Jacobian) 행렬 방정식 계산**: $\begin{bmatrix} \Delta P \\ \Delta Q \end{bmatrix} = \begin{bmatrix} J_{11} & J_{12} \\ J_{21} & J_{22} \end{bmatrix} \begin{bmatrix} \Delta \theta \\ \Delta |V| \end{bmatrix}$ 반복 수렴 알고리즘을 NumPy 벡터화 연산으로 최적화.
-- **산업 표준 검증**: IEEE 24-bus RTS 계통에서 **4회 반복(Iteration)** 만에 최대 잔차 $4 \times 10^{-8}$ 수준으로 안정적 수렴 확인.
+- **야코비안(Jacobian) 행렬 방정식 계산**: $\begin{bmatrix} \Delta P \\ \Delta Q \end{bmatrix} = \begin{bmatrix} J_{11} & J_{12} \\ J_{21} & J_{22} \end{bmatrix} \begin{bmatrix} \Delta \theta \\ \Delta |V| \end{bmatrix}$ 반복 수렴 알고리즘을 NumPy 2D 밀집 배열 및 벡터화 연산으로 최적화.
+- **산업 표준 계통 수렴 검증**: IEEE 24-bus RTS 표준 계통에서 **4회 반복(Iteration)** 만에 최대 잔차 $4 \times 10^{-8}$ 수준으로 안정적 수렴 확인.
 
 ### 5. 🎨 웹 기반 인터랙티브 CAD 편집 체계 (Flutter Web)
 - **Direct Drag & Tight Hitbox**: 심볼 몸체를 마우스로 직접 선택하여 이동하는 직관적인 드래그앤드롭 및 기하학적 바운딩 박스 기반의 조작 영역 최적화.
@@ -94,10 +97,11 @@ flowchart TB
 
     subgraph Server ["Backend API (FastAPI / Python 3.11)"]
         Router["FastAPI Router (/review/*, /run_simulation, /apply_excel)"]
-        Agent["Gemini 2.5 Agent Provider (Dynamic Context Prompt Engine)"]
-        CV["Vision Engine (YOLOv11 + OpenCV Line Tracing)"]
+        Supervisor["ReviewAgentSupervisor (Deterministic Control & Retry)"]
+        Agent["Gemini 3.5 Assistant (Dynamic Context Prompt Engine)"]
+        CV["Vision Engine (YOLO11 + OpenCV Line Tracing)"]
         Importer["Excel Case Importer (Unified Pipeline)"]
-        Solver["AC Newton-Raphson Solver (Sparse Ybus & Jacobian)"]
+        Solver["AC Newton-Raphson Solver (NumPy Ybus & Jacobian)"]
     end
 
     subgraph Data ["Data Layer"]
@@ -106,8 +110,10 @@ flowchart TB
     end
 
     Diagram --> Review
-    Review --> CV
+    Review --> Supervisor
+    Supervisor --> CV
     Lensy <--> Agent
+    Agent <--> Supervisor
     Excel --> Importer
     CV --> UI
     Importer --> UI
@@ -120,7 +126,7 @@ flowchart TB
 
 ## 🧪 수치해석 검증 및 성능 (Benchmark Validation)
 
-### IEEE 24-bus RTS / PSS/E 실제 계통 수렴 검증
+### IEEE 24-bus RTS 표준 계통 수렴 검증
 
 | 항목 | 계산 결과 | 비고 |
 | :--- | :--- | :--- |

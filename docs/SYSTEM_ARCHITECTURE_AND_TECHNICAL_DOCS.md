@@ -36,7 +36,7 @@ graph TB
     end
 
     subgraph CV_Engine["컴퓨터 비전 & 인식 계층"]
-        YOLO["YOLOv8/COSLR 객체 검출기 (2026_07_30_coslr.pt)"]
+        YOLO["YOLO11/COSLR 객체 검출기 (2026_07_30_coslr.pt)"]
         CV_Rule["특화 CV 검출기 (모선/부하/변압기 휴리스틱)"]
         OCR_Linker["모선 번호 공간 연계 엔진 (bus_number_linker.py)"]
         Skeleton["픽셀 골격화 & 선로 추적기 (adaptive_vision_pipeline.py)"]
