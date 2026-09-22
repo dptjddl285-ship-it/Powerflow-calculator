@@ -3304,33 +3304,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                     : _selectNextSuspiciousNode,
                               ),
                               const SizedBox(width: 6),
-                              if (_objDetectedCount > 0 || _unconfirmedNodesCount > 0)
-                                GlowingTargetWrapper(
-                                  targetId: 'object_batch_approve',
-                                  borderRadius: BorderRadius.circular(16),
-                                  guideLabel: "✨ 정상 객체 승인",
-                                  child: ElevatedButton.icon(
-                                    onPressed: _confirmAllCleanNodes,
-                                    icon: const Icon(Icons.done_all, size: 13),
-                                    label: Text(
-                                      "정상 객체 승인 (${_unconfirmedNodesCount > 0 ? _unconfirmedNodesCount : _objDetectedCount})",
-                                      style: const TextStyle(
-                                        fontSize: 10.5,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color(0xFF0D9488),
-                                      foregroundColor: Colors.white,
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                        vertical: 4,
-                                      ),
-                                      visualDensity: VisualDensity.compact,
-                                    ),
-                                  ),
-                                ),
-                              const SizedBox(width: 6),
                               ChoiceChip(
                                 label: Text(
                                   _isManualAddMode
