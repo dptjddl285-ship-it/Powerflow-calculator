@@ -15,6 +15,7 @@ import '../widgets/review_overlay.dart';
 import '../widgets/excel_mismatch_dialog.dart';
 import '../widgets/powerlens_ai/powerlens_ai_button.dart';
 import '../widgets/powerlens_ai/powerlens_ai_panel.dart';
+import '../widgets/powerlens_ai/glowing_target_wrapper.dart';
 
 enum ReviewPhase {
   objectReview,
@@ -132,13 +133,21 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   int get _unresolvedCandidatesCount =>
       _missingCandidates.where((c) => c.status == 'OPEN').length;
 
+  int get _unconfirmedNodesCount => _workingNodes
+      .where((n) =>
+          n.reviewStatus != 'CONFIRMED' && n.reviewStatus != 'REJECTED')
+      .length;
+
   bool get _isCleanAuto =>
       _objSuspiciousCount == 0 &&
       _unresolvedCandidatesCount == 0 &&
+      _unconfirmedNodesCount == 0 &&
       _workingNodes.where((n) => n.reviewStatus != 'REJECTED').isNotEmpty;
 
   bool get _canVerifyObjectGate =>
-      (_isCleanAuto || _humanCompletenessConfirmed) &&
+      _unconfirmedNodesCount == 0 &&
+      _objSuspiciousCount == 0 &&
+      _unresolvedCandidatesCount == 0 &&
       _workingNodes.where((n) => n.reviewStatus != 'REJECTED').isNotEmpty;
 
   List<String> get _objectGateBlockers {
@@ -149,8 +158,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     if (_unresolvedCandidatesCount > 0) {
       blockers.add('누락 후보 $_unresolvedCandidatesCount개 복구 또는 문제없음 처리');
     }
-    if (!_humanCompletenessConfirmed && !_isCleanAuto) {
-      blockers.add('원본 회로도 대조 확인 체크');
+    if (_unconfirmedNodesCount > 0) {
+      blockers.add('대기 중인 정상 객체 $_unconfirmedNodesCount개 승인 (우측 [정상 객체 일괄 승인] 클릭)');
     }
     if (_workingNodes.where((n) => n.reviewStatus != 'REJECTED').isEmpty) {
       blockers.add('사용 가능한 객체가 없음');
@@ -431,16 +440,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   final GlobalKey _finalExcelUploadKey = GlobalKey();
   final GlobalKey _finalCanvasHandoffKey = GlobalKey();
   Alignment? _manualLensyAlignment;
-  String? _manualLensyTarget;
-  Alignment? _measuredReviewLensyAlignment;
-  String? _measuredReviewLensyTarget;
-  String? _lastReviewLensySyncTarget;
   String? _stageGateMessage;
 
   String get _reviewLensyPresenceState {
     if (_stageGateMessage != null || _isLoading) return 'thinking';
     if (_isFinalVerified) return 'success';
-    return 'pointing';
+    return 'idle';
   }
 
   String get _lensyCoachTarget {
@@ -463,122 +468,18 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     }
   }
 
-  Alignment _reviewLensyAlignment(String target, {required bool isMobile}) {
-    if (isMobile) return const Alignment(0.92, 0.86);
-    switch (target) {
-      case 'home_upload':
-        return const Alignment(0.5, 0.02);
-      case 'object_approve':
-        return const Alignment(0.42, 0.72);
-      case 'object_bbox':
-        return const Alignment(-0.42, 0.18);
-      case 'bus_input':
-        return const Alignment(0.42, 0.42);
-      case 'connection_priority':
-        return const Alignment(0.42, 0.08);
-      case 'connection_gate':
-        return const Alignment(0.42, 0.76);
-      case 'final_excel_upload':
-        return const Alignment(0.52, 0.14);
-      case 'final_canvas_handoff':
-        return const Alignment(0.3, 0.62);
-      default:
-        return const Alignment(0.82, 0.82);
-    }
-  }
-
-  GlobalKey? _reviewCoachTargetKey(String target) {
-    switch (target) {
-      case 'object_bbox':
-        return _reviewFocusTargetKey;
-      case 'object_approve':
-        return _objectPrimaryActionKey;
-      case 'bus_input':
-        return _busPrimaryActionKey;
-      case 'connection_priority':
-        return _connectionMissionKey;
-      case 'connection_gate':
-        return _connectionGateKey;
-      case 'final_excel_upload':
-        return _finalExcelUploadKey;
-      case 'final_canvas_handoff':
-        return _finalCanvasHandoffKey;
-      default:
-        return null;
-    }
-  }
-
-  Alignment? _measureReviewCoachTarget(
-    String target, {
-    required bool isMobile,
-  }) {
-    if (isMobile) return null;
-    final targetKey = _reviewCoachTargetKey(target);
-    final targetBox = targetKey?.currentContext?.findRenderObject() as RenderBox?;
-    final stackBox =
-        _reviewStackKey.currentContext?.findRenderObject() as RenderBox?;
-    if (targetBox == null || stackBox == null || !targetBox.hasSize) {
-      return null;
-    }
-    final stackSize = stackBox.size;
-    if (stackSize.width <= 1 || stackSize.height <= 1) return null;
-
-    final targetOrigin = targetBox.localToGlobal(Offset.zero);
-    final stackOrigin = stackBox.localToGlobal(Offset.zero);
-    final targetCenter = targetOrigin - stackOrigin +
-        Offset(targetBox.size.width / 2, targetBox.size.height / 2);
-    // Put Lensy just to the left/above the measured target so the speech
-    // bubble and pointing arm do not cover the control itself.
-    final companionPosition = targetCenter + const Offset(-118, -48);
-    final x = ((companionPosition.dx / stackSize.width) * 2 - 1)
-        .clamp(-0.94, 0.94)
-        .toDouble();
-    final y = ((companionPosition.dy / stackSize.height) * 2 - 1)
-        .clamp(-0.94, 0.94)
-        .toDouble();
-    return Alignment(x, y);
-  }
-
   void _scheduleReviewLensyTargetSync() {
-    final target = _lensyCoachTarget;
-    if (_lastReviewLensySyncTarget == target &&
-        _measuredReviewLensyTarget == target &&
-        _measuredReviewLensyAlignment != null) {
-      return;
-    }
-    _lastReviewLensySyncTarget = target;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final isMobile = MediaQuery.of(context).size.width < 768;
-      final measured = _measureReviewCoachTarget(target, isMobile: isMobile);
-      if (measured == null || _manualLensyTarget == target) return;
-      if (_measuredReviewLensyTarget == target &&
-          _measuredReviewLensyAlignment != null &&
-          (_measuredReviewLensyAlignment!.x - measured.x).abs() < 0.01 &&
-          (_measuredReviewLensyAlignment!.y - measured.y).abs() < 0.01) {
-        return;
-      }
-      setState(() {
-        _measuredReviewLensyTarget = target;
-        _measuredReviewLensyAlignment = measured;
-      });
-    });
+    // Lensy remains cleanly anchored at bottom-right without jumping across controls
   }
 
   Alignment _effectiveReviewLensyAlignment(
     String target, {
     required bool isMobile,
   }) {
-    if (_manualLensyTarget == target && _manualLensyAlignment != null) {
+    if (_manualLensyAlignment != null) {
       return _manualLensyAlignment!;
     }
-    if (_measuredReviewLensyTarget == target &&
-        _measuredReviewLensyAlignment != null) {
-      return _measuredReviewLensyAlignment!;
-    }
-    final measured = _measureReviewCoachTarget(target, isMobile: isMobile);
-    if (measured != null) return measured;
-    return _reviewLensyAlignment(target, isMobile: isMobile);
+    return const Alignment(0.86, 0.86);
   }
 
   void _handleReviewLensyDrag(
@@ -594,7 +495,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     double clampAlignment(double value) =>
         value.clamp(-0.94, 0.94).toDouble();
     setState(() {
-      _manualLensyTarget = target;
       _manualLensyAlignment = Alignment(
         clampAlignment(current.x + delta.dx / math.max(size.width / 2, 1)),
         clampAlignment(current.y + delta.dy / math.max(size.height / 2, 1)),
@@ -605,6 +505,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   @override
   void initState() {
     super.initState();
+    HardwareKeyboard.instance.addHandler(_handleGlobalReviewKeyEvent);
     PowerLensAIService.instance.registerActionHandler(_handleAppAction);
     if (widget.initialImageBytes != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -618,6 +519,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleGlobalReviewKeyEvent);
     PowerLensAIService.instance.unregisterActionHandler(_handleAppAction);
     _busNumberEditController.dispose();
     _reviewKeyFocusNode.dispose();
@@ -661,6 +563,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         return _focusReviewIssueForAgent();
       case PowerLensAppAction.approveCurrentAndNext:
         return _approveCurrentAndNextForAgent();
+      case PowerLensAppAction.approveAllClean:
+        if (_currentPhase != ReviewPhase.objectReview) return false;
+        _confirmAllCleanNodes();
+        return true;
       case PowerLensAppAction.connectionFullReview:
         return _showConnectionFullReviewForAgent();
       case PowerLensAppAction.connectionLinesOnly:
@@ -712,26 +618,45 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           _objFilterClass = 'ALL';
           _selectedNode = suspicious.first;
           _nodePage = 0;
+        } else {
+          _objFilterStatus = 'ALL';
+          _objFilterClass = 'ALL';
+          if (_selectedNode == null && _workingNodes.isNotEmpty) {
+            _selectedNode = _workingNodes.first;
+          }
         }
       } else if (_currentPhase == ReviewPhase.busMappingReview) {
-        _busFilterStatus = 'UNCERTAIN';
+        final hasIssues = _busUncertainCount > 0 || _duplicateBusNumbers.isNotEmpty;
+        if (hasIssues) {
+          _busFilterStatus = 'UNCERTAIN';
+          final uncertain = _filteredAndSortedBusNodes;
+          _selectedNode = uncertain.isNotEmpty ? uncertain.first : null;
+        } else {
+          _busFilterStatus = 'ALL';
+          final allBuses = _filteredAndSortedBusNodes;
+          _selectedNode = allBuses.isNotEmpty ? allBuses.first : null;
+        }
         _busPage = 0;
-        final uncertain = _filteredAndSortedBusNodes;
-        _selectedNode = uncertain.isNotEmpty ? uncertain.first : null;
         _selectedLine = null;
       } else if (_currentPhase == ReviewPhase.connectionReview) {
         _connectionFullOverview = false;
         _connectionLinesOnlyMode = false;
         _connectionFastMode = false;
         _lineFocusOnly = true;
-        _connFilterStatus = _lineAmbiguousCount > 0
-            ? 'AMBIGUOUS'
-            : 'ERROR_ONLY';
         _linePage = 0;
         _showAllLinesList = false;
         _showTopologyDetails = _topologyIssues.isNotEmpty;
-        final issues = _filteredAndSortedWorkingLines;
-        _selectedLine = issues.isNotEmpty ? issues.first : _selectedLine;
+        if (_lineAmbiguousCount > 0 || _topologyIssues.isNotEmpty) {
+          _connFilterStatus = _lineAmbiguousCount > 0
+              ? 'AMBIGUOUS'
+              : 'ERROR_ONLY';
+          final issues = _filteredAndSortedWorkingLines;
+          _selectedLine = issues.isNotEmpty ? issues.first : _selectedLine;
+        } else {
+          _connFilterStatus = 'ALL';
+          final allLines = _filteredAndSortedWorkingLines;
+          _selectedLine = allLines.isNotEmpty ? allLines.first : _selectedLine;
+        }
         _selectedNode = null;
       }
     });
@@ -879,9 +804,15 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           _connectionFastMode = false;
           _lineFocusOnly = true;
           _selectedNode = null;
-          final lines = _filteredAndSortedWorkingLines;
+          _connFilterStatus = 'ALL';
+          var lines = _filteredAndSortedWorkingLines;
+          if (lines.isEmpty) {
+            lines = _workingLines.where((l) => l.reviewStatus != 'REJECTED').toList();
+            if (lines.isEmpty) lines = _workingLines;
+          }
           _selectedLine = lines.isNotEmpty ? lines.first : null;
         });
+        FocusManager.instance.primaryFocus?.unfocus();
         return true;
     }
   }
@@ -1071,6 +1002,16 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     setState(() {
       cand.status = 'DISMISSED_BY_HUMAN';
     });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text("✓ '${_classNameKo(cand.suspectedClass)}' 누락 후보를 [문제 없음]으로 처리했습니다."),
+        backgroundColor: const Color(0xFF16A34A),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+    if (_canVerifyObjectGate) {
+      PowerLensAIService.instance.triggerHighlight('object_gate');
+    }
   }
 
   Future<void> _fetchAgentRuns() async {
@@ -1169,20 +1110,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   void _batchConfirmCleanDetectedNodes() {
-    setState(() {
-      for (var node in _workingNodes) {
-        if (node.reviewStatus == 'DETECTED') {
-          node.reviewStatus = 'CONFIRMED';
-          node.source = '${node.source}_auto_confirmed';
-        }
-      }
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text("정상 객체들이 일괄 승인되었습니다."),
-        backgroundColor: Colors.teal,
-      ),
-    );
+    _confirmAllCleanNodes();
   }
 
   void _batchConfirmVisibleNodes() {
@@ -1252,9 +1180,22 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   void _selectPreviousNode() {
-    final list = _filteredAndSortedWorkingNodes;
+    var list = _filteredAndSortedWorkingNodes;
+    if (list.isEmpty || (_selectedNode != null && !list.any((n) => n.id == _selectedNode!.id))) {
+      _objFilterStatus = 'ALL';
+      _objFilterClass = 'ALL';
+      list = _filteredAndSortedWorkingNodes;
+      if (list.isEmpty) {
+        list = _workingNodes.where((n) => n.reviewStatus != 'REJECTED').toList();
+      }
+    }
+    if (list.isEmpty) list = _workingNodes;
     if (list.isEmpty) return;
-    int currentIdx = _selectedNode != null ? list.indexOf(_selectedNode!) : 0;
+
+    int currentIdx = _selectedNode != null
+        ? list.indexWhere((n) => n.id == _selectedNode!.id)
+        : 0;
+    if (currentIdx < 0) currentIdx = 0;
     int prevIdx = (currentIdx - 1 + list.length) % list.length;
     setState(() {
       _selectedNode = list[prevIdx];
@@ -1267,9 +1208,21 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   void _selectNextNode() {
-    final list = _filteredAndSortedWorkingNodes;
+    var list = _filteredAndSortedWorkingNodes;
+    if (list.isEmpty || (_selectedNode != null && !list.any((n) => n.id == _selectedNode!.id))) {
+      _objFilterStatus = 'ALL';
+      _objFilterClass = 'ALL';
+      list = _filteredAndSortedWorkingNodes;
+      if (list.isEmpty) {
+        list = _workingNodes.where((n) => n.reviewStatus != 'REJECTED').toList();
+      }
+    }
+    if (list.isEmpty) list = _workingNodes;
     if (list.isEmpty) return;
-    int currentIdx = _selectedNode != null ? list.indexOf(_selectedNode!) : 0;
+
+    int currentIdx = _selectedNode != null
+        ? list.indexWhere((n) => n.id == _selectedNode!.id)
+        : -1;
     int nextIdx = (currentIdx + 1) % list.length;
     setState(() {
       _selectedNode = list[nextIdx];
@@ -1293,11 +1246,68 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     }
   }
 
+  void _confirmAllCleanNodes() {
+    int count = 0;
+    setState(() {
+      for (final node in _workingNodes) {
+        if (node.reviewStatus != 'CONFIRMED' &&
+            node.reviewStatus != 'REJECTED' &&
+            node.reviewStatus != 'SUSPICIOUS') {
+          node.reviewStatus = 'CONFIRMED';
+          node.source = '${node.source}_batch_confirmed';
+          count++;
+        }
+      }
+      if (_selectedNode != null && _selectedNode!.reviewStatus == 'CONFIRMED') {
+        if (_objSuspiciousCount > 0) {
+          _selectNextSuspiciousNode();
+        }
+      }
+    });
+
+    if (mounted) {
+      if (count > 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              "✓ 정상 객체 $count개를 일괄 승인했습니다! "
+              "${_objSuspiciousCount == 0 ? '하단의 [객체 검수 완료]를 눌러 다음 단계로 이동하세요.' : '남은 의심 객체 $_objSuspiciousCount개를 확인해주세요.'}",
+            ),
+            backgroundColor: const Color(0xFF16A34A),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("일괄 승인할 정상 대기 객체가 없습니다. 이미 승인되었거나 의심 항목만 남아있습니다."),
+            backgroundColor: Color(0xFF475569),
+          ),
+        );
+      }
+    }
+
+    if (_canVerifyObjectGate) {
+      PowerLensAIService.instance.triggerHighlight('object_gate');
+    }
+  }
+
   // --- Sequential Line Review Methods ---
   void _selectPreviousLine() {
-    final lines = _filteredAndSortedWorkingLines;
+    var lines = _filteredAndSortedWorkingLines;
+    if (lines.isEmpty || (_selectedLine != null && !lines.any((l) => l.lineId == _selectedLine!.lineId))) {
+      _connFilterStatus = 'ALL';
+      lines = _filteredAndSortedWorkingLines;
+      if (lines.isEmpty) {
+        lines = _workingLines.where((l) => l.reviewStatus != 'REJECTED').toList();
+      }
+    }
+    if (lines.isEmpty) lines = _workingLines;
     if (lines.isEmpty) return;
-    int currentIdx = _selectedLine != null ? lines.indexOf(_selectedLine!) : 0;
+
+    int currentIdx = _selectedLine != null
+        ? lines.indexWhere((l) => l.lineId == _selectedLine!.lineId)
+        : 0;
+    if (currentIdx < 0) currentIdx = 0;
     int prevIdx = (currentIdx - 1 + lines.length) % lines.length;
     setState(() {
       _selectedLine = lines[prevIdx];
@@ -1308,9 +1318,20 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   void _selectNextLine() {
-    final lines = _filteredAndSortedWorkingLines;
+    var lines = _filteredAndSortedWorkingLines;
+    if (lines.isEmpty || (_selectedLine != null && !lines.any((l) => l.lineId == _selectedLine!.lineId))) {
+      _connFilterStatus = 'ALL';
+      lines = _filteredAndSortedWorkingLines;
+      if (lines.isEmpty) {
+        lines = _workingLines.where((l) => l.reviewStatus != 'REJECTED').toList();
+      }
+    }
+    if (lines.isEmpty) lines = _workingLines;
     if (lines.isEmpty) return;
-    int currentIdx = _selectedLine != null ? lines.indexOf(_selectedLine!) : -1;
+
+    int currentIdx = _selectedLine != null
+        ? lines.indexWhere((l) => l.lineId == _selectedLine!.lineId)
+        : -1;
     int nextIdx = currentIdx + 1;
     if (nextIdx >= lines.length) {
       nextIdx = 0;
@@ -1333,6 +1354,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     setState(() {
       line.reviewStatus = 'CONFIRMED';
       line.source = '${line.source}_human_confirmed';
+      if (_connFilterStatus == 'AMBIGUOUS' && _lineAmbiguousCount == 0) {
+        _connFilterStatus = 'ALL';
+      } else if (_connFilterStatus == 'ERROR_ONLY' && _criticalIssuesCount == 0) {
+        _connFilterStatus = 'ALL';
+      }
     });
     _triggerTopologyValidation();
     _selectNextLine();
@@ -1340,10 +1366,22 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   void _rejectLineAndNext(ReviewLineItem line) {
     final lines = _filteredAndSortedWorkingLines;
-    int currentIdx = lines.indexOf(line);
+    int currentIdx = lines.indexWhere((item) => item.lineId == line.lineId);
     setState(() {
       _workingLines.removeWhere((item) => item.lineId == line.lineId);
-      final remaining = _filteredAndSortedWorkingLines;
+      if (_connFilterStatus == 'AMBIGUOUS' && _lineAmbiguousCount == 0) {
+        _connFilterStatus = 'ALL';
+      } else if (_connFilterStatus == 'ERROR_ONLY' && _criticalIssuesCount == 0) {
+        _connFilterStatus = 'ALL';
+      }
+      var remaining = _filteredAndSortedWorkingLines;
+      if (remaining.isEmpty) {
+        _connFilterStatus = 'ALL';
+        remaining = _filteredAndSortedWorkingLines;
+        if (remaining.isEmpty) {
+          remaining = _workingLines.where((l) => l.reviewStatus != 'REJECTED').toList();
+        }
+      }
       if (remaining.isNotEmpty) {
         int nextIdx = currentIdx.clamp(0, remaining.length - 1);
         _selectedLine = remaining[nextIdx];
@@ -1352,15 +1390,28 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _selectedLine = null;
       }
       _isFinalVerified = false;
+      _selectedNode = null;
+      _selectedTopologyIssue = null;
     });
     _triggerTopologyValidation();
   }
 
   // --- Sequential Bus Review Methods ---
   void _selectPreviousBus() {
-    final buses = _filteredAndSortedBusNodes;
+    var buses = _filteredAndSortedBusNodes;
+    if (buses.isEmpty || (_selectedNode != null && !buses.any((b) => b.id == _selectedNode!.id))) {
+      _busFilterStatus = 'ALL';
+      buses = _filteredAndSortedBusNodes;
+      if (buses.isEmpty) {
+        buses = _busNodes;
+      }
+    }
     if (buses.isEmpty) return;
-    int currentIdx = _selectedNode != null ? buses.indexOf(_selectedNode!) : 0;
+
+    int currentIdx = _selectedNode != null
+        ? buses.indexWhere((b) => b.id == _selectedNode!.id)
+        : 0;
+    if (currentIdx < 0) currentIdx = 0;
     int prevIdx = (currentIdx - 1 + buses.length) % buses.length;
     setState(() {
       _selectedNode = buses[prevIdx];
@@ -1374,9 +1425,19 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   void _selectNextBus() {
-    final buses = _filteredAndSortedBusNodes;
+    var buses = _filteredAndSortedBusNodes;
+    if (buses.isEmpty || (_selectedNode != null && !buses.any((b) => b.id == _selectedNode!.id))) {
+      _busFilterStatus = 'ALL';
+      buses = _filteredAndSortedBusNodes;
+      if (buses.isEmpty) {
+        buses = _busNodes;
+      }
+    }
     if (buses.isEmpty) return;
-    int currentIdx = _selectedNode != null ? buses.indexOf(_selectedNode!) : -1;
+
+    int currentIdx = _selectedNode != null
+        ? buses.indexWhere((b) => b.id == _selectedNode!.id)
+        : -1;
     int nextIdx = currentIdx + 1;
     if (nextIdx >= buses.length) {
       nextIdx = 0;
@@ -1520,15 +1581,24 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           return "객체를 확인해봤어요. 대부분 괜찮고, 제가 다시 봤으면 하는 것부터 보여드릴게요.\n"
               "$selectedLabel의 검토 이유를 확인한 뒤 [승인하고 다음] 또는 [제외]를 선택해주세요.";
         }
-        return "객체를 확인해봤어요. 대부분 괜찮고, 제가 다시 봤으면 하는 것부터 보여드릴게요.\n"
-            "검토 필요 항목이 없으니 아래의 [객체 검수 완료]를 눌러 다음 단계로 가면 돼요.";
+        if (_unresolvedCandidatesCount > 0) {
+          return "의심 객체는 모두 확인되었으나, 누락 후보 $_unresolvedCandidatesCount건이 남아 있어요.\n"
+              "목록에서 복구하거나 문제없음 처리 후 [객체 검수 완료]를 눌러주세요.";
+        }
+        return "도면 내 모든 객체 인식이 정상적으로 완료되었어요!\n"
+            "검토가 필요한 항목이 없으니 아래의 [객체 검수 완료]를 눌러 다음 단계로 가면 돼요.";
       case ReviewPhase.busMappingReview:
+        final hasBusIssues = _busUncertainCount > 0 || _duplicateBusNumbers.isNotEmpty;
+        if (!hasBusIssues) {
+          return "모든 모선에 고유 번호가 정상적으로 지정되었습니다!\n"
+              "오른쪽 하단의 [모선 번호 승인]을 눌러 결선 검수로 넘어가시면 돼요.";
+        }
         return "이번에는 모선 번호만 확인하면 돼요. 전체 승인하거나, 하나씩 넘겨보면서 확인할 수 있어요.\n"
             "추천하는 방법은 오른쪽의 번호 입력 후 [승인하고 다음 모선으로]를 누르는 거예요.";
       case ReviewPhase.connectionReview:
-        if (_connectionMissionComplete) {
-          return "전체 연결을 먼저 확인해봤어요. 제가 다시 보는 게 좋다고 판단한 선부터 같이 볼게요.\n"
-              "핵심 검토가 끝났으니 아래 [결선 검수 완료]를 눌러 마지막 확인을 시작해주세요.";
+        if (_connectionMissionComplete || (_lineAmbiguousCount == 0 && _topologyIssues.isEmpty)) {
+          return "모든 선로와 결선 연결이 정상적으로 검증되었습니다!\n"
+              "아래 [결선 검수 완료]를 눌러 마지막 확인을 시작해주세요.";
         }
         return "전체 연결을 먼저 확인해봤어요. 제가 다시 보는 게 좋다고 판단한 선부터 같이 볼게요.\n"
             "[핵심 검토]에서 [선로 승인하고 다음]을 누르거나, 전체 선로·한 선씩 보기로 바꿀 수 있어요.";
@@ -1540,50 +1610,95 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     }
   }
 
-  void _handleReviewKeyEvent(KeyEvent event) {
-    if (event is! KeyDownEvent) return;
+  bool _handleGlobalReviewKeyEvent(KeyEvent event) {
+    if (!mounted) return false;
+    if (event is! KeyDownEvent) return false;
+
     final focusedWidget = FocusManager.instance.primaryFocus;
     final isTyping =
         focusedWidget != null &&
-        (focusedWidget.context?.widget is EditableText);
+        focusedWidget.hasFocus &&
+        focusedWidget.context?.mounted == true &&
+        (focusedWidget.context?.widget is EditableText ||
+         focusedWidget.toString().contains('EditableText') ||
+         focusedWidget.toString().contains('TextField'));
+
     if (isTyping) {
-      if (event.logicalKey == LogicalKeyboardKey.enter) {
+      if (event.logicalKey == LogicalKeyboardKey.enter ||
+          event.logicalKey == LogicalKeyboardKey.numpadEnter) {
         if (_currentPhase == ReviewPhase.busMappingReview &&
             _selectedNode != null) {
           _approveAndNextBus(_selectedNode!);
+          return true;
         }
       }
-      return;
+      return false;
     }
 
-    if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
-      if (_currentPhase == ReviewPhase.busMappingReview) {
+    // Arrow Right or Down: Navigate to Next
+    if (event.logicalKey == LogicalKeyboardKey.arrowRight ||
+        event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      if (_currentPhase == ReviewPhase.objectReview) {
+        _selectNextNode();
+        return true;
+      } else if (_currentPhase == ReviewPhase.busMappingReview) {
         _selectNextBus();
+        return true;
       } else if (_currentPhase == ReviewPhase.connectionReview) {
         _selectNextLine();
-      } else if (_currentPhase == ReviewPhase.objectReview) {
-        _selectNextNode();
+        return true;
       }
-    } else if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
-      if (_currentPhase == ReviewPhase.busMappingReview) {
+    }
+
+    // Arrow Left or Up: Navigate to Previous
+    if (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+        event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      if (_currentPhase == ReviewPhase.objectReview) {
+        _selectPreviousNode();
+        return true;
+      } else if (_currentPhase == ReviewPhase.busMappingReview) {
         _selectPreviousBus();
+        return true;
       } else if (_currentPhase == ReviewPhase.connectionReview) {
         _selectPreviousLine();
-      } else if (_currentPhase == ReviewPhase.objectReview) {
-        _selectPreviousNode();
+        return true;
       }
-    } else if (event.logicalKey == LogicalKeyboardKey.enter) {
-      if (_currentPhase == ReviewPhase.busMappingReview &&
+    }
+
+    // Enter: Confirm and Next
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.numpadEnter) {
+      if (_currentPhase == ReviewPhase.objectReview && _selectedNode != null) {
+        _confirmNodeAndNext(_selectedNode!);
+        return true;
+      } else if (_currentPhase == ReviewPhase.busMappingReview &&
           _selectedNode != null) {
         _approveAndNextBus(_selectedNode!);
+        return true;
       } else if (_currentPhase == ReviewPhase.connectionReview &&
           _selectedLine != null) {
         _confirmLineAndNext(_selectedLine!);
-      } else if (_currentPhase == ReviewPhase.objectReview &&
-          _selectedNode != null) {
-        _confirmNodeAndNext(_selectedNode!);
+        return true;
       }
     }
+
+    // Delete or Backspace: Reject/Exclude
+    if (event.logicalKey == LogicalKeyboardKey.delete) {
+      if (_currentPhase == ReviewPhase.objectReview && _selectedNode != null) {
+        _rejectNode(_selectedNode!);
+        return true;
+      } else if (_currentPhase == ReviewPhase.connectionReview &&
+          _selectedLine != null) {
+        _rejectLineAndNext(_selectedLine!);
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  void _handleReviewKeyEvent(KeyEvent event) {
+    // Handled globally via HardwareKeyboard.instance.addHandler(_handleGlobalReviewKeyEvent)
   }
 
   void _editNodeDisplayLabel(ReviewNodeItem node) {
@@ -1871,6 +1986,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _lineFocusOnly = true;
       });
 
+      FocusManager.instance.primaryFocus?.unfocus();
       _announceReviewStage();
       _triggerTopologyValidation();
     } catch (e) {
@@ -2366,80 +2482,105 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         foregroundColor: const Color(0xFF0F172A),
         actions: [
           // Step Badges
-          _buildPhaseBadge(
-            "① 객체 검수",
-            _currentPhase == ReviewPhase.objectReview,
-            _isObjectVerified,
-            onTap: () {
-              setState(() {
-                _currentPhase = ReviewPhase.objectReview;
-                _selectedLine = null;
-                _selectedNode = _workingNodes.isNotEmpty ? _workingNodes.first : null;
-              });
-            },
+          GlowingTargetWrapper(
+            targetId: 'phase_step_1',
+            borderRadius: BorderRadius.circular(6),
+            guideLabel: "✨ ① 객체 검수 단계",
+            child: _buildPhaseBadge(
+              "① 객체 검수",
+              _currentPhase == ReviewPhase.objectReview,
+              _isObjectVerified,
+              onTap: () {
+                setState(() {
+                  _currentPhase = ReviewPhase.objectReview;
+                  _selectedLine = null;
+                  _selectedNode = _workingNodes.isNotEmpty ? _workingNodes.first : null;
+                });
+              },
+            ),
           ),
           const Icon(Icons.arrow_right, color: Color(0xFF94A3B8), size: 14),
-          _buildPhaseBadge(
-            "② 모선 매핑",
-            _currentPhase == ReviewPhase.busMappingReview,
-            _canVerifyBusGate,
-            onTap: _workingNodes.isNotEmpty
-                ? () {
-                    setState(() {
-                      _currentPhase = ReviewPhase.busMappingReview;
-                      _selectedLine = null;
-                      final buses = _filteredAndSortedBusNodes;
-                      _selectedNode = buses.isNotEmpty ? buses.first : null;
-                    });
-                  }
-                : null,
+          GlowingTargetWrapper(
+            targetId: 'phase_step_2',
+            borderRadius: BorderRadius.circular(6),
+            guideLabel: "✨ ② 모선 매핑 단계",
+            child: _buildPhaseBadge(
+              "② 모선 매핑",
+              _currentPhase == ReviewPhase.busMappingReview,
+              _canVerifyBusGate,
+              onTap: _workingNodes.isNotEmpty
+                  ? () {
+                      setState(() {
+                        _currentPhase = ReviewPhase.busMappingReview;
+                        _selectedLine = null;
+                        final buses = _filteredAndSortedBusNodes;
+                        _selectedNode = buses.isNotEmpty ? buses.first : null;
+                      });
+                    }
+                  : null,
+            ),
           ),
           const Icon(Icons.arrow_right, color: Color(0xFF94A3B8), size: 14),
-          _buildPhaseBadge(
-            "③ 결선 검수",
-            _currentPhase == ReviewPhase.connectionReview,
-            _workingLines.isNotEmpty && _lineAmbiguousCount == 0,
-            onTap: _workingLines.isNotEmpty
-                ? () {
-                    setState(() {
-                      _currentPhase = ReviewPhase.connectionReview;
-                      _selectedNode = null;
-                      _selectedLine = _workingLines.first;
-                    });
-                  }
-                : null,
+          GlowingTargetWrapper(
+            targetId: 'phase_step_3',
+            borderRadius: BorderRadius.circular(6),
+            guideLabel: "✨ ③ 결선 검수 단계",
+            child: _buildPhaseBadge(
+              "③ 결선 검수",
+              _currentPhase == ReviewPhase.connectionReview,
+              _workingLines.isNotEmpty && _lineAmbiguousCount == 0,
+              onTap: _workingLines.isNotEmpty
+                  ? () {
+                      setState(() {
+                        _currentPhase = ReviewPhase.connectionReview;
+                        _selectedNode = null;
+                        _selectedLine = _workingLines.first;
+                      });
+                    }
+                  : null,
+            ),
           ),
           const Icon(Icons.arrow_right, color: Color(0xFF94A3B8), size: 14),
-          _buildPhaseBadge(
-            "④ 최종 & 엑셀",
-            _currentPhase == ReviewPhase.verifiedFinal,
-            _isFinalVerified,
-            onTap: _verifiedSld != null
-                ? () {
-                    setState(() {
-                      _currentPhase = ReviewPhase.verifiedFinal;
-                    });
-                  }
-                : null,
+          GlowingTargetWrapper(
+            targetId: 'phase_step_4',
+            borderRadius: BorderRadius.circular(6),
+            guideLabel: "✨ ④ 최종 & 엑셀 단계",
+            child: _buildPhaseBadge(
+              "④ 최종 & 엑셀",
+              _currentPhase == ReviewPhase.verifiedFinal,
+              _isFinalVerified,
+              onTap: _verifiedSld != null
+                  ? () {
+                      setState(() {
+                        _currentPhase = ReviewPhase.verifiedFinal;
+                      });
+                    }
+                  : null,
+            ),
           ),
           const SizedBox(width: 8),
           if (_document != null) ...[
-            OutlinedButton.icon(
-              onPressed: _confirmResetToBeginning,
-              icon: const Icon(Icons.restart_alt, size: 14, color: Color(0xFFDC2626)),
-              label: const Text(
-                "검수 처음으로",
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFFDC2626),
+            GlowingTargetWrapper(
+              targetId: 'reset_to_beginning',
+              borderRadius: BorderRadius.circular(6),
+              guideLabel: "✨ 검수 처음으로 리셋",
+              child: OutlinedButton.icon(
+                onPressed: _confirmResetToBeginning,
+                icon: const Icon(Icons.restart_alt, size: 14, color: Color(0xFFDC2626)),
+                label: const Text(
+                  "검수 처음으로",
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: Color(0xFFDC2626),
+                  ),
                 ),
-              ),
-              style: OutlinedButton.styleFrom(
-                backgroundColor: const Color(0xFFFEF2F2),
-                side: const BorderSide(color: Color(0xFFFCA5A5)),
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                visualDensity: VisualDensity.compact,
+                style: OutlinedButton.styleFrom(
+                  backgroundColor: const Color(0xFFFEF2F2),
+                  side: const BorderSide(color: Color(0xFFFCA5A5)),
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  visualDensity: VisualDensity.compact,
+                ),
               ),
             ),
             const SizedBox(width: 6),
@@ -3163,25 +3304,30 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                     : _selectNextSuspiciousNode,
                               ),
                               const SizedBox(width: 6),
-                              if (_objDetectedCount > 0)
-                                ElevatedButton.icon(
-                                  onPressed: _batchConfirmCleanDetectedNodes,
-                                  icon: const Icon(Icons.done_all, size: 13),
-                                  label: Text(
-                                    "정상 객체 승인 ($_objDetectedCount)",
-                                    style: const TextStyle(
-                                      fontSize: 10.5,
-                                      fontWeight: FontWeight.bold,
+                              if (_objDetectedCount > 0 || _unconfirmedNodesCount > 0)
+                                GlowingTargetWrapper(
+                                  targetId: 'object_batch_approve',
+                                  borderRadius: BorderRadius.circular(16),
+                                  guideLabel: "✨ 정상 객체 승인",
+                                  child: ElevatedButton.icon(
+                                    onPressed: _confirmAllCleanNodes,
+                                    icon: const Icon(Icons.done_all, size: 13),
+                                    label: Text(
+                                      "정상 객체 승인 (${_unconfirmedNodesCount > 0 ? _unconfirmedNodesCount : _objDetectedCount})",
+                                      style: const TextStyle(
+                                        fontSize: 10.5,
+                                        fontWeight: FontWeight.bold,
+                                      ),
                                     ),
-                                  ),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: const Color(0xFF0D9488),
-                                    foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 4,
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: const Color(0xFF0D9488),
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
+                                      ),
+                                      visualDensity: VisualDensity.compact,
                                     ),
-                                    visualDensity: VisualDensity.compact,
                                   ),
                                 ),
                               const SizedBox(width: 6),
@@ -3391,13 +3537,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                         ReviewPhase.connectionReview) {
                                       _selectedNode = null;
                                       _selectedTopologyIssue = null;
+                                      if (!_filteredAndSortedWorkingLines.any((l) => l.lineId == line.lineId)) {
+                                        _connFilterStatus = 'ALL';
+                                      }
                                     }
                                     final index = _filteredAndSortedWorkingLines
                                         .indexWhere(
                                           (item) => item.lineId == line.lineId,
                                         );
-                                    if (index >= 0)
+                                    if (index >= 0) {
                                       _linePage = index ~/ _linePageSize;
+                                    }
                                   });
                                 },
                                 onLineOffsetChanged: (lineId, dx, dy) {
@@ -3896,32 +4046,52 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                       'REJECTED',
                     ),
                     const SizedBox(width: 4),
-                    _buildStatBadge(
-                      "누락 후보",
-                      _unresolvedCandidatesCount,
-                      _unresolvedCandidatesCount > 0
-                          ? const Color(0xFF9333EA)
-                          : const Color(0xFF64748B),
+                    GlowingTargetWrapper(
+                      targetId: 'missing_candidates',
+                      borderRadius: BorderRadius.circular(4),
+                      guideLabel: "✨ 누락 후보 확인",
+                      child: _buildMissingCandidateBadge(
+                        "누락 후보",
+                        _unresolvedCandidatesCount,
+                        _unresolvedCandidatesCount > 0
+                            ? const Color(0xFF9333EA)
+                            : const Color(0xFF64748B),
+                      ),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(height: 6),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed:
-                      _filteredAndSortedWorkingNodes.any(
-                        (node) =>
-                            node.reviewStatus == 'DETECTED' ||
-                            node.reviewStatus == 'SUSPICIOUS',
-                      )
-                      ? _batchConfirmVisibleNodes
-                      : null,
-                  icon: const Icon(Icons.done_all, size: 14),
-                  label: Text(
-                    '현재 표시된 객체 전체 승인 (${_filteredAndSortedWorkingNodes.where((node) => node.reviewStatus != 'REJECTED').length})',
-                    style: const TextStyle(fontSize: 10),
+              const SizedBox(height: 8),
+              GlowingTargetWrapper(
+                targetId: 'object_batch_approve',
+                borderRadius: BorderRadius.circular(8),
+                guideLabel: "✨ 정상 객체 일괄 승인",
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _unconfirmedNodesCount > 0
+                        ? _confirmAllCleanNodes
+                        : null,
+                    icon: const Icon(Icons.done_all, size: 16),
+                    label: Text(
+                      _unconfirmedNodesCount > 0
+                          ? (_objSuspiciousCount > 0
+                              ? "정상 객체 일괄 승인 (의심 제외 $_unconfirmedNodesCount건)"
+                              : "정상 객체 일괄 승인 ($_unconfirmedNodesCount건 한 번에 확정)")
+                          : "모든 정상 객체 승인 완료됨 ✓",
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF0D9488),
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: const Color(0xFFF1F5F9),
+                      disabledForegroundColor: const Color(0xFF94A3B8),
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      elevation: _unconfirmedNodesCount > 0 ? 1 : 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -3952,6 +4122,16 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         const Divider(color: Color(0xFFE2E8F0), height: 1),
         const SizedBox(height: 12),
 
+        if (_unresolvedCandidatesCount > 0) ...[
+          GlowingTargetWrapper(
+            targetId: 'missing_candidates',
+            borderRadius: BorderRadius.circular(8),
+            guideLabel: "✨ 누락 후보 처리",
+            child: _buildMissingCandidatesAlertCard(),
+          ),
+          const SizedBox(height: 12),
+        ],
+
         // The selected object is the primary card. Queue details and the
         // whole-diagram completeness view stay available without competing
         // with the one-by-one review decision.
@@ -3963,7 +4143,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         ExpansionTile(
           tilePadding: EdgeInsets.zero,
           childrenPadding: EdgeInsets.zero,
-          initiallyExpanded: false,
+          initiallyExpanded: _unresolvedCandidatesCount > 0,
           title: const Text(
             "고급: 전체 완결성·객체 목록",
             style: TextStyle(
@@ -4563,20 +4743,53 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           ),
         ),
         const SizedBox(height: 8),
-        ElevatedButton.icon(
-          key: _objectPrimaryActionKey,
-          onPressed: () => _confirmNodeAndNext(node),
-          icon: const Icon(Icons.check_circle_outline, size: 18),
-          label: const Text(
-            "승인하고 다음 (Enter ➔)",
-            style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
+        GlowingTargetWrapper(
+          targetId: 'object_approve',
+          borderRadius: BorderRadius.circular(8),
+          guideLabel: "✨ 승인하고 다음 (Enter)",
+          child: ElevatedButton.icon(
+            key: _objectPrimaryActionKey,
+            onPressed: () => _confirmNodeAndNext(node),
+            icon: const Icon(Icons.check_circle_outline, size: 18),
+            label: const Text(
+              "승인하고 다음 (Enter ➔)",
+              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF16A34A),
+              foregroundColor: Colors.white,
+              minimumSize: const Size(double.infinity, 40),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
           ),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFF16A34A),
-            foregroundColor: Colors.white,
-            minimumSize: const Size.fromHeight(40),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
+        ),
+        const SizedBox(height: 8),
+        GlowingTargetWrapper(
+          targetId: 'object_batch_approve',
+          borderRadius: BorderRadius.circular(8),
+          guideLabel: "✨ 정상 객체 일괄 승인",
+          child: OutlinedButton.icon(
+            onPressed: _unconfirmedNodesCount > 0 ? _confirmAllCleanNodes : null,
+            icon: const Icon(Icons.done_all, size: 16),
+            label: Text(
+              _unconfirmedNodesCount > 0
+                  ? (_objSuspiciousCount > 0
+                      ? "정상 객체 일괄 승인 (의심 제외)"
+                      : "정상 객체 전체 승인 (한 번에 확인)")
+                  : "모든 정상 객체 승인 완료됨 ✓",
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFF0D9488),
+              side: const BorderSide(color: Color(0xFF14B8A6), width: 1.2),
+              backgroundColor: const Color(0xFFF0FDFA),
+              disabledForegroundColor: const Color(0xFF94A3B8),
+              minimumSize: const Size(double.infinity, 38),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
             ),
           ),
         ),
@@ -4585,39 +4798,54 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         Row(
           children: [
             Expanded(
-              child: OutlinedButton.icon(
-                onPressed: _selectPreviousNode,
-                icon: const Icon(Icons.arrow_back, size: 13),
-                label: const Text("이전 (◀)", style: TextStyle(fontSize: 11)),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  side: const BorderSide(color: Color(0xFFCBD5E1)),
+              child: GlowingTargetWrapper(
+                targetId: 'node_prev',
+                borderRadius: BorderRadius.circular(4),
+                guideLabel: "✨ 이전 객체 (◀)",
+                child: OutlinedButton.icon(
+                  onPressed: _selectPreviousNode,
+                  icon: const Icon(Icons.arrow_back, size: 13),
+                  label: const Text("이전 (◀)", style: TextStyle(fontSize: 11)),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    side: const BorderSide(color: Color(0xFFCBD5E1)),
+                  ),
                 ),
               ),
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: OutlinedButton(
-                onPressed: () => _rejectNode(node),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  side: const BorderSide(color: Color(0xFFFCA5A5)),
-                ),
-                child: const Text(
-                  "제외/삭제",
-                  style: TextStyle(fontSize: 11, color: Color(0xFFDC2626)),
+              child: GlowingTargetWrapper(
+                targetId: 'node_reject',
+                borderRadius: BorderRadius.circular(4),
+                guideLabel: "✨ 객체 제외/삭제",
+                child: OutlinedButton(
+                  onPressed: () => _rejectNode(node),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    side: const BorderSide(color: Color(0xFFFCA5A5)),
+                  ),
+                  child: const Text(
+                    "제외/삭제",
+                    style: TextStyle(fontSize: 11, color: Color(0xFFDC2626)),
+                  ),
                 ),
               ),
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: OutlinedButton.icon(
-                onPressed: _selectNextNode,
-                icon: const Icon(Icons.arrow_forward, size: 13),
-                label: const Text("다음 (▶)", style: TextStyle(fontSize: 11)),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  side: const BorderSide(color: Color(0xFFCBD5E1)),
+              child: GlowingTargetWrapper(
+                targetId: 'node_next',
+                borderRadius: BorderRadius.circular(4),
+                guideLabel: "✨ 다음 객체 (▶)",
+                child: OutlinedButton.icon(
+                  onPressed: _selectNextNode,
+                  icon: const Icon(Icons.arrow_forward, size: 13),
+                  label: const Text("다음 (▶)", style: TextStyle(fontSize: 11)),
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    side: const BorderSide(color: Color(0xFFCBD5E1)),
+                  ),
                 ),
               ),
             ),
@@ -4627,14 +4855,18 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
         // Class changes remain available for Human-in-the-Loop corrections,
         // but are intentionally kept out of the beginner default view.
-        ExpansionTile(
-          tilePadding: EdgeInsets.zero,
-          childrenPadding: EdgeInsets.zero,
-          initiallyExpanded: false,
-          title: const Text(
-            "고급: 객체 종류 수정",
-            style: TextStyle(color: Color(0xFF64748B), fontSize: 10.5),
-          ),
+        GlowingTargetWrapper(
+          targetId: 'node_class_tile',
+          borderRadius: BorderRadius.circular(4),
+          guideLabel: "✨ 객체 종류 수정",
+          child: ExpansionTile(
+            tilePadding: EdgeInsets.zero,
+            childrenPadding: EdgeInsets.zero,
+            initiallyExpanded: false,
+            title: const Text(
+              "고급: 객체 종류 수정",
+              style: TextStyle(color: Color(0xFF64748B), fontSize: 10.5),
+            ),
           children: [
             Wrap(
               spacing: 6,
@@ -4662,8 +4894,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             ),
           ],
         ),
-      ],
-    );
+      ),
+    ],
+  );
   }
 
   // --- Connection Queue Header & Panel ---
@@ -4994,7 +5227,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   Widget _buildConnectionReviewSidePanel() {
-    final lines = _filteredAndSortedWorkingLines;
+    var lines = _filteredAndSortedWorkingLines;
+    if (lines.isEmpty) {
+      lines = _workingLines.where((l) => l.reviewStatus != 'REJECTED').toList();
+      if (lines.isEmpty) lines = _workingLines;
+    }
     if (_selectedLine == null &&
         lines.isNotEmpty &&
         _selectedTopologyIssue == null &&
@@ -5002,6 +5239,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _selectedLine == null && lines.isNotEmpty) {
           setState(() {
+            if (_connFilterStatus != 'ALL' && _filteredAndSortedWorkingLines.isEmpty) {
+              _connFilterStatus = 'ALL';
+            }
             _selectedLine = lines.first;
           });
         }
@@ -5588,8 +5828,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   Widget _buildSelectedLinePanel() {
     final line = _selectedLine!;
-    final lines = _filteredAndSortedWorkingLines;
-    final currentIndex = lines.indexOf(line);
+    var lines = _filteredAndSortedWorkingLines;
+    if (lines.isEmpty || !lines.any((l) => l.lineId == line.lineId)) {
+      lines = _workingLines.where((l) => l.reviewStatus != 'REJECTED').toList();
+      if (lines.isEmpty) lines = _workingLines;
+    }
+    final currentIndex = lines.indexWhere((l) => l.lineId == line.lineId);
     final totalCount = lines.length;
     final isAmbiguous = line.reviewStatus == 'AMBIGUOUS';
     final isConfirmed = line.reviewStatus == 'CONFIRMED';
@@ -5845,20 +6089,25 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           ],
 
           // 5. Big Primary Action CTA
-          ElevatedButton.icon(
-            key: _connectionPrimaryActionKey,
-            onPressed: () => _confirmLineAndNext(line),
-            icon: const Icon(Icons.check_circle_outline, size: 18),
-            label: const Text(
-              "선로 승인하고 다음 (Enter ➔)",
-              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
-            ),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF0284C7),
-              foregroundColor: Colors.white,
-              minimumSize: const Size.fromHeight(40),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
+          GlowingTargetWrapper(
+            targetId: 'connection_priority',
+            borderRadius: BorderRadius.circular(8),
+            guideLabel: "✨ 선로 승인하고 다음",
+            child: ElevatedButton.icon(
+              key: _connectionPrimaryActionKey,
+              onPressed: () => _confirmLineAndNext(line),
+              icon: const Icon(Icons.check_circle_outline, size: 18),
+              label: const Text(
+                "선로 승인하고 다음 (Enter ➔)",
+                style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0284C7),
+                foregroundColor: Colors.white,
+                minimumSize: const Size(double.infinity, 40),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
             ),
           ),
@@ -5868,58 +6117,78 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           Row(
             children: [
               Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _selectPreviousLine,
-                  icon: const Icon(Icons.arrow_back, size: 13),
-                  label: const Text("이전 (◀)", style: TextStyle(fontSize: 11)),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    side: const BorderSide(color: Color(0xFFCBD5E1)),
+                child: GlowingTargetWrapper(
+                  targetId: 'line_prev',
+                  borderRadius: BorderRadius.circular(4),
+                  guideLabel: "✨ 이전 선로 (◀)",
+                  child: OutlinedButton.icon(
+                    onPressed: _selectPreviousLine,
+                    icon: const Icon(Icons.arrow_back, size: 13),
+                    label: const Text("이전 (◀)", style: TextStyle(fontSize: 11)),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      side: const BorderSide(color: Color(0xFFCBD5E1)),
+                    ),
                   ),
                 ),
               ),
               const SizedBox(width: 6),
               Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => _rejectLineAndNext(line),
-                  icon: const Icon(
-                    Icons.delete_outline,
-                    size: 13,
-                    color: Color(0xFFDC2626),
-                  ),
-                  label: const Text(
-                    "제외/삭제",
-                    style: TextStyle(fontSize: 11, color: Color(0xFFDC2626)),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    side: const BorderSide(color: Color(0xFFFCA5A5)),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: _selectNextLine,
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    side: const BorderSide(color: Color(0xFFCBD5E1)),
-                  ),
-                  child: const Text(
-                    "건너뛰기",
-                    style: TextStyle(fontSize: 11, color: Color(0xFF64748B)),
+                child: GlowingTargetWrapper(
+                  targetId: 'line_reject',
+                  borderRadius: BorderRadius.circular(4),
+                  guideLabel: "✨ 선로 제외/삭제",
+                  child: OutlinedButton.icon(
+                    onPressed: () => _rejectLineAndNext(line),
+                    icon: const Icon(
+                      Icons.delete_outline,
+                      size: 13,
+                      color: Color(0xFFDC2626),
+                    ),
+                    label: const Text(
+                      "제외/삭제",
+                      style: TextStyle(fontSize: 11, color: Color(0xFFDC2626)),
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      side: const BorderSide(color: Color(0xFFFCA5A5)),
+                    ),
                   ),
                 ),
               ),
               const SizedBox(width: 6),
               Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _selectNextLine,
-                  icon: const Icon(Icons.arrow_forward, size: 13),
-                  label: const Text("다음 (▶)", style: TextStyle(fontSize: 11)),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    side: const BorderSide(color: Color(0xFFCBD5E1)),
+                child: GlowingTargetWrapper(
+                  targetId: 'line_skip',
+                  borderRadius: BorderRadius.circular(4),
+                  guideLabel: "✨ 선로 건너뛰기",
+                  child: OutlinedButton(
+                    onPressed: _selectNextLine,
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      side: const BorderSide(color: Color(0xFFCBD5E1)),
+                    ),
+                    child: const Text(
+                      "건너뛰기",
+                      style: TextStyle(fontSize: 11, color: Color(0xFF64748B)),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: GlowingTargetWrapper(
+                  targetId: 'line_next',
+                  borderRadius: BorderRadius.circular(4),
+                  guideLabel: "✨ 다음 선로 (▶)",
+                  child: OutlinedButton.icon(
+                    onPressed: _selectNextLine,
+                    icon: const Icon(Icons.arrow_forward, size: 13),
+                    label: const Text("다음 (▶)", style: TextStyle(fontSize: 11)),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      side: const BorderSide(color: Color(0xFFCBD5E1)),
+                    ),
                   ),
                 ),
               ),
@@ -7299,20 +7568,25 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           const SizedBox(height: 10),
 
           // 5. Big Primary Action CTA
-          ElevatedButton.icon(
-            key: _busPrimaryActionKey,
-            onPressed: () => _approveAndNextBus(busNode),
-            icon: const Icon(Icons.check_circle_outline, size: 18),
-            label: const Text(
-              "승인하고 다음 모선으로 (Enter ➔)",
-              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
-            ),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF2563EB),
-              foregroundColor: Colors.white,
-              minimumSize: const Size.fromHeight(40),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
+          GlowingTargetWrapper(
+            targetId: 'bus_input',
+            borderRadius: BorderRadius.circular(8),
+            guideLabel: "✨ 승인하고 다음 모선으로",
+            child: ElevatedButton.icon(
+              key: _busPrimaryActionKey,
+              onPressed: () => _approveAndNextBus(busNode),
+              icon: const Icon(Icons.check_circle_outline, size: 18),
+              label: const Text(
+                "승인하고 다음 모선으로 (Enter ➔)",
+                style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF2563EB),
+                foregroundColor: Colors.white,
+                minimumSize: const Size(double.infinity, 40),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
             ),
           ),
@@ -7754,18 +8028,16 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         child: Column(
           children: [
             CheckboxListTile(
-              value: _isCleanAuto ? true : _humanCompletenessConfirmed,
-              onChanged: _isCleanAuto
-                  ? null
-                  : (val) => setState(
-                      () => _humanCompletenessConfirmed = val ?? false,
-                    ),
+              value: _canVerifyObjectGate,
+              onChanged: null,
               title: Text(
-                _isCleanAuto
-                    ? "✓ 전체 도면 대조 완료 (검토 필요 객체 0건으로 자동 확인됨)"
-                    : "원본 회로도 전체와의 대조 확인 완료 (Completeness Confirmed)",
+                _canVerifyObjectGate
+                    ? "✓ 전체 도면 대조 및 모든 객체 승인 완료 (Gate 통과 가능)"
+                    : (_unconfirmedNodesCount > 0
+                        ? "대기 중인 정상 객체 ${_unconfirmedNodesCount}개 승인 필요 (우측 일괄 승인)"
+                        : "원본 회로도 대조 확인 대기 중"),
                 style: TextStyle(
-                  color: _isCleanAuto
+                  color: _canVerifyObjectGate
                       ? const Color(0xFF16A34A)
                       : const Color(0xFF0F172A),
                   fontSize: 11,
@@ -7885,25 +8157,32 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   )
                 else
                   Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: _canVerifyObjectGate
-                          ? _verifyObjectGate
-                          : () {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    '아직 완료할 항목: ${_objectGateBlockers.join(', ')}',
+                    child: GlowingTargetWrapper(
+                      targetId: 'object_gate',
+                      borderRadius: BorderRadius.circular(8),
+                      guideLabel: "✨ 객체 검수 완료",
+                      child: ElevatedButton.icon(
+                        onPressed: _canVerifyObjectGate
+                            ? _verifyObjectGate
+                            : () {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      '아직 완료할 항목: ${_objectGateBlockers.join(', ')}',
+                                    ),
+                                    backgroundColor: Colors.orange,
                                   ),
-                                  backgroundColor: Colors.orange,
-                                ),
-                              );
-                            },
-                      icon: const Icon(Icons.check_circle_outline, size: 16),
-                      label: const Text("객체 검수 완료"),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF2563EB),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 12),
+                                );
+                              },
+                        icon: const Icon(Icons.check_circle_outline, size: 16),
+                        label: const Text("객체 검수 완료"),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _canVerifyObjectGate
+                              ? const Color(0xFF2563EB)
+                              : const Color(0xFF94A3B8),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                        ),
                       ),
                     ),
                   ),
@@ -7957,14 +8236,19 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             Row(
               children: [
                 Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _canVerifyBusGate ? _proceedToConnectionReview : null,
-                    icon: const Icon(Icons.arrow_forward, size: 16),
-                    label: const Text("모선 번호 승인 ➔ 다음: 선로 결선 인식 및 검수"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF2563EB),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: GlowingTargetWrapper(
+                    targetId: 'bus_gate',
+                    borderRadius: BorderRadius.circular(8),
+                    guideLabel: "✨ 모선 번호 승인",
+                    child: ElevatedButton.icon(
+                      onPressed: _canVerifyBusGate ? _proceedToConnectionReview : null,
+                      icon: const Icon(Icons.arrow_forward, size: 16),
+                      label: const Text("모선 번호 승인 ➔ 다음: 선로 결선 인식 및 검수"),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF2563EB),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
                     ),
                   ),
                 ),
@@ -7984,17 +8268,22 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         child: Row(
           children: [
             Expanded(
-              child: ElevatedButton.icon(
-                key: _connectionGateKey,
-                onPressed: _verifyFinalGate,
-                icon: const Icon(Icons.verified, size: 16),
-                label: const Text("결선 검수 완료 ➔ 다음: 최종 확인 & 엑셀"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: _canVerifyFinalGate
-                      ? const Color(0xFF16A34A)
-                      : Colors.grey.shade400,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 12),
+              child: GlowingTargetWrapper(
+                targetId: 'connection_gate',
+                borderRadius: BorderRadius.circular(8),
+                guideLabel: "✨ 결선 검수 완료",
+                child: ElevatedButton.icon(
+                  key: _connectionGateKey,
+                  onPressed: _verifyFinalGate,
+                  icon: const Icon(Icons.verified, size: 16),
+                  label: const Text("결선 검수 완료 ➔ 다음: 최종 확인 & 엑셀"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _canVerifyFinalGate
+                        ? const Color(0xFF16A34A)
+                        : Colors.grey.shade400,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
                 ),
               ),
             ),
@@ -8120,33 +8409,43 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                         Row(
                           children: [
                             if (_importedExcelData == null) ...[
-                              OutlinedButton.icon(
-                                onPressed: _loadDefaultExcelInReview,
-                                icon: const Icon(Icons.auto_stories, size: 14),
-                                label: const Text("기본 25모선 엑셀", style: TextStyle(fontSize: 11)),
-                                style: OutlinedButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                                  visualDensity: VisualDensity.compact,
+                              GlowingTargetWrapper(
+                                targetId: 'default_excel_btn',
+                                borderRadius: BorderRadius.circular(6),
+                                guideLabel: "✨ 기본 25모선 예제 엑셀",
+                                child: OutlinedButton.icon(
+                                  onPressed: _loadDefaultExcelInReview,
+                                  icon: const Icon(Icons.auto_stories, size: 14),
+                                  label: const Text("기본 25모선 엑셀", style: TextStyle(fontSize: 11)),
+                                  style: OutlinedButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                                    visualDensity: VisualDensity.compact,
+                                  ),
                                 ),
                               ),
                               const SizedBox(width: 6),
                             ],
-                            ElevatedButton.icon(
-                              key: _finalExcelUploadKey,
-                              onPressed: _importExcelInReview,
-                              icon: const Icon(Icons.file_upload, size: 14),
-                              label: Text(
-                                _importedExcelData != null
-                                    ? "다른 엑셀 다시 불러오기"
-                                    : "엑셀 파일 선택",
-                                style: const TextStyle(fontSize: 11),
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF0D9488),
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 6,
+                            GlowingTargetWrapper(
+                              targetId: 'final_excel_upload',
+                              borderRadius: BorderRadius.circular(8),
+                              guideLabel: "✨ 엑셀 파일 선택",
+                              child: ElevatedButton.icon(
+                                key: _finalExcelUploadKey,
+                                onPressed: _importExcelInReview,
+                                icon: const Icon(Icons.file_upload, size: 14),
+                                label: Text(
+                                  _importedExcelData != null
+                                      ? "다른 엑셀 다시 불러오기"
+                                      : "엑셀 파일 선택",
+                                  style: const TextStyle(fontSize: 11),
+                                ),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF0D9488),
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 6,
+                                  ),
                                 ),
                               ),
                             ),
@@ -8176,16 +8475,21 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                     style: TextStyle(color: Color(0xFF991B1B), fontWeight: FontWeight.bold, fontSize: 13),
                                   ),
                                   const Spacer(),
-                                  TextButton.icon(
-                                    onPressed: _showReviewMismatchDialog,
-                                    icon: const Icon(Icons.auto_awesome, size: 14, color: Color(0xFF4F46E5)),
-                                    label: const Text(
-                                      "AI 진단 & 세부비교 보기",
-                                      style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: Color(0xFF4F46E5)),
-                                    ),
-                                    style: TextButton.styleFrom(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                      backgroundColor: const Color(0xFFEEF2FF),
+                                  GlowingTargetWrapper(
+                                    targetId: 'excel_mismatch_btn',
+                                    borderRadius: BorderRadius.circular(6),
+                                    guideLabel: "✨ AI 진단 & 세부비교",
+                                    child: TextButton.icon(
+                                      onPressed: _showReviewMismatchDialog,
+                                      icon: const Icon(Icons.auto_awesome, size: 14, color: Color(0xFF4F46E5)),
+                                      label: const Text(
+                                        "AI 진단 & 세부비교 보기",
+                                        style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: Color(0xFF4F46E5)),
+                                      ),
+                                      style: TextButton.styleFrom(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        backgroundColor: const Color(0xFFEEF2FF),
+                                      ),
                                     ),
                                   ),
                                 ],
@@ -8284,25 +8588,30 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  ElevatedButton.icon(
-                    key: _finalCanvasHandoffKey,
-                    onPressed: _handoffToFlutterCanvas,
-                    icon: const Icon(Icons.open_in_new),
-                    label: Text(
-                      _importedExcelData != null
-                          ? "엑셀 데이터 적용하여 캔버스로 이동"
-                          : "캔버스 편집 화면으로 이동",
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
+                  GlowingTargetWrapper(
+                    targetId: 'final_canvas_handoff',
+                    borderRadius: BorderRadius.circular(8),
+                    guideLabel: "✨ 캔버스로 이동",
+                    child: ElevatedButton.icon(
+                      key: _finalCanvasHandoffKey,
+                      onPressed: _handoffToFlutterCanvas,
+                      icon: const Icon(Icons.open_in_new),
+                      label: Text(
+                        _importedExcelData != null
+                            ? "엑셀 데이터 적용하여 캔버스로 이동"
+                            : "캔버스 편집 화면으로 이동",
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF16A34A),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 28,
-                        vertical: 14,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF16A34A),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 28,
+                          vertical: 14,
+                        ),
                       ),
                     ),
                   ),
@@ -8518,6 +8827,500 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           fontSize: 10,
           fontWeight: FontWeight.bold,
         ),
+      ),
+    );
+  }
+
+  Widget _buildMissingCandidateBadge(String label, int count, Color color) {
+    final hasCandidates = count > 0;
+    return Tooltip(
+      message: hasCandidates ? '누락 후보 확인 및 문제 없음 처리 (클릭)' : '누락 후보 없음',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () {
+            if (hasCandidates) {
+              _showMissingCandidatesDialog();
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text("현재 미해결된 누락 후보가 없습니다. 정상입니다."),
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            }
+          },
+          borderRadius: BorderRadius.circular(4),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: hasCandidates
+                  ? color.withValues(alpha: 0.15)
+                  : const Color(0xFFF1F5F9),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(
+                color: hasCandidates ? color : const Color(0xFFCBD5E1),
+                width: hasCandidates ? 1.4 : 0.8,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (hasCandidates) ...[
+                  Icon(Icons.warning_amber_rounded, size: 11, color: color),
+                  const SizedBox(width: 3),
+                ],
+                Text(
+                  "$label: $count",
+                  style: TextStyle(
+                    color: hasCandidates ? color : const Color(0xFF64748B),
+                    fontSize: 9.2,
+                    fontWeight: hasCandidates ? FontWeight.bold : FontWeight.normal,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMissingCandidatesAlertCard() {
+    final openCands = _missingCandidates.where((c) => c.status == 'OPEN').toList();
+    if (openCands.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFAF5FF),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFC084FC), width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF9333EA).withValues(alpha: 0.08),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.warning_amber_rounded, size: 16, color: Color(0xFF9333EA)),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  "도면 누락 의심 설비 (${openCands.length}건 확인 필요)",
+                  style: const TextStyle(
+                    color: Color(0xFF9333EA),
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              InkWell(
+                onTap: _showMissingCandidatesDialog,
+                child: const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  child: Text(
+                    "상세보기 ➔",
+                    style: TextStyle(
+                      color: Color(0xFF9333EA),
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            "단선도에 원래 해당 부품이 없는 계통이면 [문제 없음]을 누르세요.",
+            style: TextStyle(color: Color(0xFF64748B), fontSize: 10),
+          ),
+          const SizedBox(height: 8),
+          ...openCands.map(
+            (c) => Container(
+              margin: const EdgeInsets.only(bottom: 6),
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xFFE9D5FF)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF9333EA),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          _classNameKo(c.suspectedClass),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          c.descriptionKo,
+                          style: const TextStyle(
+                            color: Color(0xFF1E293B),
+                            fontSize: 10.5,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () {
+                            setState(() {
+                              _isManualAddMode = true;
+                              _manualAddClass = c.suspectedClass;
+                            });
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  "도면에서 ${_classNameKo(c.suspectedClass)} 영역을 드래그하여 추가하세요.",
+                                ),
+                                backgroundColor: const Color(0xFF9333EA),
+                              ),
+                            );
+                          },
+                          icon: const Icon(Icons.edit, size: 12),
+                          label: const Text(
+                            "수동 추가",
+                            style: TextStyle(fontSize: 10),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFF9333EA),
+                            side: const BorderSide(color: Color(0xFFD8B4FE)),
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed: () => _dismissCandidate(c),
+                          icon: const Icon(Icons.check, size: 12),
+                          label: const Text(
+                            "문제 없음",
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF16A34A),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 4),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showMissingCandidatesDialog() {
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => StatefulBuilder(
+        builder: (ctx, setDialogState) {
+          final openCands = _missingCandidates
+              .where((c) => c.status == 'OPEN')
+              .toList();
+          return AlertDialog(
+            backgroundColor: Colors.white,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+            ),
+            title: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF3E8FF),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(
+                    Icons.help_outline_rounded,
+                    color: Color(0xFF9333EA),
+                    size: 22,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        "도면 누락 후보 검토",
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF0F172A),
+                        ),
+                      ),
+                      Text(
+                        openCands.isNotEmpty
+                            ? "검토 대기 ${openCands.length}건이 있습니다."
+                            : "모든 누락 후보가 처리되었습니다.",
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF64748B),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 480,
+              child: openCands.isEmpty
+                  ? Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.check_circle_outline,
+                          color: Color(0xFF16A34A),
+                          size: 48,
+                        ),
+                        const SizedBox(height: 12),
+                        const Text(
+                          "모든 누락 후보가 처리되었습니다!",
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF0F172A),
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        const Text(
+                          "이제 하단의 [객체 검수 완료] 버튼을 눌러 다음 단계로 진행하실 수 있습니다.",
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF64748B),
+                          ),
+                        ),
+                      ],
+                    )
+                  : SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF8FAFC),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: const Color(0xFFE2E8F0),
+                              ),
+                            ),
+                            child: const Row(
+                              children: [
+                                Icon(
+                                  Icons.info_outline,
+                                  size: 16,
+                                  color: Color(0xFF0284C7),
+                                ),
+                                SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    "AI가 단선도 분석 중 설비 누락 가능성을 감지한 항목입니다. 계통에 원래 해당 설비가 없는 경우 [문제 없음]을 누르시면 정상 통과됩니다.",
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: Color(0xFF334155),
+                                      height: 1.35,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          ...openCands.map(
+                            (c) => Container(
+                              margin: const EdgeInsets.only(bottom: 10),
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFAF5FF),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: const Color(0xFFD8B4FE),
+                                  width: 1.2,
+                                ),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 7,
+                                          vertical: 2,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF9333EA),
+                                          borderRadius: BorderRadius.circular(
+                                            4,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          _classNameKo(c.suspectedClass),
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 10.5,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      const Text(
+                                        "누락 의심",
+                                        style: TextStyle(
+                                          color: Color(0xFF9333EA),
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    c.descriptionKo,
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: Color(0xFF1E293B),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.end,
+                                    children: [
+                                      OutlinedButton.icon(
+                                        onPressed: () {
+                                          Navigator.of(dialogCtx).pop();
+                                          setState(() {
+                                            _isManualAddMode = true;
+                                            _manualAddClass = c.suspectedClass;
+                                          });
+                                          ScaffoldMessenger.of(
+                                            context,
+                                          ).showSnackBar(
+                                            SnackBar(
+                                              content: Text(
+                                                "도면에서 ${_classNameKo(c.suspectedClass)} 영역을 드래그하여 추가하세요.",
+                                              ),
+                                              backgroundColor: const Color(
+                                                0xFF9333EA,
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                        icon: const Icon(Icons.add, size: 14),
+                                        label: const Text(
+                                          "도면에서 직접 추가",
+                                          style: TextStyle(fontSize: 11),
+                                        ),
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: const Color(
+                                            0xFF9333EA,
+                                          ),
+                                          side: const BorderSide(
+                                            color: Color(0xFFD8B4FE),
+                                          ),
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 10,
+                                            vertical: 6,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      ElevatedButton.icon(
+                                        onPressed: () {
+                                          _dismissCandidate(c);
+                                          setDialogState(() {});
+                                          if (_unresolvedCandidatesCount == 0) {
+                                            Navigator.of(dialogCtx).pop();
+                                            PowerLensAIService.instance
+                                                .triggerHighlight(
+                                                  'object_gate',
+                                                );
+                                          }
+                                        },
+                                        icon: const Icon(Icons.check, size: 14),
+                                        label: const Text(
+                                          "문제 없음 (원래 없음)",
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: const Color(
+                                            0xFF16A34A,
+                                          ),
+                                          foregroundColor: Colors.white,
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 12,
+                                            vertical: 6,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogCtx).pop(),
+                child: const Text("닫기"),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

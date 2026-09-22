@@ -156,6 +156,10 @@ Gemini가 반드시 이해해야 하는 것:
 - 현재 App Context
 - 현재 Blocker
 - Human approval policy
+- **UI 위젯 카탈로그 및 점등 가이드 (`highlight_target`)**:
+  - 화면 내 25+종의 UI 요소(`object_batch_approve`, `missing_candidates`, `bus_input`, `connection_priority`, `final_excel_upload`, `final_powerflow` 등)의 위치와 역할을 이해하고, 사용자가 다음 할 일이나 조작법을 물었을 때 점등할 타깃 ID를 직접 결정한다.
+  - Gemini는 구조화된 JSON (`{"reply_ko": "...", "highlight_target": "<target_id>"}`) 형식으로 답변과 점등 타깃을 함께 반환한다.
+  - 사용자의 자연스러운 다양한 한국어 표현(예: "다 잘됐을 때 뭐 눌러?", "정상이면 어디 봐?")은 Gemini LLM의 고유한 의미 추론으로 해석하며, 코드베이스에 정규식/키워드 사전을 땜질식으로 증설하지 않는다.
 
 Gemini는 단순히:
 "너는 전력계통 전문가다"
@@ -370,6 +374,13 @@ Gemini Provider의 역할:
 - Workflow guidance
 - 복합 질문 설명
 - Agent orchestration
+- **UI 타깃팅 및 점등 결정 (`highlight_target`)**: 질문에 맞춰 사용자가 누르거나 확인해야 할 UI 위젯 ID를 직접 명시
+
+### Gemini-First 원칙 및 키워드 사전 금지 규칙:
+
+1. **단일 지능 원칙**: 사용자의 모든 자연어 질문, 다음 단계 안내, 어디를 눌러야 하는지에 대한 판단은 Google Gemini LLM이 전담한다.
+2. **키워드 사전 증설 금지**: '잘됐을경우', '잘되면', '정상이면' 같은 수많은 한국어 표현 변형을 잡기 위해 정규식이나 문자열 매칭 목록(`_containsAny`)을 프론트엔드/백엔드에 덕지덕지 추가하는 행위를 **엄격히 금지**한다.
+3. **상태 기반 최소 Fallback**: 오프라인 또는 API 키 누락 시 앱을 보호하기 위한 Local Provider는 오직 도면의 '물리적 상태 플래그'(의심 객체 수, 미승인 노드 존재 여부 등)만을 기준으로 간결하게 동작하며, 자연어 어휘 확장을 흉내 내지 않는다.
 
 Gemini API 장애 또는 Key 부재가
 핵심 PowerLens 기능 전체를 중단시키면 안 된다.

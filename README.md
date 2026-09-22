@@ -13,7 +13,7 @@
 
 [프로젝트 개요](#-프로젝트-개요-executive-summary) • [핵심 기술 성과](#-핵심-엔지니어링-및-ai-기술-성과) • [시스템 아키텍처](#-시스템-아키텍처-system-architecture) • [검증 및 벤치마크](#-수치해석-검증-및-성능-benchmark-validation) • [빠른 시작 가이드](#-빠른-시작-가이드-quick-start)
 
-> 👥 **Team & Docs**: 전체 시스템 상세 설계는 [`docs/SYSTEM_ARCHITECTURE_AND_TECHNICAL_DOCS.md`](./SYSTEM_ARCHITECTURE_AND_TECHNICAL_DOCS.md), 팀 인수인계는 [`../TEAM_HANDOFF.md`](../TEAM_HANDOFF.md), 특허 출원 내용은 [`../PowerLens_특허명세서_공식출원용.md`](../PowerLens_특허명세서_공식출원용.md)를 참조하세요.
+> 👥 **Team & Docs**: 전체 시스템 상세 설계는 [`docs/SYSTEM_ARCHITECTURE_AND_TECHNICAL_DOCS.md`](./docs/SYSTEM_ARCHITECTURE_AND_TECHNICAL_DOCS.md), 팀 인수인계는 [`TEAM_HANDOFF.md`](./TEAM_HANDOFF.md), 특허 출원 내용은 [`PowerLens_특허명세서_공식출원용.md`](./PowerLens_특허명세서_공식출원용.md)를 참조하세요.
 
 </div>
 

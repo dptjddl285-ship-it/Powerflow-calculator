@@ -359,7 +359,63 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
         issues = topology_issues or []
         stage_upper = (stage or "HOME").upper()
 
-        # 1. Summary & Status Requests (검토 현황 요약)
+        # 1. Selected Node Inquiry
+        if selected_node and any(k in msg for k in ["왜", "이유", "판단", "의심", "바꾸면", "변경", "영향", "설명", "심볼", "why"]):
+            node_id = str(selected_node.get("id", "Unknown"))
+            node_cls = str(selected_node.get("class", selected_node.get("className", "UNKNOWN"))).upper()
+            conf = float(selected_node.get("confidence", 0.0))
+            reasons = selected_node.get("review_reasons", [])
+            expl = selected_node.get("agent_explanation", "")
+
+            if any(k in msg for k in ["바꾸면", "변경", "영향"]):
+                reply = (
+                    f"🔄 **[설비 클래스 변경 영향 분석 - {node_id} ({node_cls})]**\n\n"
+                    f"현재 객체는 **모선(BUS)** 심볼로 인식되어 있습니다.\n"
+                    f"• **계통 영향**: 모선(Bus)을 부하(Load)나 타 설비로 변경하면 연결된 송전선로와 인입선 토폴로지 구조가 재구성되며, 조류계산 모선 방정식의 차수가 달라집니다."
+                )
+            else:
+                lines = [f"🔍 **[선택 객체 AI 분석 - {node_id} ({node_cls})]**\n"]
+                lines.append(f"• **설비 분류**: **{node_cls}** (AI 신뢰도: **{conf:.2f}**)")
+                if expl:
+                    lines.append(f"• **판단 설명**: {expl}")
+                if reasons:
+                    lines.append(f"• **검토 사유/근거**: {', '.join(str(r) for r in reasons)}")
+                else:
+                    lines.append(f"• **판단 근거**: 기하학적 형태와 연결 단자 분석을 통해 정상적인 {node_cls} 심볼로 검출되었습니다.")
+                reply = "\n".join(lines)
+
+            return {
+                "reply_ko": reply,
+                "agent_status": "LOCAL_NODE_INFO",
+                "target_id": "canvas_node",
+                "provider_mode": self.provider_name,
+                "display_mode": self.display_mode_name,
+                "context_summary": {"node_id": node_id, "class": node_cls},
+            }
+
+        # 2. Selected Line Inquiry
+        if selected_line and any(k in msg for k in ["왜", "이유", "문제", "오류", "선로", "line", "why"]):
+            line_id = str(selected_line.get("line_id", selected_line.get("id", "Unknown")))
+            status = selected_line.get("review_status", "NORMAL")
+            issues_list = selected_line.get("validation_issues", [])
+            issue_msgs = [i.get("message", "") for i in issues_list if isinstance(i, dict)]
+
+            lines = [f"🔍 **[선택 선로 결선 분석 - {line_id}]**\n"]
+            lines.append(f"• **검수 상태**: {status}")
+            if issue_msgs:
+                lines.append(f"• **결선 이슈**: {', '.join(issue_msgs)}")
+            else:
+                lines.append("• **결선 상태**: 모선 간 정상적인 연결이 확인되었습니다.")
+            return {
+                "reply_ko": "\n".join(lines),
+                "agent_status": "LOCAL_LINE_INFO",
+                "target_id": "canvas_line",
+                "provider_mode": self.provider_name,
+                "display_mode": self.display_mode_name,
+                "context_summary": {"line_id": line_id},
+            }
+
+        # 3. Summary & Status Requests (검토 현황 요약)
         if any(k in msg for k in ["요약", "현황", "검토 필요", "상태", "summary", "status"]):
             summary_res = self.generate_proactive_summary(
                 document_id=document_id,
@@ -378,80 +434,111 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                 "context_summary": {"stage": stage},
             }
 
-        # 2. Next Step Guidance (다음에 무엇을 해야 하는지 - 모든 단계 지원)
-        if any(k in msg for k in ["다음", "무엇", "어떻게", "진행", "통과", "gate", "next", "뭐해", "뭘 해야", "도와줘"]):
-            if stage_upper in ("HOME", "EMPTY_HOME"):
-                reply = (
-                    "🧭 **[다음 단계 진행 가이드 - 시작하기]:**\n"
-                    "1. 단선도 도면을 먼저 불러오세요.\n"
-                    "2. 화면 중앙의 **[단선도 AI 분석 시작하기]** 버튼을 누르거나 샘플 도면(IEEE-24)을 선택하세요.\n"
-                    "3. AI가 도면을 분석하면 자동으로 객체 검수실로 이동합니다."
-                )
-            elif stage_upper == "OBJECT_REVIEW":
-                suspicious_count = len([n for n in w_nodes if n.get("review_status") == "SUSPICIOUS"])
-                open_cand_count = len([c for c in cands if c.get("status") == "OPEN"])
-                reply = "🧭 **[다음 단계 진행 가이드 - ① 객체 검수]:**\n"
-                if suspicious_count == 0 and open_cand_count == 0:
-                    reply += "✓ 모든 객체와 누락 후보가 검토 완료되었습니다!\n"
-                    reply += "• 하단 **[객체 검수 완료 (Gate 1 통과 / Gate 통과)]** 버튼을 눌러 **[다음: ② 모선 번호 매핑]** 단계로 이동하세요."
+        # 4. Stage-Based State Guidance (Pure State Fallback - Zero Keyword Guessing)
+        target = None
+        if stage_upper in ("HOME", "EMPTY_HOME"):
+            target = "home_upload"
+            reply = (
+                "🧭 **[다음 단계 진행 가이드 - 시작하기]:**\n"
+                "1. 단선도 도면을 먼저 불러오세요.\n"
+                "2. 화면 중앙의 **[단선도 AI 분석 시작하기]** 버튼을 누르거나 샘플 도면(IEEE-24)을 선택하세요.\n"
+                "3. AI가 도면을 분석하면 자동으로 객체 검수실로 이동합니다."
+            )
+        elif stage_upper == "OBJECT_REVIEW":
+            suspicious_count = len([n for n in w_nodes if (n.get("review_status") or n.get("status")) == "SUSPICIOUS"])
+            open_cand_count = len([c for c in cands if c.get("status") == "OPEN"])
+            unconfirmed_count = len([n for n in w_nodes if (n.get("review_status") or n.get("status")) not in ("CONFIRMED", "REJECTED")])
+            reply = "🧭 **[다음 단계 진행 가이드 - ① 객체 검수]:**\n"
+            if suspicious_count == 0 and open_cand_count == 0:
+                if unconfirmed_count > 0:
+                    target = "object_batch_approve"
+                    reply += "✓ 모든 인식된 객체가 정상 기호로 판정되었습니다 (검토 필요 0건)!\n"
+                    reply += "• 모든 객체 인식이 다 잘 되었을 경우 우측 사이드바의 **[정상 객체 일괄 승인]** (또는 [정상 객체 전체 승인]) 버튼을 누르면 됩니다.\n"
+                    reply += "• 일괄 승인 확정 후, 하단의 파란색 **[객체 검수 완료 (Gate 통과)]** 버튼을 눌러 바로 **[다음: ② 모선 번호 매핑]** 단계로 진행하세요."
                 else:
-                    reply += f"1. 우선 검토 객체 확인 (남은 의심 객체: **{suspicious_count}개**)\n"
-                    reply += f"2. 누락 설비 후보 확인 (남은 미확인 후보: **{open_cand_count}개**)\n"
-                    reply += "3. 정상 객체는 상단 **[정상 객체 일괄 승인]**으로 한 번에 승인\n"
-                    reply += "4. 하단 **'도면 전체 대조 확인'** 체크 후 **[객체 검수 완료 (Gate 1 통과 / Gate 통과)]** 클릭 ➔ **[다음: ② 모선 번호 매핑]** 단계로 이동"
-            elif stage_upper in ("BUS_MAPPING_REVIEW", "BUS_MAPPING"):
-                uncertain_buses = len([n for n in w_nodes if n.get("class") == "bus" and (n.get("bus_number") is None or n.get("bus_number_status") == "UNCERTAIN")])
-                reply = "🧭 **[다음 단계 진행 가이드 - ② 모선 번호 매핑]:**\n"
-                reply += f"1. 도면 OCR 및 공간 좌표 기반 모선 번호 부여 상태 점검 (미해결/불확실: **{uncertain_buses}개**)\n"
-                reply += "2. 필요 시 AI 자동 번호 링크 또는 수동으로 모선 번호 입력/보정\n"
-                reply += "3. **[모선 번호 승인 (Gate 2 통과)]** 클릭 ➔ **[다음: ③ 선로 결선 검수]** 단계로 이동"
-            elif stage_upper in ("CONNECTION_REVIEW", "CONNECTION", "LINE_REVIEW"):
-                ambiguous_count = len([l for l in w_lines if l.get("review_status") == "AMBIGUOUS"])
-                error_count = len([i for i in issues if i.get("severity") == "error"])
-                reply = "🧭 **[다음 단계 진행 가이드 - ③ 선로 결선 검수]:**\n"
-                if ambiguous_count == 0 and error_count == 0:
-                    reply += "✓ 모든 결선이 전기적 무결성 검증을 통과했습니다!\n"
-                    reply += "• 하단 **[결선 검수 완료 (Gate 3 통과)]** 버튼을 눌러 **[다음: ④ 최종 확인 & 엑셀]** 단계로 이동하세요."
-                else:
-                    reply += f"1. 결선 오류 선로 해결 (남은 모호 선로: **{ambiguous_count}개**)\n"
-                    reply += f"2. 토폴로지 결함(단선, 고립 모선) 해결 (남은 결함: **{error_count}개**)\n"
-                    reply += "3. 정상 선로는 **[정상 결선 일괄 승인]**으로 승인\n"
-                    reply += "4. **[결선 검수 완료 (Gate 3 통과)]** 클릭 ➔ **[다음: ④ 최종 확인 & 엑셀]** 단계로 이동"
-            elif stage_upper in ("FINAL_REVIEW", "FINAL", "VERIFIED_FINAL"):
-                reply = "🧭 **[다음 단계 진행 가이드 - ④ 최종 확인 & 엑셀 대조]:**\n"
-                reply += "1. 최종 정합성이 검증된 VerifiedSLD 다이어그램 요약 확인\n"
-                reply += "2. 계통 엑셀 파일(.xlsx)을 업로드하여 도면과 설비 제원 교차 대조\n"
-                reply += "3. 불일치 감지 시 AI 진단 리포트 확인 후 원클릭 자동 보정\n"
-                reply += "4. **[캔버스로 전송]** 클릭 ➔ 메인 작업 영역으로 이동하여 즉시 AC 조류계산 시뮬레이션 실행"
-            elif stage_upper in ("CAD", "EXCEL_MAPPING"):
-                reply = (
-                    "🧭 **[다음 단계 진행 가이드 - CAD & 엑셀]:**\n"
-                    "1. 상단 **[엑셀 가져오기]** 버튼을 눌러 계통 파라미터 엑셀 파일(예: case24_psse.xlsx)을 연결하세요.\n"
-                    "2. 엑셀 제원이 연결되면 상단 파란색 **[조류계산 실행]** 버튼을 눌러 수치해석을 진행하세요."
-                )
-            elif stage_upper == "POWERFLOW_READY":
-                reply = (
-                    "🧭 **[다음 단계 진행 가이드 - 조류계산]:**\n"
-                    "계통 제원 연결이 완료되었습니다!\n"
-                    "• 상단 우측 파란색 **[조류계산 실행]** 버튼을 클릭하여 뉴턴-랩슨 조류계산을 수행하세요."
-                )
-            elif stage_upper == "POWERFLOW_RESULT":
-                reply = (
-                    "🧭 **[다음 단계 진행 가이드 - 결과 확인]:**\n"
-                    "조류계산이 수렴했습니다!\n"
-                    "1. 상단 **[수치 결과표]** 버튼을 눌러 모선별 전압/위상각과 선로 조류/손실 표를 확인하세요.\n"
-                    "2. CAD 캔버스 위 각 모선의 전압과 발전기 출력을 직접 비교해보세요."
-                )
+                    target = "object_gate"
+                    reply += "✓ 모든 객체 검수가 완료되었습니다!\n"
+                    reply += "• 하단의 파란색 **[객체 검수 완료 (Gate 통과)]** 버튼을 눌러 **[다음: ② 모선 번호 매핑]** 단계로 진행하세요."
+            elif suspicious_count == 0 and open_cand_count > 0:
+                target = "missing_candidates"
+                reply += f"⚠️ 의심 객체는 없으나, AI가 단선도 분석 중 누락 가능성이 있는 설비 후보가 **{open_cand_count}건**(예: 변압기 등) 감지되어 있습니다.\n"
+                reply += "• **도면에 원래 해당 설비가 없는 경우**: 화면 상단의 보라색 **[누락 후보]** 배지나 좌측 카드의 **[문제 없음]** 버튼을 누르시면 즉시 통과됩니다.\n"
+                reply += "• **실제 존재하는 경우**: **[수동 추가]**를 눌러 도면에서 직접 지정하세요.\n"
+                reply += "• 누락 후보 처리가 끝나면 하단 **[객체 검수 완료 (Gate 통과)]**를 눌러 **[다음: ② 모선 번호 매핑]** 단계로 진행하실 수 있습니다."
             else:
-                reply = f"현재 **{stage}** 단계입니다. 도면 검수나 계통 제원 연결을 진행해주세요."
+                target = "object_approve"
+                reply += f"1. 우선 검토 객체 확인 (남은 의심 객체: **{suspicious_count}개**)\n"
+                reply += f"2. 누락 설비 후보 확인 (남은 미확인 후보: **{open_cand_count}개**)\n"
+                reply += "3. 화면 우측에서 의심 객체를 확인하고 **[승인하고 다음 (Enter)]** 또는 [제외]로 검수\n"
+                reply += "4. 정상 객체들은 우측의 **[정상 객체 일괄 승인]** 버튼으로 한 번에 승인할 수 있습니다.\n"
+                reply += "5. 모든 객체 확인 완료 후 하단 **[객체 검수 완료 (Gate 통과)]** 클릭 ➔ **[다음: ② 모선 번호 매핑]** 단계로 이동"
+        elif stage_upper in ("BUS_MAPPING_REVIEW", "BUS_MAPPING"):
+            uncertain_buses = len([n for n in w_nodes if (n.get("class") or n.get("className")) == "bus" and (n.get("bus_number") is None or n.get("bus_number_status") == "UNCERTAIN")])
+            reply = "🧭 **[다음 단계 진행 가이드 - ② 모선 번호 매핑]:**\n"
+            if uncertain_buses == 0:
+                target = "bus_gate"
+                reply += "✓ 모든 모선 번호가 확인되었습니다!\n"
+                reply += "• 하단 **[모선 번호 승인 (Gate 2 통과)]** 버튼을 눌러 **[다음: ③ 선로 결선 검수]** 단계로 이동하세요."
+            else:
+                target = "bus_input"
+                reply += f"1. 도면 OCR 및 공간 좌표 기반 모선 번호 부여 상태 점검 (미해결/불확실: **{uncertain_buses}개**)\n"
+                reply += "2. 우측 입력창에서 모선 번호 입력 후 **[승인하고 다음 모선으로 (Enter)]** 클릭\n"
+                reply += "3. 모든 모선 번호 입력 후 하단 **[모선 번호 승인]** 클릭 ➔ **[다음: ③ 선로 결선 검수]** 단계로 이동"
+        elif stage_upper in ("CONNECTION_REVIEW", "CONNECTION", "LINE_REVIEW"):
+            ambiguous_count = len([l for l in w_lines if (l.get("review_status") or l.get("status")) == "AMBIGUOUS"])
+            error_count = len([i for i in issues if i.get("severity") in ("error", "ERROR")])
+            reply = "🧭 **[다음 단계 진행 가이드 - ③ 선로 결선 검수]:**\n"
+            if ambiguous_count == 0 and error_count == 0:
+                target = "connection_gate"
+                reply += "✓ 모든 선로 연결 상태가 확인되었습니다!\n"
+                reply += "• 하단 **[결선 승인 완료 (Gate 3 통과)]** 버튼을 눌러 **[다음: ④ 최종 검증 및 회로 생성]** 단계로 이동하세요."
+            else:
+                target = "connection_priority"
+                reply += f"1. 모호한 선로 연결 검토 (남은 모호 선로: **{ambiguous_count}개**)\n"
+                reply += f"2. 토폴로지 오류 항목 점검 (치명 오류: **{error_count}건**)\n"
+                reply += "3. 정상 결선은 **[선로 승인하고 다음 (Enter)]**, 잘못된 결선은 [연결 대상 재지정] 또는 [선로 제외]\n"
+                reply += "4. 모든 결선 확인 완료 후 하단 **[결선 승인 완료]** 클릭 ➔ **[다음: ④ 최종 검증 및 회로 생성]** 단계로 이동"
+        elif stage_upper in ("FINAL_REVIEW", "FINAL", "VERIFIED_FINAL"):
+            target = "final_excel_upload"
+            reply = (
+                "🧭 **[다음 단계 진행 가이드 - ④ 최종 확인 & 엑셀 대조]:**\n"
+                "1. 최종 정합성이 검증된 회로도 요약을 확인하세요.\n"
+                "2. **[엑셀 파일 선택]** 버튼을 눌러 계통 파라미터(.xlsx)를 업로드하세요.\n"
+                "3. **[캔버스로 이동]** 버튼을 클릭하여 메인 CAD 화면으로 전환하고 조류계산을 준비하세요."
+            )
+        elif stage_upper in ("CAD", "EXCEL_MAPPING", "FINAL_CAD", "EXCEL"):
+            target = "cad_excel_import"
+            reply = (
+                "🧭 **[다음 단계 진행 가이드 - CAD & 엑셀]:**\n"
+                "1. 상단 **[엑셀 가져오기]** 버튼을 눌러 계통 파라미터 엑셀 파일(예: case24_psse.xlsx)을 연결하세요.\n"
+                "2. 엑셀 제원이 연결되면 상단 파란색 **[조류계산 실행]** 버튼을 눌러 수치해석을 진행하세요."
+            )
+        elif stage_upper in ("POWERFLOW_READY", "POWERFLOW"):
+            target = "final_powerflow"
+            reply = (
+                "🧭 **[다음 단계 진행 가이드 - 조류계산]:**\n"
+                "계통 제원 연결이 완료되었습니다!\n"
+                "• 상단 우측 파란색 **[조류계산 실행]** 버튼을 클릭하여 뉴턴-랩슨 조류계산을 수행하세요."
+            )
+        elif stage_upper == "POWERFLOW_RESULT":
+            target = "result_flow"
+            reply = (
+                "🧭 **[다음 단계 진행 가이드 - 결과 확인]:**\n"
+                "조류계산이 수렴했습니다!\n"
+                "1. 상단 **[수치 결과표]** 버튼을 눌러 모선별 전압/위상각과 선로 조류/손실 표를 확인하세요.\n"
+                "2. CAD 캔버스 위 각 모선의 전압과 발전기 출력을 직접 비교해보세요."
+            )
+        else:
+            reply = f"현재 **{stage}** 단계입니다. 도면 검수나 계통 제원 연결을 진행해주세요."
 
-            return {
-                "reply_ko": reply,
-                "agent_status": "LOCAL_GUIDE",
-                "provider_mode": self.provider_name,
-                "display_mode": self.display_mode_name,
-                "context_summary": {"stage": stage},
-            }
+        return {
+            "reply_ko": reply,
+            "highlight_target": target,
+            "agent_status": "LOCAL_GUIDE",
+            "provider_mode": self.provider_name,
+            "display_mode": self.display_mode_name,
+            "context_summary": {"stage": stage},
+        }
 
         # 3. Excel & Parameter Explanation
         if any(k in msg for k in ["엑셀", "excel", "제원", "임피던스", "파라미터", "r/x/b"]):
@@ -684,14 +771,20 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
 
         system_instruction = (
             f"{POWERLENS_SYSTEM_KNOWLEDGE}\n\n"
-            "당신은 Lensy라는 이름의 PowerLens 동반자입니다. 전력계통 단선도(SLD) 검수와 조류계산을 처음 쓰는 사람도 이해할 수 있게 도와주세요.\n"
-            "현재 단계, 선택된 객체/선로, 실제 검출 목록, 토폴로지 이슈와 조류계산 준비 상태를 근거로 답하고, 근거가 없는 추측은 하지 마세요.\n\n"
+            "당신은 Lensy라는 이름의 PowerLens 동반자입니다. 전력계통 단선도(SLD) 검수와 조류계산을 처음 쓰는 사람도 쉽게 이해할 수 있게 똑똑하고 친절하게 도와주세요.\n"
+            "현재 단계, 선택된 객체/선로, 실제 검출 목록, 토폴로지 이슈와 조류계산 준비 상태를 근거로 정확히 답하고, 엉뚱한 추측을 하지 마세요.\n\n"
             "답변 지침:\n"
-            "1. 자연스럽고 친근한 한국어로 먼저 결론을 말하세요.\n"
-            "2. 간단한 질문은 2~5문장으로 짧게 답하고, 필요한 경우에만 짧은 목록을 사용하세요.\n"
+            "1. 자연스럽고 명쾌한 한국어로 먼저 핵심 결론을 말하세요.\n"
+            "2. 사용자가 '다음에 뭐 해?', '지금 뭐 해야 돼?', '어디 눌러?', '어떻게 해?' 등 진행 방향이나 다음 작업을 물어보면:\n"
+            "   - 현재 화면/단계에서 가장 먼저 해야 할 일(의심 객체 확인, 모선 번호 입력, 결선 검수, 엑셀 업로드, 조류계산 실행 등)을 구체적으로 설명하세요.\n"
+            "   - [객체 검수 단계(OBJECT_REVIEW)]: 의심 객체(SUSPICIOUS)나 미해결 누락 후보가 0건이거나 모든 객체 인식이 다 잘 된 경우, '모든 객체가 정상으로 잘 감지되었으니 우측 패널의 [정상 객체 일괄 승인] (또는 [정상 객체 전체 승인]) 버튼을 누르면 됩니다.'라고 명확히 안내하세요. 일괄 승인으로 확정한 후 하단의 파란색 [객체 검수 완료] 버튼을 눌러 모선 번호 매핑(2단계)으로 진행하도록 안내하세요. 의심 객체가 있다면 해당 의심 객체만 집중 검토하고 나머지 정상 객체는 [정상 객체 일괄 승인]으로 한 번에 넘길 수 있음을 제안하세요.\n"
+            "   - [누락 후보 및 변압기]: 미해결 누락 후보(OPEN 상태인 missing_candidates, 예: 변압기 누락 의심 등)가 있거나 사용자가 누락 후보/변압기/문제없음에 대해 질문하면: 단선도에 원래 해당 부품이 없는 계통일 경우 상단 보라색 [누락 후보] 배지나 사이드바 카드의 [문제 없음] 버튼을 누르면 즉시 해결되어 [객체 검수 완료] 버튼이 활성화된다고 안내하세요. 실제로 존재하는 설비라면 [수동 추가] 버튼을 눌러 도면에서 직접 추가할 수 있음을 안내하세요.\n"
+            "   - 화면에서 눌러야 할 실제 버튼 명칭(예: [정상 객체 전체 승인], [승인하고 다음], [문제 없음], [객체 수동 추가], [객체 검수 완료], [승인하고 다음 모선으로], [모선 번호 승인], [선로 승인하고 다음], [결선 검수 완료], [엑셀 파일 선택], [캔버스로 이동], [조류계산 실행])을 정확히 명시하세요.\n"
+            "   - 사용자가 '전체 승인하려면 뭐 눌러?', '일괄 승인은 어디서 해?', '어떻게 해?' 등 특정 기능의 위치나 누르는 방법을 질문하면, 기능을 마음대로 자동 실행해버리지 말고 해당 버튼의 정확한 명칭([정상 객체 전체 승인] 등)과 위치(우측 사이드바 등)를 친절하고 명확하게 안내하세요.\n"
             "3. [판단], [근거 요약], [추천 액션] 같은 보고서 제목이나 내부 필드명, JSON, Chain-of-Thought를 출력하지 마세요.\n"
             "4. 객체나 선로는 사람이 보기 쉬운 Display Label(예: Bus 4, Load 2, T1, G1, Line 1-2)을 우선 지칭하세요.\n"
-            "5. 화면 조작 명령은 앱의 안전한 UI 브리지가 처리할 수 있으므로, 실제로 실행되지 않은 조작을 완료했다고 주장하지 마세요."
+            "5. 질문이 특정 객체/선로에 관한 것이라면 해당 요소의 현재 상태, 연결 모선, 의심 사유를 명확히 설명하세요.\n"
+            "6. 화면 조작 명령은 앱의 안전한 UI 브리지가 처리할 수 있으므로, 실제로 실행되지 않은 조작을 완료했다고 주장하지 마세요."
         )
 
         nodes_summary = []
@@ -700,8 +793,9 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
                 "id": n.get("id"),
                 "class": n.get("class") or n.get("className"),
                 "display_label": n.get("display_label", n.get("id")),
-                "status": n.get("review_status"),
+                "status": n.get("review_status") or n.get("status"),
                 "confidence": n.get("confidence"),
+                "bus_number": n.get("bus_number"),
             })
 
         lines_summary = []
@@ -791,6 +885,7 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
             "generationConfig": {
                 "temperature": 0.2,
                 "maxOutputTokens": 600,
+                "responseMimeType": "application/json",
             }
         }
 
@@ -805,10 +900,33 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
                 data = json.loads(resp.read().decode("utf-8"))
                 candidates = data.get("candidates", [])
                 if candidates:
-                    reply = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-                    if reply.strip():
+                    raw_reply = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                    if raw_reply.strip():
+                        parsed_reply_ko = raw_reply.strip()
+                        highlight_target = None
+                        try:
+                            cleaned = raw_reply.strip()
+                            if cleaned.startswith("```json"):
+                                cleaned = cleaned[7:]
+                            elif cleaned.startswith("```"):
+                                cleaned = cleaned[3:]
+                            if cleaned.endswith("```"):
+                                cleaned = cleaned[:-3]
+                            cleaned = cleaned.strip()
+
+                            parsed = json.loads(cleaned)
+                            if isinstance(parsed, dict):
+                                parsed_reply_ko = str(parsed.get("reply_ko") or parsed.get("reply") or raw_reply).strip()
+                                target_val = parsed.get("highlight_target")
+                                if target_val and isinstance(target_val, str) and target_val.lower() not in ("null", "none"):
+                                    highlight_target = target_val.strip()
+                        except Exception as parse_err:
+                            print(f"[Gemini JSON Parse Notice]: {parse_err}")
+                            parsed_reply_ko = raw_reply.strip()
+
                         return {
-                            "reply_ko": reply.strip(),
+                            "reply_ko": parsed_reply_ko,
+                            "highlight_target": highlight_target,
                             "agent_status": "GEMINI_LLM",
                             "provider_mode": self.provider_name,
                             "display_mode": self.display_mode_name,

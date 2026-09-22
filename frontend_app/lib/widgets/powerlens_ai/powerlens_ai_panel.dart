@@ -30,13 +30,42 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
   Offset? _resizeOrigin;
   double _resizeOriginWidth = 380;
   double _resizeOriginHeight = 520;
+  Offset _panelOffset = Offset.zero;
 
   @override
   void initState() {
     super.initState();
+    _panelOffset = _aiService.panelOffset;
     _aiService.refreshProviderStatus();
-    _aiService.ensureInitialGreeting(widget.assistantContext.workflowStage);
+    _aiService.ensureInitialGreeting(
+      widget.assistantContext.workflowStage,
+      widget.assistantContext,
+    );
     _aiService.notifyStageChange(widget.assistantContext);
+  }
+
+  void _updatePanelOffset(
+    Offset delta,
+    Size screenSize,
+    double currentWidth,
+    double currentHeight,
+  ) {
+    if (_isMaximized) return;
+
+    // Boundary clamping so the panel cannot be dragged outside visible view.
+    // Panel is anchored at bottom-right (right: 20, bottom: 70~130).
+    final minDx = -(screenSize.width - currentWidth - 30.0);
+    final maxDx = 10.0;
+    final minDy = -(screenSize.height - currentHeight - 40.0);
+    final maxDy = 50.0;
+
+    final newDx = (_panelOffset.dx + delta.dx).clamp(minDx, maxDx).toDouble();
+    final newDy = (_panelOffset.dy + delta.dy).clamp(minDy, maxDy).toDouble();
+
+    setState(() {
+      _panelOffset = Offset(newDx, newDy);
+      _aiService.panelOffset = _panelOffset;
+    });
   }
 
   @override
@@ -79,12 +108,21 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    final screenSize = MediaQuery.of(context).size;
+    final maxWidth = (screenSize.width * 0.76).clamp(380.0, 980.0).toDouble();
+    final maxHeight = (screenSize.height * 0.84).clamp(520.0, 760.0).toDouble();
+    final panelWidth = _isMaximized
+        ? maxWidth
+        : _panelWidth.clamp(320.0, maxWidth).toDouble();
+    final panelHeight = _isMaximized
+        ? maxHeight
+        : _panelHeight.clamp(420.0, maxHeight).toDouble();
 
     final content = AnimatedBuilder(
       animation: _aiService,
       builder: (context, _) => Column(
         children: [
-          _buildHeader(),
+          _buildHeader(screenSize, panelWidth, panelHeight),
           _buildQuickActions(),
           const Divider(height: 1, color: Color(0xFFE2E8F0)),
           Expanded(child: _buildMessageList()),
@@ -116,25 +154,19 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
       );
     }
 
-    // Desktop overlay panel. The handle is intentionally small and placed at
-    // the bottom-right so resizing never competes with chat controls.
-    final screenSize = MediaQuery.of(context).size;
-    final maxWidth = (screenSize.width * 0.76).clamp(380.0, 980.0).toDouble();
-    final maxHeight = (screenSize.height * 0.84).clamp(520.0, 760.0).toDouble();
-    final panelWidth = _isMaximized
-        ? maxWidth
-        : _panelWidth.clamp(320.0, maxWidth).toDouble();
-    final panelHeight = _isMaximized
-        ? maxHeight
-        : _panelHeight.clamp(420.0, maxHeight).toDouble();
-
-    return Container(
+    // Desktop overlay panel with draggable support.
+    final desktopPanel = Container(
       width: panelWidth,
       height: panelHeight,
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFCBD5E1), width: 1),
+        border: Border.all(
+          color: _panelOffset != Offset.zero
+              ? const Color(0xFF38BDF8).withOpacity(0.6)
+              : const Color(0xFFCBD5E1),
+          width: _panelOffset != Offset.zero ? 1.5 : 1,
+        ),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.18),
@@ -156,6 +188,11 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
           ],
         ),
       ),
+    );
+
+    return Transform.translate(
+      offset: _isMaximized ? Offset.zero : _panelOffset,
+      child: desktopPanel,
     );
   }
 
@@ -207,8 +244,9 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
     );
   }
 
-  Widget _buildHeader() {
+  Widget _buildHeader(Size screenSize, double panelWidth, double panelHeight) {
     final bool isGemini = _aiService.geminiStatus == 'CONNECTED';
+    final bool isMoved = _panelOffset != Offset.zero && !_isMaximized;
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -221,98 +259,172 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
       ),
       child: Row(
         children: [
-          Container(
-            width: 32,
-            height: 32,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF38BDF8), Color(0xFF2563EB)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white30, width: 1),
-            ),
-            child: const Icon(
-              Icons.smart_toy_rounded,
-              color: Colors.white,
-              size: 18,
-            ),
-          ),
-          const SizedBox(width: 10),
+          // Draggable header area
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
+            child: MouseRegion(
+              cursor: widget.isMobile
+                  ? MouseCursor.defer
+                  : SystemMouseCursors.move,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onDoubleTap: widget.isMobile
+                    ? null
+                    : () {
+                        setState(() {
+                          _panelOffset = Offset.zero;
+                          _aiService.resetPanelOffset();
+                        });
+                      },
+                onPanUpdate: widget.isMobile
+                    ? null
+                    : (details) {
+                        _updatePanelOffset(
+                          details.delta,
+                          screenSize,
+                          panelWidth,
+                          panelHeight,
+                        );
+                      },
+                child: Row(
                   children: [
-                    const Text(
-                      "Lensy AI",
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w900,
-                        fontSize: 14,
-                        letterSpacing: -0.2,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 1.5,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isGemini
-                            ? const Color(0x3322C55E)
-                            : const Color(0x3338BDF8),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                          color: isGemini
-                              ? const Color(0xFF22C55E)
-                              : const Color(0xFF38BDF8),
-                          width: 0.8,
+                    if (!widget.isMobile)
+                      const Padding(
+                        padding: EdgeInsets.only(right: 6),
+                        child: Tooltip(
+                          message: "헤더를 드래그하여 채팅창 이동\n(더블클릭 시 원래 위치로 복원)",
+                          child: Icon(
+                            Icons.drag_indicator,
+                            color: Colors.white54,
+                            size: 18,
+                          ),
                         ),
                       ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
+                    Container(
+                      width: 32,
+                      height: 32,
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFF38BDF8), Color(0xFF2563EB)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white30, width: 1),
+                      ),
+                      child: const Icon(
+                        Icons.smart_toy_rounded,
+                        color: Colors.white,
+                        size: 18,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Container(
-                            width: 6,
-                            height: 6,
-                            decoration: BoxDecoration(
-                              color: isGemini
-                                  ? const Color(0xFF22C55E)
-                                  : const Color(0xFF38BDF8),
-                              shape: BoxShape.circle,
-                            ),
+                          Wrap(
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            spacing: 6,
+                            runSpacing: 2,
+                            children: [
+                              const Text(
+                                "Lensy AI",
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 14,
+                                  letterSpacing: -0.2,
+                                ),
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 1.5,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: isGemini
+                                      ? const Color(0x3322C55E)
+                                      : const Color(0x3338BDF8),
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color: isGemini
+                                        ? const Color(0xFF22C55E)
+                                        : const Color(0xFF38BDF8),
+                                    width: 0.8,
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Container(
+                                      width: 6,
+                                      height: 6,
+                                      decoration: BoxDecoration(
+                                        color: isGemini
+                                            ? const Color(0xFF22C55E)
+                                            : const Color(0xFF38BDF8),
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Flexible(
+                                      child: Text(
+                                        isGemini ? "Gemini" : "로컬 AI",
+                                        style: TextStyle(
+                                          color: isGemini
+                                              ? const Color(0xFF86EFAC)
+                                              : const Color(0xFFBAE6FD),
+                                          fontSize: 9.5,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 4),
                           Text(
-                            isGemini ? "Gemini 연결됨" : "로컬 도우미 모드",
+                            !widget.isMobile && isMoved
+                                ? "드래그로 위치 이동됨 (더블클릭 시 복원)"
+                                : "앱 조작 및 계통 검수 동반자",
                             style: TextStyle(
-                              color: isGemini
-                                  ? const Color(0xFF86EFAC)
-                                  : const Color(0xFFBAE6FD),
-                              fontSize: 9.5,
-                              fontWeight: FontWeight.bold,
+                              color: !widget.isMobile && isMoved
+                                  ? const Color(0xFF38BDF8)
+                                  : Colors.white.withOpacity(0.7),
+                              fontSize: 10.5,
                             ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ],
                       ),
                     ),
                   ],
                 ),
-                Text(
-                  "앱 조작 및 계통 검수 동반자",
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(0.7),
-                    fontSize: 10.5,
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
+          const SizedBox(width: 6),
+          if (!widget.isMobile && isMoved) ...[
+            IconButton(
+              icon: const Icon(
+                Icons.restart_alt,
+                color: Color(0xFF38BDF8),
+                size: 18,
+              ),
+              tooltip: "원래 위치로 복원",
+              onPressed: () => setState(() {
+                _panelOffset = Offset.zero;
+                _aiService.resetPanelOffset();
+              }),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+            ),
+            const SizedBox(width: 8),
+          ],
           if (!widget.isMobile)
             IconButton(
               icon: Icon(
@@ -462,11 +574,31 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
       case 'HOME':
         return ['샘플 도면 불러줘', '사진 다시 넣을래', '이 단계에서 뭘 해야 해?'];
       case 'OBJECT_REVIEW':
-        return ['검토 필요 항목', '다음 단계로 넘어가', '이 단계에서 뭘 해야 해?'];
+        final hasIssues = widget.assistantContext.suspiciousObjects > 0 ||
+            widget.assistantContext.unresolvedMissingCandidates > 0;
+        return [
+          hasIssues
+              ? '검토 필요 항목 (${widget.assistantContext.suspiciousObjects})'
+              : '객체 검수 완료하기',
+          '다음 단계로 넘어가',
+          '이 단계에서 뭘 해야 해?'
+        ];
       case 'BUS_MAPPING':
-        return ['미지정 모선 확인', '다음 단계로 넘어가', '이 단계에서 뭘 해야 해?'];
+        final hasBusIssues = widget.assistantContext.unresolvedBusNumbers > 0 ||
+            widget.assistantContext.duplicateBusNumbers > 0;
+        return [
+          hasBusIssues ? '미지정 모선 확인' : '모선 번호 승인하기',
+          '다음 단계로 넘어가',
+          '이 단계에서 뭘 해야 해?'
+        ];
       case 'CONNECTION_REVIEW':
-        return ['연결 오류 점검', '다음 단계로 넘어가', '이 단계에서 뭘 해야 해?'];
+        final hasConnIssues = widget.assistantContext.ambiguousConnections > 0 ||
+            widget.assistantContext.topologyIssueCount > 0;
+        return [
+          hasConnIssues ? '연결 오류 점검' : '결선 검수 완료하기',
+          '다음 단계로 넘어가',
+          '이 단계에서 뭘 해야 해?'
+        ];
       case 'FINAL':
       case 'FINAL_CAD':
         return ['조류계산 해줘', '흐름 방향 보여줘', '이 단계에서 뭘 해야 해?'];

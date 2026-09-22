@@ -295,8 +295,6 @@ class _PowerLensAIFloatingButtonState extends State<PowerLensAIFloatingButton>
   }
 
   Widget _buildRobotCharacter(double t, bool isBlinking) {
-    final state = widget.presenceState.toLowerCase();
-    final isPointing = state == 'pointing';
     final stateColor = _presenceColor;
 
     return SizedBox(
@@ -334,14 +332,14 @@ class _PowerLensAIFloatingButtonState extends State<PowerLensAIFloatingButton>
               ),
             ),
           ),
-          // The pointing arm reaches toward the current coach target.
+          // Natural resting arms
           Positioned(
-            top: isPointing ? 42 : 46,
-            left: isPointing ? 48 : 49,
+            top: 46,
+            left: 49,
             child: Transform.rotate(
-              angle: isPointing ? -0.45 : 0.35,
+              angle: 0.35,
               child: Container(
-                width: isPointing ? 27 : 17,
+                width: 17,
                 height: 6,
                 decoration: BoxDecoration(
                   color: stateColor,
@@ -393,35 +391,6 @@ class _PowerLensAIFloatingButtonState extends State<PowerLensAIFloatingButton>
               ),
             ),
           ),
-          if (isPointing && widget.coachTarget != 'floating')
-            Positioned(
-              right: -44,
-              top: 43,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.arrow_forward_rounded,
-                    size: 20,
-                    color: stateColor,
-                  ),
-                  Container(
-                    width: 27,
-                    height: 3,
-                    decoration: BoxDecoration(
-                      color: stateColor.withValues(alpha: 0.72),
-                      borderRadius: BorderRadius.circular(3),
-                      boxShadow: [
-                        BoxShadow(
-                          color: stateColor.withValues(alpha: 0.5),
-                          blurRadius: 8,
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
         ],
       ),
     );
@@ -434,7 +403,6 @@ class _PowerLensAIFloatingButtonState extends State<PowerLensAIFloatingButton>
     final stateColor = _presenceColor;
     final isThinking = state == 'thinking';
     final isSpeaking = state == 'speaking';
-    final isPointing = state == 'pointing';
     final isSuccess = state == 'success';
 
     return SizedBox(
@@ -536,19 +504,6 @@ class _PowerLensAIFloatingButtonState extends State<PowerLensAIFloatingButton>
             ),
           ),
 
-          if (isPointing)
-            Positioned(
-              right: -11,
-              bottom: 4,
-              child: Transform.rotate(
-                angle: -0.25,
-                child: Icon(
-                  Icons.arrow_forward_rounded,
-                  size: 18,
-                  color: stateColor,
-                ),
-              ),
-            ),
           if (isThinking)
             Positioned(
               right: -7,

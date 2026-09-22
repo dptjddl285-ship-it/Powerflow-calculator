@@ -683,6 +683,7 @@ async def review_agent_chat(request: AgentChatRequest):
             "status": "success",
             "document_id": request.document_id,
             "reply_ko": result.get("reply_ko", ""),
+            "highlight_target": result.get("highlight_target"),
             "agent_status": result.get("agent_status", "DETERMINISTIC"),
             "provider_mode": result.get("provider_mode", "local"),
             "display_mode": result.get("display_mode", ""),

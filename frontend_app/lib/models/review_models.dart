@@ -156,7 +156,7 @@ class ReviewNodeItem {
       'suggested_classes': suggestedClasses,
       'evidence': evidence,
       'metadata': metadata,
-      'display_label': displayLabel,
+      'display_label': effectiveDisplayLabel,
       'display_number': displayNumber,
       'suggested_bus_number': suggestedBusNumber,
       'number_source': numberSource,
@@ -209,6 +209,16 @@ class ReviewNodeItem {
       labelOffsetDy: labelOffsetDy ?? this.labelOffsetDy,
     );
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ReviewNodeItem &&
+          runtimeType == other.runtimeType &&
+          id == other.id;
+
+  @override
+  int get hashCode => id.hashCode;
 }
 
 class MissingCandidateItem {
@@ -424,7 +434,7 @@ class ReviewLineItem {
       if (agentExplanation != null) 'agent_explanation': agentExplanation,
       if (recommendedAction != null) 'recommended_action': recommendedAction,
       'candidate_targets': candidateTargets,
-      'display_label': displayLabel,
+      'display_label': effectiveDisplayLabel,
       'display_name': displayName,
       'endpoints_display': endpointsDisplay,
       'label_offset_dx': labelOffsetDx,
@@ -471,6 +481,16 @@ class ReviewLineItem {
       labelOffsetDy: labelOffsetDy ?? this.labelOffsetDy,
     );
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ReviewLineItem &&
+          runtimeType == other.runtimeType &&
+          lineId == other.lineId;
+
+  @override
+  int get hashCode => lineId.hashCode;
 }
 
 class ReviewImageMeta {

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../models/powerlens_assistant_context.dart';
 import '../widgets/powerlens_ai/powerlens_ai_message.dart';
@@ -14,6 +15,7 @@ enum PowerLensAppAction {
   loadSampleDiagram,
   showReviewIssues,
   approveCurrentAndNext,
+  approveAllClean,
   connectionFullReview,
   connectionLinesOnly,
   connectionNextLine,
@@ -62,6 +64,99 @@ class PowerLensAIService extends ChangeNotifier {
   String _geminiStatus =
       'LOCAL_READY'; // 'CONNECTED' | 'LOCAL_FALLBACK' | 'LOCAL_READY'
   String get geminiStatus => _geminiStatus;
+
+  /// Target UI element currently sparkling/glowing on screen for user guidance
+  final ValueNotifier<String?> activeHighlightTarget = ValueNotifier<String?>(null);
+  Timer? _highlightTimer;
+
+  /// User-dragged position offset for the AI chat panel (persists while app runs)
+  Offset panelOffset = Offset.zero;
+
+  void resetPanelOffset() {
+    panelOffset = Offset.zero;
+    notifyListeners();
+  }
+
+  void triggerHighlight(String target, {Duration duration = const Duration(seconds: 10)}) {
+    _highlightTimer?.cancel();
+    activeHighlightTarget.value = target;
+    _highlightTimer = Timer(duration, () {
+      if (activeHighlightTarget.value == target) {
+        activeHighlightTarget.value = null;
+      }
+    });
+  }
+
+  void clearHighlight() {
+    _highlightTimer?.cancel();
+    activeHighlightTarget.value = null;
+  }
+
+  String? determineTargetForContext(
+    PowerLensAssistantContext context, {
+    String? query,
+  }) {
+    final screen = context.currentScreen.toUpperCase();
+    final stage = context.workflowStage.toLowerCase();
+
+    // Pure State-Based Fallback (Zero Keyword Dictionary).
+    // All natural-language questions and intent reasoning are handled directly by Gemini LLM.
+    if (screen == 'REVIEW_PAGE') {
+      switch (stage) {
+        case 'object_review':
+          if (context.unresolvedMissingCandidates > 0) {
+            return 'missing_candidates';
+          }
+          final hasSuspicious = context.suspiciousObjects > 0 ||
+              context.workingNodes.any((n) =>
+                  n['status'] == 'SUSPICIOUS' ||
+                  n['review_status'] == 'SUSPICIOUS');
+          if (hasSuspicious) {
+            return 'object_approve';
+          }
+          final hasUnconfirmed = context.workingNodes.any((n) {
+            final s = n['status'] ?? n['review_status'];
+            return s != 'CONFIRMED' && s != 'REJECTED';
+          });
+          if (hasUnconfirmed || context.workingNodes.isEmpty) {
+            return 'object_batch_approve';
+          }
+          return 'object_gate';
+        case 'bus_mapping':
+          final unapprovedBuses = context.workingNodes
+              .where((n) => n['className'] == 'bus' && n['status'] != 'CONFIRMED')
+              .toList();
+          if (unapprovedBuses.isNotEmpty) {
+            return 'bus_input';
+          }
+          return 'bus_gate';
+        case 'connection_review':
+          final unapprovedLines = context.workingLines
+              .where((l) => l['status'] != 'CONFIRMED' && l['status'] != 'REJECTED')
+              .toList();
+          if (unapprovedLines.isNotEmpty) {
+            return 'connection_priority';
+          }
+          return 'connection_gate';
+        case 'verified_final':
+        case 'final':
+          if (!context.excelLoaded) {
+            return 'final_excel_upload';
+          }
+          return 'final_canvas_handoff';
+        default:
+          return 'object_approve';
+      }
+    } else {
+      if (!context.hasDiagram && context.totalObjects == 0) {
+        return 'home_upload';
+      } else if (context.powerflowConverged == null) {
+        return 'final_powerflow';
+      } else {
+        return 'result_flow';
+      }
+    }
+  }
 
   Future<void> refreshProviderStatus() async {
     try {
@@ -164,6 +259,43 @@ class PowerLensAIService extends ChangeNotifier {
   ]) {
     final q = _normalizeQuery(text);
     if (q.isEmpty) return const [];
+
+    // If the user is asking a question (where to click, how to do, what button to press),
+    // provide guidance and trigger glowing highlights instead of silently executing actions!
+    final isHowToOrWhereQuestion = _containsAny(q, const [
+      '뭐눌러',
+      '뭘눌러',
+      '무엇을눌러',
+      '어디눌러',
+      '어디해야',
+      '어디를해야',
+      '어디야',
+      '어디서',
+      '어디에',
+      '어디',
+      '어떻게',
+      '할려면',
+      '하려면',
+      '누르면',
+      '누르면돼',
+      '누르면되',
+      '위치',
+      '방법',
+      '뭐해야',
+      '뭘해야',
+      '무엇을해야',
+      '다음에뭐',
+      '다음할일',
+      '어떤버튼',
+      '무슨버튼',
+      '어느버튼',
+      '버튼어디',
+      '어느거',
+      '어느것',
+    ]);
+    if (isHowToOrWhereQuestion) {
+      return const [PowerLensAppAction.explainCurrentStage];
+    }
 
     final hasContent = _containsAny(q, const [
       '파일',
@@ -336,6 +468,22 @@ class PowerLensAIService extends ChangeNotifier {
     }
     if (actions.isNotEmpty) return actions;
 
+    final asksNoIssues = _containsAny(q, const [
+      '검토필요없',
+      '검토필요한항목없',
+      '검토항목없',
+      '검토할거없',
+      '문제없',
+      '이상없',
+      '오류없',
+      '다확인',
+      '전부확인',
+      '모두확인',
+    ]);
+    if (asksNoIssues && _isReviewStage(context)) {
+      return const [PowerLensAppAction.explainCurrentStage];
+    }
+
     if (_containsAny(q, const [
       '문제있는',
       '오류만',
@@ -346,6 +494,22 @@ class PowerLensAIService extends ChangeNotifier {
       '검토항목',
     ])) {
       return const [PowerLensAppAction.showReviewIssues];
+    }
+
+    final isBatchApprove = _containsAny(q, const [
+      '일괄승인',
+      '전체승인',
+      '모두승인',
+      '한번에승인',
+      '한번에다승인',
+      '다승인',
+      '정상승인',
+      '정상객체승인',
+      '정상객체일괄',
+      '정상객체전체',
+    ]);
+    if (_isReviewStage(context) && isBatchApprove) {
+      return const [PowerLensAppAction.approveAllClean];
     }
 
     final isPositiveReviewReply = _containsAny(q, const [
@@ -371,13 +535,16 @@ class PowerLensAIService extends ChangeNotifier {
       '이제뭐',
       '뭘할수',
       '뭐할수',
-      '할수있',
+      '이단계에서',
       '단계설명',
-      '도움',
       '어떻게시작',
       '뭘보면',
       '무엇을보면',
       '어디부터보',
+      '어디눌러',
+      '어디해야',
+      '어디를해야',
+      '뭐눌러',
     ])) {
       return const [PowerLensAppAction.explainCurrentStage];
     }
@@ -410,17 +577,17 @@ class PowerLensAIService extends ChangeNotifier {
     return actions.isEmpty ? null : actions.first;
   }
 
-  void ensureInitialGreeting(String stage) {
+  void ensureInitialGreeting(String stage, [PowerLensAssistantContext? context]) {
     if (_messages.isNotEmpty) return;
 
-    final greeting = _getStageGreeting(stage);
+    final greeting = _getStageGreeting(stage, context);
     _messages.add(
       PowerLensAIMessageItem(
         id: 'msg_welcome',
         sender: 'assistant',
         text: greeting,
         stage: stage,
-        suggestedActions: _getQuickActions(stage),
+        suggestedActions: _getQuickActions(stage, context),
         agentStatus: _geminiStatus,
       ),
     );
@@ -441,7 +608,7 @@ class PowerLensAIService extends ChangeNotifier {
           sender: 'assistant',
           text: proactiveText,
           stage: newStage,
-          suggestedActions: _getQuickActions(newStage),
+          suggestedActions: _getQuickActions(newStage, context),
           agentStatus: 'PROACTIVE',
         ),
       );
@@ -523,26 +690,28 @@ class PowerLensAIService extends ChangeNotifier {
       // backend for an explanation. Compound display commands are executed in
       // order, so "숫자는 치우고 흐름만 보여줘" updates both controls.
       final intentActions = resolveIntentActions(trimmed, context);
-      if (intentActions.isNotEmpty) {
+      final fallbackHighlightTarget = determineTargetForContext(context, query: trimmed);
+
+      final uiExecutableActions = intentActions
+          .where((a) => a != PowerLensAppAction.explainCurrentStage)
+          .toList();
+
+      if (uiExecutableActions.isNotEmpty) {
         final handledActions = <bool>[];
-        for (final action in intentActions) {
+        for (final action in uiExecutableActions) {
           if (requestId != _requestSerial) return;
-          if (action == PowerLensAppAction.explainCurrentStage) {
-            handledActions.add(true);
-          } else {
-            if (_isPointingAction(action)) {
-              _mascotState = 'pointing';
-              notifyListeners();
-            }
-            handledActions.add(await dispatchAction(action));
+          if (_isPointingAction(action)) {
+            _mascotState = 'speaking';
+            notifyListeners();
           }
+          handledActions.add(await dispatchAction(action));
         }
         if (requestId != _requestSerial) return;
 
         final replies = <String>[];
-        for (var i = 0; i < intentActions.length; i++) {
+        for (var i = 0; i < uiExecutableActions.length; i++) {
           replies.add(
-            _getActionReply(intentActions[i], handledActions[i], context),
+            _getActionReply(uiExecutableActions[i], handledActions[i], context),
           );
         }
         _messages.add(
@@ -551,7 +720,7 @@ class PowerLensAIService extends ChangeNotifier {
             sender: 'assistant',
             text: replies.join(' '),
             stage: context.workflowStage,
-            suggestedActions: _getQuickActions(context.workflowStage),
+            suggestedActions: _getQuickActions(context.workflowStage, context),
             agentStatus: _geminiStatus,
           ),
         );
@@ -596,10 +765,24 @@ class PowerLensAIService extends ChangeNotifier {
             : (data is Map
                   ? Map<String, dynamic>.from(data)
                   : <String, dynamic>{});
-        if (requestId != _requestSerial) return;
-        final replyKo = _cleanAssistantReply(
+        var replyKo = _cleanAssistantReply(
           result['reply_ko']?.toString() ?? '답변을 생성하지 못했습니다.',
         );
+
+        // Gemini LLM directly determines the exact UI widget to illuminate (highlight_target)
+        final backendHighlight = result['highlight_target']?.toString();
+        final effectiveHighlight = (backendHighlight != null &&
+                backendHighlight.isNotEmpty &&
+                backendHighlight.toLowerCase() != 'null')
+            ? backendHighlight
+            : fallbackHighlightTarget;
+
+        if (effectiveHighlight != null) {
+          triggerHighlight(effectiveHighlight);
+          if (!replyKo.contains('반짝')) {
+            replyKo += "\n\n✨ 지금 진행할 위치가 화면에서 반짝반짝 빛나고 있어요!";
+          }
+        }
         final agentStatus =
             result['agent_status']?.toString() ?? 'LOCAL_FALLBACK';
         final providerMode = result['provider_mode']?.toString().toLowerCase();
@@ -611,7 +794,7 @@ class PowerLensAIService extends ChangeNotifier {
         final rawActions = result['suggested_actions'];
         final actions = rawActions is List
             ? rawActions.map((e) => e.toString()).take(3).toList()
-            : _getQuickActions(context.workflowStage);
+            : _getQuickActions(context.workflowStage, context);
 
         _messages.add(
           PowerLensAIMessageItem(
@@ -698,11 +881,13 @@ class PowerLensAIService extends ChangeNotifier {
             ? 'IEEE-24 샘플을 불러오고 있어요. 검수가 끝나면 다음 단계도 안내할게요.'
             : '샘플을 불러오지 못했어요.';
       case PowerLensAppAction.showReviewIssues:
-        return handled
-            ? '검토가 필요한 항목만 표시했어요. 위에서부터 하나씩 확인해보세요.'
-            : '현재 화면에서는 검토 항목을 표시할 수 없어요.';
+        return _getReviewIssuesReply(context, handled);
       case PowerLensAppAction.approveCurrentAndNext:
         return handled ? '현재 항목을 승인하고 다음 항목으로 이동했어요.' : '승인할 현재 항목이 없어요.';
+      case PowerLensAppAction.approveAllClean:
+        return handled
+            ? '정상 객체들을 한 번에 일괄 승인했어요! 이제 하단의 [객체 검수 완료]를 눌러 모선 번호 매핑 단계로 진행하세요.'
+            : '일괄 승인할 정상 대기 객체가 없거나 이미 승인되었습니다.';
       case PowerLensAppAction.connectionFullReview:
         return handled
             ? '전체 선로를 한눈에 볼 수 있게 바꿨어요. 의심 선로부터 요약해서 확인해보세요.'
@@ -742,28 +927,75 @@ class PowerLensAIService extends ChangeNotifier {
       case PowerLensAppAction.hideValueLabels:
         return handled ? '수치 라벨을 숨겼어요.' : '숨길 수치 라벨이 없어요.';
       case PowerLensAppAction.explainCurrentStage:
-        return _getNaturalStageGuidance(context);
+        return "${_getNextActionAnswer(context)}\n\n✨ 지금 진행할 위치가 화면에서 반짝반짝 빛나고 있어요!";
     }
   }
 
+  String _getReviewIssuesReply(
+    PowerLensAssistantContext context,
+    bool handled,
+  ) {
+    if (!handled) {
+      return '현재 화면에서는 검토 항목을 표시할 수 없어요.';
+    }
+
+    final stage = context.workflowStage.toUpperCase();
+
+    if (stage == 'OBJECT_REVIEW') {
+      final susp = context.suspiciousObjects;
+      final missing = context.unresolvedMissingCandidates;
+      final unreviewed = context.workingNodes
+          .where((n) => n['status'] != 'CONFIRMED' && n['status'] != 'REJECTED')
+          .length;
+
+      if (susp > 0) {
+        return '검토가 필요한 의심 객체 $susp건을 목록에 모아 표시했어요. 위에서부터 하나씩 확인 후 [승인하고 다음] 또는 [제외]를 눌러주세요.';
+      } else if (missing > 0) {
+        return '누락 후보 $missing건이 남아 있어요. 목록에서 확인 후 복구하거나 문제없음 처리해주세요.';
+      } else if (unreviewed > 0) {
+        return '검토가 필요한 의심 객체는 없습니다. 아직 승인 대기 중인 객체가 $unreviewed건 있으니 확인 후 [승인하고 다음]을 진행하거나 [객체 검수 완료]를 눌러주세요.';
+      } else {
+        return '현재 검토가 필요한 항목이 전혀 없습니다! 모든 객체가 정상 승인되었으므로 아래의 [객체 검수 완료]를 눌러 다음 단계(모선 매핑)로 진행하시면 됩니다.';
+      }
+    } else if (stage == 'BUS_MAPPING') {
+      final uncertain = context.unresolvedBusNumbers;
+      final dups = context.duplicateBusNumbers;
+
+      if (uncertain > 0 || dups > 0) {
+        final parts = [
+          if (uncertain > 0) '미지정 모선 $uncertain개',
+          if (dups > 0) '중복 모선 $dups개',
+        ];
+        return '확인이 필요한 모선(${parts.join(', ')})을 표시했어요. 번호를 입력하고 [승인하고 다음 모선으로]를 눌러주세요.';
+      } else {
+        return '현재 검토가 필요한 모선 번호 오류가 없습니다! 모든 모선 번호가 정상 지정되었으니 [모선 번호 승인]을 눌러 결선 검수로 넘어가시면 됩니다.';
+      }
+    } else if (stage == 'CONNECTION_REVIEW') {
+      final amb = context.ambiguousConnections;
+      final topo = context.topologyIssueCount;
+
+      if (amb > 0 || topo > 0) {
+        final parts = [
+          if (amb > 0) '의심 선로 $amb건',
+          if (topo > 0) '위상 오류 $topo건',
+        ];
+        return '검토가 필요한 결선(${parts.join(', ')})만 모아서 표시했어요. 선로를 확인하고 [선로 승인하고 다음]을 눌러주세요.';
+      } else {
+        return '현재 검토가 필요한 선로 결함이나 연결 문제가 없습니다! 모든 선로가 정상이므로 [결선 검수 완료]를 눌러주세요.';
+      }
+    } else if (stage == 'FINAL' || stage == 'FINAL_CAD' || stage == 'VERIFIED_FINAL') {
+      if (!context.excelLoaded) {
+        return '도면 검증이 모두 완료되었으며 검토할 이상 항목이 없습니다! [엑셀 파일 선택]을 눌러 계통 제원을 연결해주세요.';
+      } else {
+        return '모든 도면 및 제원 검토가 완료되었습니다! [캔버스로 이동]을 눌러 실제 조류계산을 시작해보세요.';
+      }
+    }
+
+    return '현재 단계에서 검토가 필요한 특이사항이 없습니다. 다음 단계로 진행하실 수 있습니다.';
+  }
+
   bool _isPointingAction(PowerLensAppAction action) {
-    return action == PowerLensAppAction.goHome ||
-        action == PowerLensAppAction.goToNextStage ||
-        action == PowerLensAppAction.goToPreviousStage ||
-        action == PowerLensAppAction.triggerPhotoUpload ||
-        action == PowerLensAppAction.triggerExcelUpload ||
-        action == PowerLensAppAction.loadSampleDiagram ||
-        action == PowerLensAppAction.showReviewIssues ||
-        action == PowerLensAppAction.approveCurrentAndNext ||
-        action == PowerLensAppAction.connectionFullReview ||
-        action == PowerLensAppAction.connectionLinesOnly ||
-        action == PowerLensAppAction.connectionNextLine ||
-        action == PowerLensAppAction.handoffToCanvas ||
-        action == PowerLensAppAction.showPowerFlowResults ||
-        action == PowerLensAppAction.showFlowDirection ||
-        action == PowerLensAppAction.hideFlowDirection ||
-        action == PowerLensAppAction.showValueLabels ||
-        action == PowerLensAppAction.hideValueLabels;
+    return false;
   }
 
   String _getNaturalStageGuidance(PowerLensAssistantContext ctx) {
@@ -820,8 +1052,8 @@ class PowerLensAIService extends ChangeNotifier {
               "먼저 해당 항목을 승인하거나 제외하면 모선 번호 확인으로 넘어갈 수 있습니다.";
         }
         if (ctx.unresolvedMissingCandidates > 0) {
-          return "⚠️ 누락 후보 **${ctx.unresolvedMissingCandidates}개**를 먼저 복구하거나 "
-              "문제없음으로 확인해 주세요.";
+          return "⚠️ 누락 의심 설비(누락 후보)가 **${ctx.unresolvedMissingCandidates}개** 감지되어 게이트가 닫혀 있습니다.\n"
+              "단선도에 원래 해당 설비(예: 변압기 등)가 없는 계통이라면, 화면 상단의 보라색 [누락 후보] 배지나 좌측 카드의 **[문제 없음]** 버튼을 누르시면 즉시 해결되어 [객체 검수 완료] 버튼이 활성화됩니다!";
         }
         break;
       case 'BUS_MAPPING':
@@ -863,6 +1095,24 @@ class PowerLensAIService extends ChangeNotifier {
     final normalizedQuery = _normalizeQuery(userQuery);
 
     if (_containsAny(normalizedQuery, const [
+      '일괄승인',
+      '전체승인',
+      '모두승인',
+      '한번에승인',
+      '다승인',
+      '일괄',
+    ])) {
+      if (stage == 'OBJECT_REVIEW') {
+        reply =
+            "✨ **정상 객체 일괄 승인 안내:**\n"
+            "• 도면 분석이 정상적으로 완료되었거나 모든 객체가 정상인 경우, 우측 패널의 **[정상 객체 일괄 승인]** (또는 [정상 객체 전체 승인]) 버튼을 누르면 됩니다!\n"
+            "• 대기 중인 모든 정상 심볼이 한 번에 승인 확정되며, 이후 하단의 파란색 **[객체 검수 완료]** 버튼을 눌러 다음 단계(모선 번호 매핑)로 넘어가시면 됩니다.";
+      } else {
+        reply =
+            "✨ **정상 항목 일괄 승인 안내:**\n"
+            "• 우측 패널의 일괄 승인 버튼을 누르면 현재 단계의 정상 항목들을 한 번에 확정하고 다음 단계로 진행하실 수 있습니다.";
+      }
+    } else if (_containsAny(normalizedQuery, const [
       '다음에뭐',
       '뭐해야',
       '뭘해야',
@@ -873,6 +1123,15 @@ class PowerLensAIService extends ChangeNotifier {
       '할수있',
       '이단계에서',
       '다음단계',
+      '뭐눌러',
+      '어디눌러',
+      '어디해야',
+      '어디야',
+      '어떻게',
+      '할려면',
+      '하려면',
+      '누르면',
+      '이상없',
     ])) {
       reply = _getNextActionAnswer(context);
     } else if (_containsAny(normalizedQuery, const ['상태', '요약'])) {
@@ -904,13 +1163,21 @@ class PowerLensAIService extends ChangeNotifier {
       }
     }
 
+    final highlightTarget = determineTargetForContext(context, query: userQuery);
+    if (highlightTarget != null) {
+      triggerHighlight(highlightTarget);
+      if (!reply.contains('반짝')) {
+        reply += "\n\n✨ 지금 진행할 위치가 화면에서 반짝반짝 빛나고 있어요!";
+      }
+    }
+
     _messages.add(
       PowerLensAIMessageItem(
         id: 'ai_fallback_${DateTime.now().millisecondsSinceEpoch}',
         sender: 'assistant',
         text: _cleanAssistantReply(reply),
         stage: stage,
-        suggestedActions: _getQuickActions(stage),
+        suggestedActions: _getQuickActions(stage, context),
         agentStatus: 'LOCAL_READY',
       ),
     );
@@ -959,20 +1226,42 @@ class PowerLensAIService extends ChangeNotifier {
             "• **[도면 사진으로 시작]**을 눌러 갖고 계신 도면을 분석하거나\n"
             "• **[샘플로 빠르게 체험하기]**를 눌러 10초 만에 전체 흐름을 확인해 보세요.";
       case 'OBJECT_REVIEW':
+        if (ctx.unresolvedMissingCandidates > 0) {
+          return "💡 **다음 할 일 (누락 후보 검토):**\n"
+              "• AI가 단선도 분석 중 설비 누락 가능성 **${ctx.unresolvedMissingCandidates}건**(예: 변압기 등)을 감지했습니다.\n"
+              "• **실제 계통에 해당 설비가 없는 경우**: 화면 상단의 보라색 [누락 후보] 배지나 좌측 카드의 **[문제 없음]** 버튼을 누르시면 즉시 통과됩니다.\n"
+              "• **실제 도면에 존재하는 경우**: **[수동 추가]**를 눌러 도면에서 직접 영역을 지정해 추가하세요.\n"
+              "• 누락 후보가 처리되면 하단의 **[객체 검수 완료]** 버튼이 활성화됩니다!";
+        }
+        final hasSuspicious = ctx.suspiciousObjects > 0 ||
+            ctx.workingNodes.any((n) =>
+                n['status'] == 'SUSPICIOUS' ||
+                n['review_status'] == 'SUSPICIOUS');
+        final hasUnconfirmed = ctx.workingNodes.any((n) {
+          final s = n['status'] ?? n['review_status'];
+          return s != 'CONFIRMED' && s != 'REJECTED';
+        });
+        if (!hasSuspicious) {
+          if (hasUnconfirmed || ctx.workingNodes.isEmpty) {
+            return "💡 **다음 할 일 (정상 객체 일괄 승인):**\n"
+                "• 모든 객체가 정상 기호로 탐지되었습니다 (검토 필요 0건)!\n"
+                "• 모든 객체 인식이 다 잘 되었을 경우 우측 패널의 **[정상 객체 일괄 승인]**(또는 [정상 객체 전체 승인]) 버튼을 누르면 됩니다.\n"
+                "• 한 번에 승인 확정 후 하단의 파란색 **[객체 검수 완료]** 버튼을 눌러 바로 **모선 번호 매핑(2단계)**으로 넘어가시면 됩니다!";
+          } else {
+            return "💡 **다음 할 일 (객체 검수 완료):**\n"
+                "• 모든 객체의 승인이 완료되었습니다!\n"
+                "• 화면 하단의 파란색 **[객체 검수 완료]** 버튼을 눌러 바로 **모선 번호 매핑(2단계)**으로 넘어가시면 됩니다.";
+          }
+        }
         if (selected != null && selected.isNotEmpty) {
           return "💡 **다음 할 일 (객체 검수):**\n"
-              "• 현재 **$selected** 기호를 확인 중입니다.\n"
-              "• AI가 찾은 기호 종류가 맞으면 **[승인 (Enter)]**을 누르세요. 자동으로 다음 객체로 이동합니다.";
+              "• 현재 검토가 필요한 항목이 ${ctx.suspiciousObjects}건 있습니다.\n"
+              "• 지금 선택된 **$selected** 기호를 확인 후 **[승인하고 다음]** 또는 [제외]를 선택하세요.\n"
+              "• 나머지 정상 객체들은 우측 **[정상 객체 일괄 승인]**으로 한 번에 통과시킬 수도 있습니다.";
         }
-        if (ctx.suspiciousObjects > 0) {
-          return "💡 **다음 할 일 (객체 검수):**\n"
-              "• **검토 필요 항목**: ${ctx.suspiciousObjects}건\n"
-              "• 기호를 하나씩 확인하고 [승인] 또는 [제외]를 선택하세요. 끝나면 다음 단계로 이동합니다.";
-        } else {
-          return "💡 **다음 할 일 (객체 검수 완료):**\n"
-              "• 모든 객체 확인이 완료되었습니다! (검토 필요 0건)\n"
-              "• 하단의 **[객체 확인 완료 ➔]**를 눌러 **모선 번호 확인** 단계로 넘어가세요.";
-        }
+        return "💡 **다음 할 일 (객체 검수):**\n"
+            "• **검토 필요 항목**: ${ctx.suspiciousObjects}건\n"
+            "• 기호를 하나씩 확인하고 [승인] 또는 [제외]를 선택하세요. 정상 객체는 [정상 객체 일괄 승인]으로 한 번에 승인할 수 있습니다.";
       case 'BUS_MAPPING':
         if (selected != null && selected.isNotEmpty) {
           return "💡 **다음 할 일 (모선 번호 확인):**\n"
@@ -1049,21 +1338,39 @@ class PowerLensAIService extends ChangeNotifier {
     return sb.toString();
   }
 
-  String _getStageGreeting(String stage) {
+  String _getStageGreeting(String stage, [PowerLensAssistantContext? ctx]) {
     switch (stage) {
       case 'HOME':
         return "👋 **안녕하세요! PowerLens AI 도우미입니다.**\n"
             "도면 사진으로 시작할까요, 샘플 도면으로 빠르게 체험할까요?\n"
             "처음이시라면 **[샘플 도면 불러오기]**나 중앙의 체험 버튼을 눌러보세요!";
       case 'OBJECT_REVIEW':
+        final hasIssues = (ctx?.suspiciousObjects ?? 0) > 0 ||
+            (ctx?.unresolvedMissingCandidates ?? 0) > 0;
+        if (!hasIssues && ctx != null) {
+          return "🔍 **객체 검수 단계입니다.**\n"
+              "도면 내 모든 객체 인식이 정상적으로 완료되었어요! 검토가 필요한 항목이 없으니 **[객체 검수 완료]**를 눌러 모선 매핑으로 넘어가시면 됩니다.";
+        }
         return "🔍 **객체 검수 단계입니다.**\n"
             "객체를 확인해봤어요. 대부분 괜찮고, 제가 다시 봤으면 하는 것부터 보여드릴게요. "
             "선택된 객체의 이유를 확인한 뒤 **[승인하고 다음]** 또는 **[제외]**를 선택해주세요.";
       case 'BUS_MAPPING':
+        final hasBusIssues = (ctx?.unresolvedBusNumbers ?? 0) > 0 ||
+            (ctx?.duplicateBusNumbers ?? 0) > 0;
+        if (!hasBusIssues && ctx != null) {
+          return "🔢 **모선 번호 확인 단계입니다.**\n"
+              "모든 모선에 고유 번호가 정상적으로 지정되었습니다! **[모선 번호 승인]**을 눌러 결선 검수로 넘어가시면 됩니다.";
+        }
         return "🔢 **모선 번호 확인 단계입니다.**\n"
             "이번에는 모선 번호만 확인하면 돼요. 전체 승인하거나, 하나씩 넘겨보면서 확인할 수 있어요. "
             "추천하는 방법은 번호 입력 후 **[승인하고 다음 모선으로]**를 누르는 거예요.";
       case 'CONNECTION_REVIEW':
+        final hasConnIssues = (ctx?.ambiguousConnections ?? 0) > 0 ||
+            (ctx?.topologyIssueCount ?? 0) > 0;
+        if (!hasConnIssues && ctx != null) {
+          return "⚡ **결선 검수 단계입니다.**\n"
+              "모든 선로와 결선 연결이 정상적으로 검증되었습니다! **[결선 검수 완료]**를 눌러 최종 확인으로 진행하시면 됩니다.";
+        }
         return "⚡ **결선 검수 단계입니다.**\n"
             "전체 연결을 먼저 확인해봤어요. 제가 다시 보는 게 좋다고 판단한 선부터 같이 볼게요. "
             "**[핵심 검토]**, **[전체 선로]**, **[한 선씩]** 중에서 선택할 수 있어요.";
@@ -1081,11 +1388,23 @@ class PowerLensAIService extends ChangeNotifier {
       case 'HOME':
         return "도면 사진으로 시작할까요, 샘플로 체험할까요?";
       case 'OBJECT_REVIEW':
-        return "객체를 확인해봤어요. 대부분 괜찮고, 제가 다시 봤으면 하는 것부터 보여드릴게요.";
+        final hasIssues = ctx.suspiciousObjects > 0 ||
+            ctx.unresolvedMissingCandidates > 0;
+        return hasIssues
+            ? "객체를 확인해봤어요. 대부분 괜찮고, 제가 다시 봤으면 하는 것부터 보여드릴게요."
+            : "모든 객체가 정상 상태예요! [객체 검수 완료]를 눌러 다음 단계로 진행해보세요.";
       case 'BUS_MAPPING':
-        return "이번에는 모선 번호만 확인하면 돼요. 전체 승인하거나, 하나씩 넘겨보면서 확인할 수 있어요.";
+        final hasBusIssues = ctx.unresolvedBusNumbers > 0 ||
+            ctx.duplicateBusNumbers > 0;
+        return hasBusIssues
+            ? "이번에는 모선 번호만 확인하면 돼요. 전체 승인하거나, 하나씩 넘겨보면서 확인할 수 있어요."
+            : "모든 모선 번호가 지정되었어요! [모선 번호 승인]을 눌러 결선 검수로 넘어가세요.";
       case 'CONNECTION_REVIEW':
-        return "전체 연결을 먼저 확인해봤어요. 제가 다시 보는 게 좋다고 판단한 선부터 같이 볼게요.";
+        final hasConnIssues = ctx.ambiguousConnections > 0 ||
+            ctx.topologyIssueCount > 0;
+        return hasConnIssues
+            ? "전체 연결을 먼저 확인해봤어요. 제가 다시 보는 게 좋다고 판단한 선부터 같이 볼게요."
+            : "모든 선로 결선이 정상 확인되었어요! [결선 검수 완료]를 눌러주세요.";
       case 'FINAL':
       case 'FINAL_CAD':
         return ctx.excelLoaded
@@ -1096,16 +1415,40 @@ class PowerLensAIService extends ChangeNotifier {
     }
   }
 
-  List<String> _getQuickActions(String stage) {
+  List<String> _getQuickActions(String stage, [PowerLensAssistantContext? ctx]) {
     switch (stage) {
       case 'HOME':
         return ['샘플 도면 불러오기', '사진 다시 넣을래', '다음에 뭐 해?'];
       case 'OBJECT_REVIEW':
-        return ['검토 필요 항목 보기', '다음에 뭐 해?', '다음 단계로 이동'];
+        final hasIssues = (ctx?.suspiciousObjects ?? 0) > 0 ||
+            (ctx?.unresolvedMissingCandidates ?? 0) > 0;
+        final unconfirmed = (ctx?.workingNodes ?? []).where((n) {
+          final s = n['status'] ?? n['review_status'];
+          return s != 'CONFIRMED' && s != 'REJECTED';
+        }).length;
+        if (hasIssues) {
+          return ['검토 필요 항목 보기', '다음에 뭐 해?', '누락 후보 확인'];
+        }
+        if (unconfirmed > 0) {
+          return ['정상 객체 일괄 승인', '다음에 뭐 해?', '다음 단계로 이동'];
+        }
+        return ['객체 검수 완료하기', '다음 단계로 이동', '다음에 뭐 해?'];
       case 'BUS_MAPPING':
-        return ['미지정 모선 확인', '다음에 뭐 해?', '다음 단계로 이동'];
+        final hasBusIssues = (ctx?.unresolvedBusNumbers ?? 0) > 0 ||
+            (ctx?.duplicateBusNumbers ?? 0) > 0;
+        return [
+          hasBusIssues ? '미지정 모선 확인' : '모선 번호 승인하기',
+          '다음에 뭐 해?',
+          '다음 단계로 이동'
+        ];
       case 'CONNECTION_REVIEW':
-        return ['연결 오류 점검', '다음에 뭐 해?', '다음 단계로 이동'];
+        final hasConnIssues = (ctx?.ambiguousConnections ?? 0) > 0 ||
+            (ctx?.topologyIssueCount ?? 0) > 0;
+        return [
+          hasConnIssues ? '연결 오류 점검' : '결선 검수 완료하기',
+          '다음에 뭐 해?',
+          '다음 단계로 이동'
+        ];
       case 'FINAL':
       case 'FINAL_CAD':
         return ['조류계산 실행', '흐름 방향 보여줘', '다음에 뭐 해?'];

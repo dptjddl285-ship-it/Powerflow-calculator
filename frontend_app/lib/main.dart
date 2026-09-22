@@ -18,6 +18,7 @@ import 'widgets/inspector_panel.dart';
 import 'widgets/home/powerlens_home_empty_state.dart';
 import 'widgets/powerlens_ai/powerlens_ai_button.dart';
 import 'widgets/powerlens_ai/powerlens_ai_panel.dart';
+import 'widgets/powerlens_ai/glowing_target_wrapper.dart';
 
 // 절대 끊기지 않는 무한 캔버스의 크기 (10만 픽셀)
 const double CANVAS_SIZE = 100000.0;
@@ -148,6 +149,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         return true;
       case PowerLensAppAction.showReviewIssues:
       case PowerLensAppAction.approveCurrentAndNext:
+      case PowerLensAppAction.approveAllClean:
       case PowerLensAppAction.connectionFullReview:
       case PowerLensAppAction.connectionLinesOnly:
       case PowerLensAppAction.connectionNextLine:
@@ -3631,12 +3633,12 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                             speechBubbleText: elements.isEmpty
                                 ? "도면 사진 업로드 버튼을 눌러 시작해볼까요? ⚡"
                                 : (lastSimulationResult == null
-                                      ? "회로도가 완성됐어요. 조류계산 버튼을 가리킬게요. ⚡"
+                                      ? "회로도가 완성됐어요. 조류계산을 실행해볼까요? ⚡"
                                       : "계산이 끝났어요. 결과를 보여드릴게요! 🌊"),
                             coachMessage: elements.isEmpty
                                 ? "도면 사진 업로드 버튼을 눌러 시작해볼까요? ⚡"
                                 : (lastSimulationResult == null
-                                      ? "회로도가 완성됐어요. 조류계산 버튼을 가리킬게요. ⚡"
+                                      ? "회로도가 완성됐어요. 조류계산을 실행해볼까요? ⚡"
                                       : "계산이 끝났어요. 결과를 보여드릴게요! 🌊"),
                             presenceState:
                                 PowerLensAIService.instance.mascotState,
@@ -3915,32 +3917,14 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
   }
 
   void _scheduleLensyTargetSync(String target) {
-    if (_lastLensySyncTarget == target && _measuredLensyTarget == target) {
-      return;
-    }
-    _lastLensySyncTarget = target;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final isMobile = MediaQuery.of(context).size.width < 768;
-      final measured = _measureLensyCoachTarget(target, isMobile: isMobile);
-      if (measured == null || _manualLensyTarget == target) return;
-      setState(() {
-        _measuredLensyTarget = target;
-        _measuredLensyAlignment = measured;
-      });
-    });
+    // Lensy remains anchored at bottom-right without jumping across controls
   }
 
   Alignment _effectiveLensyAlignment(String target, {required bool isMobile}) {
-    if (_manualLensyTarget == target && _manualLensyAlignment != null) {
+    if (_manualLensyAlignment != null) {
       return _manualLensyAlignment!;
     }
-    if (_measuredLensyTarget == target && _measuredLensyAlignment != null) {
-      return _measuredLensyAlignment!;
-    }
-    final measured = _measureLensyCoachTarget(target, isMobile: isMobile);
-    if (measured != null) return measured;
-    return _lensyCoachAlignment(target, isMobile: isMobile);
+    return const Alignment(0.86, 0.86);
   }
 
   void _handleLensyDrag(
@@ -3953,7 +3937,6 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
     double clampAlignment(double value) =>
         value.clamp(-0.94, 0.94).toDouble();
     setState(() {
-      _manualLensyTarget = target;
       _manualLensyAlignment = Alignment(
         clampAlignment(current.x + delta.dx / math.max(size.width / 2, 1)),
         clampAlignment(current.y + delta.dy / math.max(size.height / 2, 1)),
@@ -4101,61 +4084,71 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
             ),
           ),
         const SizedBox(width: 4),
-        IconButton(
-          icon: const Icon(Icons.undo, color: Colors.white, size: 18),
-          tooltip: "되돌리기 (Ctrl+Z)",
-          onPressed: historyStack.isNotEmpty ? _undo : null,
+        GlowingTargetWrapper(
+          targetId: 'undo_btn',
+          borderRadius: BorderRadius.circular(6),
+          guideLabel: "✨ 실행 취소 (되돌리기)",
+          child: IconButton(
+            icon: const Icon(Icons.undo, color: Colors.white, size: 18),
+            tooltip: "되돌리기 (Ctrl+Z)",
+            onPressed: historyStack.isNotEmpty ? _undo : null,
+          ),
         ),
         IconButton(
           icon: const Icon(Icons.redo, color: Colors.white, size: 18),
           tooltip: "다시실행 (Ctrl+Y)",
           onPressed: redoStack.isNotEmpty ? _redo : null,
         ),
-        PopupMenuButton<String>(
-          tooltip: "선로 형태 보정 및 정형화",
-          icon: const Icon(Icons.auto_fix_high, color: Colors.cyanAccent, size: 20),
-          enabled: elements.any((e) => e.type == Tool.line),
-          onSelected: (mode) {
-            if (mode == 'natural') {
-              _smoothAllLinesNaturally();
-            } else if (mode == 'orthogonal') {
-              _straightenAllLines();
-            } else if (mode == 'raw') {
-              _restoreAllRawLines();
-            }
-          },
-          itemBuilder: (context) => [
-            const PopupMenuItem(
-              value: 'natural',
-              child: Row(
-                children: [
-                  Icon(Icons.timeline, color: Color(0xFF2563EB), size: 18),
-                  SizedBox(width: 8),
-                  Text("자연스러운 직선화 (대각선/각도 보존, 추천)"),
-                ],
+        GlowingTargetWrapper(
+          targetId: 'line_straighten',
+          borderRadius: BorderRadius.circular(6),
+          guideLabel: "✨ 선로 형태 보정 & 직각화",
+          child: PopupMenuButton<String>(
+            tooltip: "선로 형태 보정 및 정형화",
+            icon: const Icon(Icons.auto_fix_high, color: Colors.cyanAccent, size: 20),
+            enabled: elements.any((e) => e.type == Tool.line),
+            onSelected: (mode) {
+              if (mode == 'natural') {
+                _smoothAllLinesNaturally();
+              } else if (mode == 'orthogonal') {
+                _straightenAllLines();
+              } else if (mode == 'raw') {
+                _restoreAllRawLines();
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'natural',
+                child: Row(
+                  children: [
+                    Icon(Icons.timeline, color: Color(0xFF2563EB), size: 18),
+                    SizedBox(width: 8),
+                    Text("자연스러운 직선화 (대각선/각도 보존, 추천)"),
+                  ],
+                ),
               ),
-            ),
-            const PopupMenuItem(
-              value: 'orthogonal',
-              child: Row(
-                children: [
-                  Icon(Icons.alt_route, color: Color(0xFFD97706), size: 18),
-                  SizedBox(width: 8),
-                  Text("90° 직각 정형화 (맨해튼 직교)"),
-                ],
+              const PopupMenuItem(
+                value: 'orthogonal',
+                child: Row(
+                  children: [
+                    Icon(Icons.alt_route, color: Color(0xFFD97706), size: 18),
+                    SizedBox(width: 8),
+                    Text("90° 직각 정형화 (맨해튼 직교)"),
+                  ],
+                ),
               ),
-            ),
-            const PopupMenuItem(
-              value: 'raw',
-              child: Row(
-                children: [
-                  Icon(Icons.gesture, color: Colors.grey, size: 18),
-                  SizedBox(width: 8),
-                  Text("원본 손그림 복원"),
-                ],
+              const PopupMenuItem(
+                value: 'raw',
+                child: Row(
+                  children: [
+                    Icon(Icons.gesture, color: Colors.grey, size: 18),
+                    SizedBox(width: 8),
+                    Text("원본 손그림 복원"),
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
         if (elements.isNotEmpty) ...[
           Container(height: 20, width: 1, color: Colors.white24),
@@ -4165,27 +4158,32 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
               vertical: 10.0,
               horizontal: 2.0,
             ),
-            child: OutlinedButton.icon(
-              onPressed: _importExcelCase,
-              icon: const Icon(
-                Icons.table_chart,
-                color: Colors.tealAccent,
-                size: 15,
-              ),
-              label: const Text(
-                "엑셀 가져오기",
-                style: TextStyle(
+            child: GlowingTargetWrapper(
+              targetId: 'cad_excel_import',
+              borderRadius: BorderRadius.circular(8),
+              guideLabel: "✨ 엑셀 제원 가져오기",
+              child: OutlinedButton.icon(
+                onPressed: _importExcelCase,
+                icon: const Icon(
+                  Icons.table_chart,
                   color: Colors.tealAccent,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
+                  size: 15,
                 ),
-              ),
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: Colors.tealAccent),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+                label: const Text(
+                  "엑셀 가져오기",
+                  style: TextStyle(
+                    color: Colors.tealAccent,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-                padding: const EdgeInsets.symmetric(horizontal: 6),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Colors.tealAccent),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                ),
               ),
             ),
           ),
@@ -4194,27 +4192,32 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
               vertical: 10.0,
               horizontal: 2.0,
             ),
-            child: OutlinedButton.icon(
-              onPressed: _openReviewPage,
-              icon: const Icon(
-                Icons.auto_awesome,
-                color: Colors.purpleAccent,
-                size: 15,
-              ),
-              label: const Text(
-                "AI로 사진 검사하기",
-                style: TextStyle(
+            child: GlowingTargetWrapper(
+              targetId: 'cad_reopen_review',
+              borderRadius: BorderRadius.circular(8),
+              guideLabel: "✨ AI 사진 검사 다시 열기",
+              child: OutlinedButton.icon(
+                onPressed: _openReviewPage,
+                icon: const Icon(
+                  Icons.auto_awesome,
                   color: Colors.purpleAccent,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
+                  size: 15,
                 ),
-              ),
-              style: OutlinedButton.styleFrom(
-                side: const BorderSide(color: Colors.purpleAccent),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+                label: const Text(
+                  "AI로 사진 검사하기",
+                  style: TextStyle(
+                    color: Colors.purpleAccent,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-                padding: const EdgeInsets.symmetric(horizontal: 6),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Colors.purpleAccent),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                ),
               ),
             ),
           ),
@@ -4224,69 +4227,79 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                 vertical: 10.0,
                 horizontal: 2.0,
               ),
-              child: OutlinedButton.icon(
-                key: _resultButtonKey,
-                onPressed: () =>
-                    _showPowerFlowResultDialog(lastSimulationResult!),
-                icon: const Icon(
-                  Icons.assessment_outlined,
-                  color: Colors.amberAccent,
-                  size: 15,
-                ),
-                label: const Text(
-                  "수치 결과표",
-                  style: TextStyle(
+              child: GlowingTargetWrapper(
+                targetId: 'result_flow',
+                borderRadius: BorderRadius.circular(8),
+                guideLabel: "✨ 결과 확인",
+                child: OutlinedButton.icon(
+                  key: _resultButtonKey,
+                  onPressed: () =>
+                      _showPowerFlowResultDialog(lastSimulationResult!),
+                  icon: const Icon(
+                    Icons.assessment_outlined,
                     color: Colors.amberAccent,
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
+                    size: 15,
                   ),
-                ),
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: Colors.amberAccent),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
+                  label: const Text(
+                    "수치 결과표",
+                    style: TextStyle(
+                      color: Colors.amberAccent,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
-                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Colors.amberAccent),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                  ),
                 ),
               ),
             ),
           const SizedBox(width: 4),
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 4.0),
-            child: ElevatedButton.icon(
-              key: _powerFlowButtonKey,
-              onPressed: isSimulating ? null : _sendDataToServer,
-              icon: isSimulating
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
+            child: GlowingTargetWrapper(
+              targetId: 'final_powerflow',
+              borderRadius: BorderRadius.circular(8),
+              guideLabel: "✨ 조류계산 실행",
+              child: ElevatedButton.icon(
+                key: _powerFlowButtonKey,
+                onPressed: isSimulating ? null : _sendDataToServer,
+                icon: isSimulating
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(
+                          color: Colors.white,
+                          strokeWidth: 2,
+                        ),
+                      )
+                    : const Icon(
+                        Icons.play_arrow_rounded,
                         color: Colors.white,
-                        strokeWidth: 2,
+                        size: 18,
                       ),
-                    )
-                  : const Icon(
-                      Icons.play_arrow_rounded,
-                      color: Colors.white,
-                      size: 18,
-                    ),
-              label: Text(
-                isSimulating ? "해석 중..." : "조류계산 (파이썬 전송)",
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
+                label: Text(
+                  isSimulating ? "해석 중..." : "조류계산 (파이썬 전송)",
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
                 ),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: busCount > 0
-                    ? Colors.blueAccent.shade700
-                    : const Color(0xFF334155),
-                elevation: busCount > 0 ? 2 : 0,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: busCount > 0
+                      ? Colors.blueAccent.shade700
+                      : const Color(0xFF334155),
+                  elevation: busCount > 0 ? 2 : 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
                 ),
-                padding: const EdgeInsets.symmetric(horizontal: 10),
               ),
             ),
           ),
@@ -4320,31 +4333,71 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                   children: [
                     const SizedBox(height: 8),
                     _paletteItem(Tool.move, Icons.near_me, "선택", "V"),
-                    _paletteItem(Tool.bus, Icons.horizontal_rule, "모선", "B"),
-                    _paletteItem(Tool.generator, Icons.motion_photos_on, "발전기", "G"),
-                    _paletteItem(Tool.load, Icons.arrow_downward, "부하", "L"),
-                    _paletteItem(Tool.transformer, Icons.crop_square, "변압기", "T"),
-                    _paletteItem(Tool.line, Icons.polyline, "선로", "W"),
+                    GlowingTargetWrapper(
+                      targetId: 'palette_bus',
+                      borderRadius: BorderRadius.circular(10),
+                      guideLabel: "✨ 모선 그리기 도구",
+                      child: _paletteItem(Tool.bus, Icons.horizontal_rule, "모선", "B"),
+                    ),
+                    GlowingTargetWrapper(
+                      targetId: 'palette_generator',
+                      borderRadius: BorderRadius.circular(10),
+                      guideLabel: "✨ 발전기 추가 도구",
+                      child: _paletteItem(Tool.generator, Icons.motion_photos_on, "발전기", "G"),
+                    ),
+                    GlowingTargetWrapper(
+                      targetId: 'palette_load',
+                      borderRadius: BorderRadius.circular(10),
+                      guideLabel: "✨ 부하 추가 도구",
+                      child: _paletteItem(Tool.load, Icons.arrow_downward, "부하", "L"),
+                    ),
+                    GlowingTargetWrapper(
+                      targetId: 'palette_transformer',
+                      borderRadius: BorderRadius.circular(10),
+                      guideLabel: "✨ 변압기 추가 도구",
+                      child: _paletteItem(Tool.transformer, Icons.crop_square, "변압기", "T"),
+                    ),
+                    GlowingTargetWrapper(
+                      targetId: 'palette_line',
+                      borderRadius: BorderRadius.circular(10),
+                      guideLabel: "✨ 선로 그리기 도구",
+                      child: _paletteItem(Tool.line, Icons.polyline, "선로", "W"),
+                    ),
                     _paletteItem(Tool.text, Icons.text_fields, "라벨", ""),
-                    _actionPaletteItem(
-                      Icons.menu_book_rounded,
-                      "설명서",
-                      const Color(0xFF4F46E5),
-                      _showUserGuideDialog,
+                    GlowingTargetWrapper(
+                      targetId: 'guide_dialog',
+                      borderRadius: BorderRadius.circular(10),
+                      guideLabel: "✨ 사용자 가이드 설명서",
+                      child: _actionPaletteItem(
+                        Icons.menu_book_rounded,
+                        "설명서",
+                        const Color(0xFF4F46E5),
+                        _showUserGuideDialog,
+                      ),
                     ),
                     const Divider(indent: 8, endIndent: 8, height: 16),
-                    _actionPaletteItem(
-                      Icons.auto_awesome,
-                      "AI 도면",
-                      Colors.purple,
-                      _uploadImageToAI,
+                    GlowingTargetWrapper(
+                      targetId: 'home_upload',
+                      borderRadius: BorderRadius.circular(10),
+                      guideLabel: "✨ 도면 분석",
+                      child: _actionPaletteItem(
+                        Icons.auto_awesome,
+                        "AI 도면",
+                        Colors.purple,
+                        _uploadImageToAI,
+                      ),
                     ),
                     const Spacer(),
-                    _actionPaletteItem(
-                      Icons.delete_sweep_outlined,
-                      "초기화",
-                      Colors.redAccent,
-                      _confirmClearCanvas,
+                    GlowingTargetWrapper(
+                      targetId: 'canvas_clear',
+                      borderRadius: BorderRadius.circular(10),
+                      guideLabel: "✨ 캔버스 전체 초기화",
+                      child: _actionPaletteItem(
+                        Icons.delete_sweep_outlined,
+                        "초기화",
+                        Colors.redAccent,
+                        _confirmClearCanvas,
+                      ),
                     ),
                     const SizedBox(height: 12),
                   ],
