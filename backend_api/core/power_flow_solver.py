@@ -139,26 +139,48 @@ class PowerFlowSolver:
         # 2. Second pass: Collect Generators & Loads
         for el in elements:
             el_type = str(el.get("type", "")).lower()
+            if not ("gen" in el_type or "load" in el_type):
+                continue
+
             el_id = str(el.get("id", ""))
             label = str(el.get("label", ""))
             parent_bus_id = el.get("parentBusId") or el.get("parent_bus_id")
-
-            target_bus_num: Optional[int] = None
             b_cand = el.get("bus_number") or el.get("connected_bus_number")
-            if b_cand is not None and int(b_cand) in buses:
-                target_bus_num = int(b_cand)
-            elif parent_bus_id and str(parent_bus_id) in el_id_to_bus:
-                target_bus_num = el_id_to_bus[str(parent_bus_id)]
-            elif parent_bus_id:
-                cand = self._extract_bus_number("", str(parent_bus_id))
-                if cand is not None and cand in buses:
-                    target_bus_num = cand
-            if target_bus_num is None:
+
+            ref_bus_num: Optional[int] = None
+            ref_bus_raw: Optional[Any] = None
+
+            if b_cand is not None:
+                ref_bus_raw = b_cand
+                try:
+                    ref_bus_num = int(b_cand)
+                except (ValueError, TypeError):
+                    pass
+            elif parent_bus_id is not None:
+                ref_bus_raw = parent_bus_id
+                if str(parent_bus_id) in el_id_to_bus:
+                    ref_bus_num = el_id_to_bus[str(parent_bus_id)]
+                else:
+                    ref_bus_num = self._extract_bus_number("", str(parent_bus_id))
+            else:
                 cand = self._extract_bus_number(label, el_id)
-                if cand is not None and cand in buses:
-                    target_bus_num = cand
-            if target_bus_num is None and b_cand is not None and int(b_cand) > 0:
-                target_bus_num = int(b_cand)
+                if cand is not None:
+                    ref_bus_num = cand
+                    ref_bus_raw = cand
+
+            device_type = "Generator" if "gen" in el_type else "Load"
+            el_name = el_id or label or el_type
+
+            if ref_bus_num is None and ref_bus_raw is None:
+                validation_errors.append(f"{device_type} {el_name} does not reference any Bus.")
+                continue
+
+            if ref_bus_num is None or ref_bus_num not in buses:
+                missing_desc = ref_bus_num if ref_bus_num is not None else ref_bus_raw
+                validation_errors.append(f"{device_type} {el_name} references missing Bus {missing_desc}.")
+                continue
+
+            target_bus_num = ref_bus_num
 
             if "gen" in el_type:
                 v_set = float(el.get("vPu") or el.get("v_pu") or 1.0)
@@ -166,53 +188,33 @@ class PowerFlowSolver:
                 p_pu = self._to_pu(el, val_key="pPu", mw_key="p_mw")
                 q_pu = self._to_pu(el, val_key="qPu", mw_key="q_mvar")
 
-                if target_bus_num is not None and target_bus_num > 0:
-                    if target_bus_num not in buses:
-                        buses[target_bus_num] = {
-                            "bus_num": target_bus_num,
-                            "element_id": f"bus_{target_bus_num}",
-                            "label": f"Bus {target_bus_num}",
-                            "is_slack": is_slack,
-                            "v_spec": v_set,
-                            "theta_spec_rad": 0.0,
-                        }
-                    if is_slack:
-                        buses[target_bus_num]["is_slack"] = True
-                    if v_set > 0:
-                        buses[target_bus_num]["v_spec"] = v_set
+                if is_slack:
+                    buses[target_bus_num]["is_slack"] = True
+                if v_set > 0:
+                    buses[target_bus_num]["v_spec"] = v_set
 
-                    gens_by_bus.setdefault(target_bus_num, []).append({
-                        "p_pu": p_pu,
-                        "q_pu": q_pu,
-                        "v_set": v_set,
-                        "is_slack": is_slack,
-                    })
+                gens_by_bus.setdefault(target_bus_num, []).append({
+                    "p_pu": p_pu,
+                    "q_pu": q_pu,
+                    "v_set": v_set,
+                    "is_slack": is_slack,
+                })
 
             elif "load" in el_type:
                 p_pu = self._to_pu(el, val_key="pPu", mw_key="p_mw")
                 q_pu = self._to_pu(el, val_key="qPu", mw_key="q_mvar")
 
-                if target_bus_num is not None and target_bus_num > 0:
-                    if target_bus_num not in buses:
-                        buses[target_bus_num] = {
-                            "bus_num": target_bus_num,
-                            "element_id": f"bus_{target_bus_num}",
-                            "label": f"Bus {target_bus_num}",
-                            "is_slack": False,
-                            "v_spec": 1.0,
-                            "theta_spec_rad": 0.0,
-                        }
-                    loads_by_bus.setdefault(target_bus_num, []).append({
-                        "p_pu": p_pu,
-                        "q_pu": q_pu,
-                    })
+                loads_by_bus.setdefault(target_bus_num, []).append({
+                    "p_pu": p_pu,
+                    "q_pu": q_pu,
+                })
 
         # Also check if any bus element itself has load (pPu / qPu) and no separate load element was added
         for el in elements:
             el_type = str(el.get("type", "")).lower()
             if "bus" in el_type and not ("gen" in el_type or "load" in el_type):
                 b_num = self._extract_bus_number(str(el.get("label", "")), str(el.get("id", "")))
-                if b_num is not None and b_num not in loads_by_bus:
+                if b_num is not None and b_num in buses and b_num not in loads_by_bus:
                     p_pu = self._to_pu(el, val_key="pPu", mw_key="p_mw")
                     q_pu = self._to_pu(el, val_key="qPu", mw_key="q_mvar")
                     if abs(p_pu) > 1e-6 or abs(q_pu) > 1e-6:
