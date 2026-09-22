@@ -221,8 +221,6 @@ class ExcelCaseImporter:
                     }
                     trans_dict[f"{f_b}_{t_b}"] = tr_info
                     trans_dict[f"{t_b}_{f_b}"] = tr_info
-                    trans_dict[(f_b, t_b)] = tr_info
-                    trans_dict[(t_b, f_b)] = tr_info
 
         # Also check if branch sheet has a tap column indicating in-line transformers
         if 'branch' in sheet_names_lower:
@@ -251,8 +249,6 @@ class ExcelCaseImporter:
                             }
                             trans_dict[f"{f_b}_{t_b}"] = tr_info
                             trans_dict[f"{t_b}_{f_b}"] = tr_info
-                            trans_dict[(f_b, t_b)] = tr_info
-                            trans_dict[(t_b, f_b)] = tr_info
 
         return {
             'sbase_mva': sbase,
