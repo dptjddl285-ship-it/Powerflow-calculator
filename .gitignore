@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 .env
 *.env
+~$*
 backend_api/.env
 backend_api/.venv/
 backend_api/.ultralytics/

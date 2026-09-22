@@ -26,120 +26,7 @@ try:
 except Exception:
     pass
 
-def match_ieee24_buses_deterministic(nodes: List[Dict[str, Any]], img_shape: Tuple[int, int]) -> Dict[str, int]:
-    """
-    Deterministically maps detected bus nodes to IEEE 24-bus numbers (1 to 24)
-    based on relative coordinates, aspect ratio (horizontal vs vertical), and topological tiers.
-    100% offline, zero API dependency, guaranteed 1:1 bijection for IEEE 24-bus diagrams.
-    """
-    h_img, w_img = img_shape[:2]
-    bus_nodes = [n for n in nodes if (n.get('class') or n.get('class_name') or '').lower() == 'bus']
-    if len(bus_nodes) != 24:
-        return {}
 
-    norm_buses = []
-    for b in bus_nodes:
-        cx, cy, w, h = b['bbox']
-        norm_buses.append({
-            'node': b,
-            'id': b.get('id'),
-            'nx': cx / w_img,
-            'ny': cy / h_img,
-            'is_vert': (h > w)
-        })
-
-    mapping = {}
-
-    # 1. Top row (ny < 0.18): Bus 18 (left), Bus 21 (mid), Bus 22 (right)
-    top_row = sorted([b for b in norm_buses if b['ny'] < 0.18 and not b['is_vert']], key=lambda b: b['nx'])
-    if len(top_row) == 3:
-        mapping[top_row[0]['id']] = 18
-        mapping[top_row[1]['id']] = 21
-        mapping[top_row[2]['id']] = 22
-
-    # 2. Upper vertical bars (0.15 < ny < 0.30): Bus 17 (left), Bus 23 (right)
-    upper_verts = [b for b in norm_buses if b['is_vert'] and 0.15 < b['ny'] < 0.30]
-    for b in upper_verts:
-        if b['nx'] < 0.2:
-            mapping[b['id']] = 17
-        elif b['nx'] > 0.7:
-            mapping[b['id']] = 23
-
-    # 3. Upper-middle row (0.25 < ny < 0.35, horizontal): Bus 16 (left), Bus 19 (mid), Bus 20 (right)
-    mid_upper = sorted([b for b in norm_buses if 0.25 < b['ny'] < 0.35 and not b['is_vert']], key=lambda b: b['nx'])
-    if len(mid_upper) == 3:
-        mapping[mid_upper[0]['id']] = 16
-        mapping[mid_upper[1]['id']] = 19
-        mapping[mid_upper[2]['id']] = 20
-
-    # 4. Middle tier (0.35 < ny < 0.48): Bus 15 (left horizontal), Bus 14 (mid vertical), Bus 13 (right vertical)
-    mid_tier = [b for b in norm_buses if 0.35 < b['ny'] < 0.48]
-    for b in mid_tier:
-        if not b['is_vert'] and b['nx'] < 0.3:
-            mapping[b['id']] = 15
-        elif b['is_vert'] and 0.3 < b['nx'] < 0.6:
-            mapping[b['id']] = 14
-        elif b['is_vert'] and b['nx'] > 0.7:
-            mapping[b['id']] = 13
-
-    # 5. Upper transformer tier (0.48 <= ny < 0.60, horizontal): Bus 24 (left), Bus 11 (mid-left), Bus 12 (mid-right)
-    trans_upper = sorted([b for b in norm_buses if 0.48 <= b['ny'] < 0.60 and not b['is_vert']], key=lambda b: b['nx'])
-    if len(trans_upper) == 3:
-        mapping[trans_upper[0]['id']] = 24
-        mapping[trans_upper[1]['id']] = 11
-        mapping[trans_upper[2]['id']] = 12
-
-    # 6. Lower transformer tier (0.60 <= ny < 0.76): Bus 3 (left), Bus 9 (mid-left), Bus 10 (mid-right), Bus 6 (right vertical)
-    trans_lower = [b for b in norm_buses if 0.60 <= b['ny'] < 0.76]
-    horiz_6 = sorted([b for b in trans_lower if not b['is_vert']], key=lambda b: b['nx'])
-    if len(horiz_6) >= 3:
-        mapping[horiz_6[0]['id']] = 3
-        mapping[horiz_6[1]['id']] = 9
-        mapping[horiz_6[2]['id']] = 10
-    vert_6 = [b for b in trans_lower if b['is_vert'] and b['nx'] > 0.7]
-    if vert_6:
-        mapping[vert_6[0]['id']] = 6
-
-    # 7. Mid-lower vertical bars (0.74 <= ny < 0.86): Bus 4 (left), Bus 5 (mid), Bus 8 (right)
-    lower_verts = sorted([b for b in norm_buses if b['is_vert'] and 0.74 <= b['ny'] < 0.86], key=lambda b: b['nx'])
-    for b in lower_verts:
-        if b['nx'] < 0.35:
-            mapping[b['id']] = 4
-        elif 0.35 <= b['nx'] < 0.70:
-            mapping[b['id']] = 5
-        elif b['nx'] >= 0.70:
-            mapping[b['id']] = 8
-
-    # 8. Bottom row (ny >= 0.85, horizontal): Bus 1 (left), Bus 2 (mid), Bus 7 (right)
-    bottom_row = sorted([b for b in norm_buses if b['ny'] >= 0.85 and not b['is_vert']], key=lambda b: b['nx'])
-    if len(bottom_row) == 3:
-        mapping[bottom_row[0]['id']] = 1
-        mapping[bottom_row[1]['id']] = 2
-        mapping[bottom_row[2]['id']] = 7
-
-    return mapping
-
-
-def _apply_deterministic_ieee24_mapping(bus_nodes: List[Dict[str, Any]], det_map: Dict[str, int]) -> Dict[str, Any]:
-    for b in bus_nodes:
-        orig_id = b.get('original_id') or b.get('id')
-        num = det_map.get(orig_id) or det_map.get(b.get('id'))
-        if num is not None:
-            b['bus_number'] = num
-            b['display_name'] = f"Bus {num}"
-            b['display_label'] = f"{num}"
-            b['bus_number_status'] = 'VERIFIED'
-            b['bus_confidence'] = 1.0
-            b['bus_number_reasons'] = ['DETERMINISTIC_IEEE24_TOPOLOGY_MATCH']
-    return {
-        'total_buses': len(bus_nodes),
-        'verified_count': len(bus_nodes),
-        'uncertain_count': 0,
-        'duplicates': [],
-        'missing_range_numbers': [],
-        'verified_rate_pct': 100.0,
-        'method': 'DETERMINISTIC_IEEE24_TOPOLOGY'
-    }
 
 
 def link_and_validate_bus_numbers(
@@ -169,16 +56,19 @@ def link_and_validate_bus_numbers(
         return nodes, {'total_buses': 0, 'verified_count': 0, 'uncertain_count': 0}
         
     if not api_key:
-        if len(bus_nodes) == 24:
-            det_map = match_ieee24_buses_deterministic(nodes, (h_img, w_img))
-            if len(det_map) == 24:
-                report = _apply_deterministic_ieee24_mapping(bus_nodes, det_map)
-                return nodes, report
         for b in bus_nodes:
             b.setdefault('bus_number', None)
             b.setdefault('bus_number_status', 'UNCERTAIN')
             b.setdefault('bus_number_reasons', ['NO_API_KEY'])
-        return nodes, {'warning': 'No API Key'}
+        return nodes, {
+            'total_buses': len(bus_nodes),
+            'verified_count': 0,
+            'uncertain_count': len(bus_nodes),
+            'duplicates': [],
+            'missing_range_numbers': [],
+            'verified_rate_pct': 0.0,
+            'warning': 'No API Key'
+        }
 
     # 1. Generate High-Precision Grid Crop Collage of each bus bar
     # (Extracts local context around each bus with central focus, completely eliminating global line clutter)
@@ -234,7 +124,7 @@ def link_and_validate_bus_numbers(
         "Return strict JSON dictionary: {\"B1\": 1, \"B2\": 2, ...}"
     )
     
-    candidate_models = [model_name, 'gemini-3.1-flash-lite', 'gemini-3.5-flash', 'gemini-3.5-flash-lite']
+    candidate_models = [model_name, 'gemini-3.5-flash', 'gemini-3.5-flash-lite']
     # Deduplicate preserving order
     seen_models = set()
     models_to_try = [m for m in candidate_models if not (m in seen_models or seen_models.add(m))]
@@ -279,16 +169,19 @@ def link_and_validate_bus_numbers(
             
     if last_err is not None:
         print(f'[BusLinker Error] {last_err}')
-        if len(bus_nodes) == 24:
-            det_map = match_ieee24_buses_deterministic(nodes, (h_img, w_img))
-            if len(det_map) == 24:
-                report = _apply_deterministic_ieee24_mapping(bus_nodes, det_map)
-                return nodes, report
         for b in bus_nodes:
             b.setdefault('bus_number', None)
             b['bus_number_status'] = 'UNCERTAIN'
             b.setdefault('bus_number_reasons', ['VISION_AI_CALL_FAILED'])
-        return nodes, {'error': str(last_err)}
+        return nodes, {
+            'total_buses': len(bus_nodes),
+            'verified_count': 0,
+            'uncertain_count': len(bus_nodes),
+            'duplicates': [],
+            'missing_range_numbers': [],
+            'verified_rate_pct': 0.0,
+            'error': str(last_err)
+        }
 
     # Field-level validation: Duplicate counts
     num_counts = {}
@@ -343,12 +236,6 @@ def link_and_validate_bus_numbers(
             assigned_numbers.add(num)
             verified_count += 1
 
-    # If vision results were incomplete and this is an IEEE 24 bus diagram, fallback to deterministic matcher
-    if verified_count < len(bus_nodes) and len(bus_nodes) == 24:
-        det_map = match_ieee24_buses_deterministic(nodes, (h_img, w_img))
-        if len(det_map) == 24:
-            report = _apply_deterministic_ieee24_mapping(bus_nodes, det_map)
-            return nodes, report
 
     # Optional missing range check (only if caller specified expected range)
     missing_range_numbers = []
