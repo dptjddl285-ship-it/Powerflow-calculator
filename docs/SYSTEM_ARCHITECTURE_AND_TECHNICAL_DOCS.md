@@ -35,6 +35,14 @@ graph TB
         R_Solver["조류계산 라우터 (/run_simulation, /download_result_excel)"]
     end
 
+    subgraph Supervisor_Engine["결정론적 검수 에이전트 계층 (Deterministic Supervisor)"]
+        Supervisor["ReviewAgentSupervisor (상태 제어 & Bounded Retry)"]
+        Planner["LocalRulePlanningProvider (로컬 규칙 플래너)"]
+        ToolRegistry["ReviewToolRegistry (port_aware_retry, roi_reanalysis)"]
+        Evaluator["정량 평가기 (_evaluate: target/topology score)"]
+        Patch_Gen["PatchPreview 생성기 (Before/After Diff)"]
+    end
+
     subgraph CV_Engine["컴퓨터 비전 & 인식 계층"]
         YOLO["YOLO11/COSLR 객체 검출기 (2026_07_30_coslr.pt)"]
         CV_Rule["특화 CV 검출기 (모선/부하/변압기 휴리스틱)"]
@@ -43,11 +51,11 @@ graph TB
         Topology["전기 위상 무결성 검증기 (electrical_topology.py)"]
     end
 
-    subgraph AI_Agent["지능형 진단 & 에이전트 계층"]
-        Agent_Diag["엑셀 불일치 AI 진단 에이전트 (excel_discrepancy_agent.py)"]
-        Agent_Chat["도면 검수 AI 어시스턴트 (chat_reviewer.py)"]
+    subgraph AI_Assistant["독립 AI 어시스턴트 & 진단 계층 (Gemini Assistant)"]
+        Lensy_Chat["Lensy 대화형 도면 검수 어시스턴트 (providers.py / chat_reviewer.py)"]
+        Agent_Diag["엑셀 불일치 AI 진단 (excel_discrepancy_agent.py)"]
         Agent_Evidence["시각적 근거 생성기 (object_reviewer.py)"]
-        LLM["Google Gemini API (gemini-3.5-flash-lite / Fallback)"]
+        LLM["Google Gemini API (gemini-3.5-flash-lite / gemini-3.5-flash)"]
     end
 
     subgraph Power_Engine["전력 해석 및 시뮬레이션 계층"]
@@ -68,17 +76,17 @@ graph TB
     UI_Canvas <--> R_Solver
     UI_Mismatch <--> R_Core
 
-    R_Staged --> CV_Engine
-    R_Staged --> AI_Agent
-    R_Staged --> Storage
+    R_Staged --> Supervisor_Engine
+    Supervisor_Engine --> CV_Engine
+    Supervisor_Engine --> Storage
 
     R_Core --> CV_Engine
     R_Core --> Power_Engine
-    R_Core --> AI_Agent
+    R_Core --> AI_Assistant
 
     R_Solver --> Power_Engine
 
-    AI_Agent -.-> LLM
+    AI_Assistant -.-> LLM
     CV_Engine --> Storage
 ```
 
@@ -159,12 +167,12 @@ sequenceDiagram
 
 | 파일명 | 핵심 기술 및 역할 | 주요 함수 / 클래스 |
 | :--- | :--- | :--- |
-| [`cv_bus_detector.py`](file:///c:/Users/dptjd/Downloads/PowerLens/backend_api/core/cv_bus_detector.py) | 두꺼운 직선, 종/횡 직사각형 윤곽선을 분석하여 모선(Bus) 바를 검출하고 터미널 영역 계산 | `detect_buses_heuristic()` |
-| [`cv_load_detector.py`](file:///c:/Users/dptjd/Downloads/PowerLens/backend_api/core/cv_load_detector.py) | 화살표, 삼각형, 지그재그 패턴을 분석하여 부하(Load) 기호 검출 | `detect_loads_heuristic()` |
-| [`cv_transformer_detector.py`](file:///c:/Users/dptjd/Downloads/PowerLens/backend_api/core/cv_transformer_detector.py) | 2개 맞물린 원형(Two-circle) 및 코일 패턴 분석으로 변압기 검출 | `detect_transformers_heuristic()` |
-| [`adaptive_vision_pipeline.py`](file:///c:/Users/dptjd/Downloads/PowerLens/backend_api/core/adaptive_vision_pipeline.py) | YOLO 모델(`2026_07_30_coslr.pt`)과 CV 휴리스틱을 NMS(Non-Maximum Suppression)로 앙상블하고 단선도 선로 골격 추적 | `detect_sld_objects_adaptive()`, `detect_sld_connections_adaptive()` |
-| [`bus_number_linker.py`](file:///c:/Users/dptjd/Downloads/PowerLens/backend_api/core/bus_number_linker.py) | OCR 텍스트 바운딩 박스를 검출하고 기하학적 유클리드 거리 및 투영 근접도를 계산하여 모선에 번호 부여, 발전기/부하로 번호 전파 | `link_and_validate_bus_numbers()`, `propagate_bus_numbers_to_devices()` |
-| [`electrical_topology.py`](file:///c:/Users/dptjd/Downloads/PowerLens/backend_api/core/electrical_topology.py) | 기기 단자 스냅핑, 고립된 선로/모선 판정, 양단 단자 연결성 검증 | `build_topology_graph()`, `validate_topology()` |
+| [`cv_bus_detector.py`](../backend_api/core/cv_bus_detector.py) | 두꺼운 직선, 종/횡 직사각형 윤곽선을 분석하여 모선(Bus) 바를 검출하고 터미널 영역 계산 | `detect_buses_heuristic()` |
+| [`cv_load_detector.py`](../backend_api/core/cv_load_detector.py) | 화살표, 삼각형, 지그재그 패턴을 분석하여 부하(Load) 기호 검출 | `detect_loads_heuristic()` |
+| [`cv_transformer_detector.py`](../backend_api/core/cv_transformer_detector.py) | 2개 맞물린 원형(Two-circle) 및 코일 패턴 분석으로 변압기 검출 | `detect_transformers_heuristic()` |
+| [`adaptive_vision_pipeline.py`](../backend_api/core/adaptive_vision_pipeline.py) | YOLO11 모델(`2026_07_30_coslr.pt`)과 CV 휴리스틱을 NMS(Non-Maximum Suppression)로 앙상블하고 단선도 선로 골격 추적 | `detect_sld_objects_adaptive()`, `detect_sld_connections_adaptive()` |
+| [`bus_number_linker.py`](../backend_api/core/bus_number_linker.py) | OCR 텍스트 바운딩 박스를 검출하고 기하학적 유클리드 거리 및 투영 근접도를 계산하여 모선에 번호 부여 (Gemini 시각적 보조) | `link_and_validate_bus_numbers()`, `propagate_bus_numbers_to_devices()` |
+| [`electrical_topology.py`](../backend_api/core/electrical_topology.py) | 기기 단자 스냅핑, 고립된 선로/모선 판정, 양단 단자 연결성 검증 | `build_topology_graph()`, `validate_topology()` |
 
 ### 2) 계통 데이터 연동 및 불일치 검증기 (`backend_api/core/excel_case_importer.py`)
 
@@ -178,14 +186,19 @@ sequenceDiagram
 * **비교 분석 리포트 (`compare_elements_with_excel`)**:
   - `missing_buses`, `surplus_buses`, `missing_branches`, `surplus_branches`, `missing_generators`, `missing_loads`를 분리 추출하고 수치 요약 통계 생성.
 
-### 3) AI 진단 에이전트 계층 (`backend_api/agent/`)
+### 3) 에이전트 검수 및 보조 지능 계층 (`backend_api/agent/`)
 
+* **결정론적 검수 감독자 (`ReviewAgentSupervisor` & `LocalRulePlanningProvider`)**:
+  - 외부 LLM 의존 없이 100% 로컬 규칙 기반으로 동작하는 안전한 검수 워크플로우 통제기.
+  - 관측 $\rightarrow$ 규칙 플래닝 $\rightarrow$ 2개 등록 도구(`port_aware_retry`, `roi_reanalysis`) 실행 $\rightarrow$ 가상 적용 후 정량 평가(`_evaluate()`) $\rightarrow$ 2회 제한 재시도(`MAX_AGENT_ATTEMPTS=2`) $\rightarrow$ 패치 프리뷰(`PatchPreview`) $\rightarrow$ 인간 승인 게이트(Human Apply/Reject)를 통제.
+  - 상세 명세는 [`AGENTIC_WORKFLOW.md`](../AGENTIC_WORKFLOW.md) 참조.
 * **불일치 원인 분석 AI 에이전트 (`excel_discrepancy_agent.py`)**:
-  - Google Gemini 3.5 모델을 전력 계통 단선도 검증 전문가 페르소나로 호출.
+  - Google Gemini 3.5 모델(`gemini-3.5-flash-lite`)을 전력 계통 단선도 검증 전문가 페르소나로 호출.
   - 도면의 모선/선로 개수와 엑셀 사양 차이를 분석하여 **한글 진단 리포트(`advice_ko`)**와 **단계별 권장 조치사항(`suggested_actions`)** 생성.
   - 네트워크 단절이나 API Key 부재 시에도 안정적인 룰 기반(Rule-based) 전력 엔지니어링 분석 결과를 반환하는 폴백 구조 완비.
-* **실시간 도면 어시스턴트 (`chat_reviewer.py`)**:
-  - 현재 검수 중인 도면 객체/결선 상태를 프롬프트 컨텍스트로 유지하며 사용자의 질문에 한국어로 실시간 응답.
+* **실시간 도면 어시스턴트 (`chat_reviewer.py` & `providers.py`)**:
+  - Lensy AI: 현재 검수 중인 도면 객체/결선 상태를 프롬프트 컨텍스트로 유지하며 사용자의 질문에 한국어로 실시간 응답.
+  - UI 네온 점등 타깃(`glowing_target_wrapper.dart`)을 지능적으로 추천하며, 25초 타임아웃 및 오프라인 로컬 폴백 지원.
 
 ### 4) 고정밀 AC Newton-Raphson 조류계산기 (`backend_api/core/power_flow_solver.py`)
 
@@ -203,14 +216,14 @@ sequenceDiagram
 
 ### 5) 사용자 인터페이스 (`frontend_app/`)
 
-* **4단계 검수 화면 ([`review_page.dart`](file:///c:/Users/dptjd/Downloads/PowerLens/frontend_app/lib/screens/review_page.dart))**:
+* **4단계 검수 화면 ([`review_page.dart`](../frontend_app/lib/screens/review_page.dart))**:
   - 상단 4단계 상태 배지(`① 객체 검수` $\rightarrow$ `② 모선 매핑` $\rightarrow$ `③ 결선 검수` $\rightarrow$ `④ 최종 & 엑셀`) 클릭을 통한 자유로운 단계 전환.
   - 상단 툴바 `[검수 처음으로]` 버튼 및 다이얼로그 연동으로 언제든 최초 도면 상태로 안전한 원클릭 롤백 지원.
   - 캔버스 줌/팬 인터랙션 및 원본 도면 위 오버레이 바운딩 박스 하이라이트.
-* **단선도 캔버스 ([`main.dart`](file:///c:/Users/dptjd/Downloads/PowerLens/frontend_app/lib/main.dart))**:
+* **단선도 캔버스 ([`main.dart`](../frontend_app/lib/main.dart))**:
   - 모선(가로/세로), 발전기, 부하, 변압기, 선로 배치 및 결선 단자 스냅.
   - 조류계산 수렴 시 모선 옆 전압 배지 및 선로 위 전력 조류 화살표 실시간 렌더링.
-* **엑셀 불일치 경고 모달 ([`excel_mismatch_dialog.dart`](file:///c:/Users/dptjd/Downloads/PowerLens/frontend_app/lib/widgets/excel_mismatch_dialog.dart))**:
+* **엑셀 불일치 경고 모달 ([`excel_mismatch_dialog.dart`](../frontend_app/lib/widgets/excel_mismatch_dialog.dart))**:
   - 모선, 선로, 발전기, 부하 4분할 도면 vs 엑셀 수치 비교 카드.
   - 누락/초과 세부 목록 스크롤 뷰.
   - AI 진단 요청 및 진단 결과 카드.

@@ -1,189 +1,181 @@
 # 🤖 PowerLens Agentic Review Workflow
 
-> **문서 버전**: v1.0.0 (2026-09-22)  
+> **문서 버전**: v1.1.0 (2026-09-22)  
 > **관련 대회 트랙**: 제17회 전력산업 소프트웨어 경진대회·AI 경진대회 — 'Agentic AI 활용 문제해결 및 생산성 향상'  
-> **기준 코드베이스**: `backend_api/agent/`, `backend_api/review/`, `frontend_app/lib/screens/review_page.dart`
+> **기준 코드베이스**: [`backend_api/agent/supervisor.py`](backend_api/agent/supervisor.py), [`backend_api/agent/tool_registry.py`](backend_api/agent/tool_registry.py), [`backend_api/agent/review_planning_provider.py`](backend_api/agent/review_planning_provider.py), [`backend_api/agent/providers.py`](backend_api/agent/providers.py), [`backend_api/review/`](backend_api/review/)
 
 ---
 
 ## 1. 개요 및 해결하려는 문제 (Problem Statement)
 
-전력 계통 단선도(Single-Line Diagram, SLD)는 발전기, 변압기, 모선, 송전선로, 부하 등 다양한 설비 기호와 고유 식별 번호가 복잡하게 얽혀 있는 고밀도 엔지니어링 도면입니다.  
-기존의 단순 End-to-End 비전 모델이나 단발성 OCR 파이프라인은 다음과 같은 본질적 한계를 지닙니다.
+전력 계통 단선도(Single-Line Diagram, SLD)는 발전기, 변압기, 모선, 송전선로, 부하 등 복잡한 설비 기호와 고유 식별 번호가 얽혀 있는 고밀도 엔지니어링 도면입니다.  
+기존의 단순 End-to-End 비전 모델이나 일회성 검출 파이프라인은 다음과 같은 한계를 지닙니다.
 
-1. **복합적 도면 노이즈**: 도면 스캔 품질 저하, 기호 중첩, 텍스트와 결선 선로의 겹침으로 인한 오탐/미탐 발생.
-2. **모호 결선 및 단선 위상 결함**: 굴절 선로, T-분기, 다회선 결선 부근에서 전기적 연결 관계가 모호해져 조류계산 입력 행렬($Y_{\text{bus}}$) 구성 시 특이 행렬(Singular Matrix)을 유발.
-3. **도면-제원 불일치**: 실제 단선도 작도 내용과 계통 파라미터 엑셀 파일(.xlsx) 간 설비 누락, 명칭 불일치, 동기조상기 등가성 차이 발생.
+1. **복합 도면 노이즈**: 도면 스캔 품질 저하, 기호 중첩, 텍스트와 결선 선로의 중첩으로 인한 국소 오탐/미탐.
+2. **모호 결선 및 단선 위상 결함**: 굴절 선로, T-분기, 다회선 결선 부근에서 전기적 연결 관계가 모호해져 조류계산 입력 행렬($Y_{\text{bus}}$) 구성 시 특이 행렬(Singular Matrix) 유발.
+3. **도면-제원 불일치**: 단선도 작도 내용과 계통 파라미터 엑셀 파일(.xlsx) 간 설비 누락 및 명칭 불일치.
 
-PowerLens는 이러한 문제를 해결하기 위해 **결정론적 상태 머신 감독자(Deterministic Supervisor)**와 **상황 인지형 Gemini LLM 보조자**, 그리고 **실제 도구 실행 및 인간 승인 게이트(Human-in-the-Loop)**가 유기적으로 결합된 **Agentic Review Workflow**를 구축했습니다.
+PowerLens는 이를 해결하기 위해 **결정론적 상태 관리자(`ReviewAgentSupervisor`)**, **경계가 명확한 규칙 기반 플래너(`LocalRulePlanningProvider`)**, **등록된 특화 비전 도구(`ReviewToolRegistry`)**, **엄격한 평가 및 2회 제한 재시도(`MAX_AGENT_ATTEMPTS=2`)**, **패치 프리뷰(`PatchPreview`) 및 인간 승인 게이트(Human Apply/Reject)**, 그리고 **별도의 독립된 Gemini Lensy Assistant**로 구성된 실용적이고 안전한 Agentic Review Workflow를 구현했습니다.
 
 ---
 
 ## 2. 에이전트 목표 (Agent Goal)
 
-- **도면 토폴로지 완전 무결성 확보**: 저신뢰도 객체 재탐색, 모호 결선 자동 추적 및 토폴로지 규칙 검증을 통해 완전한 `GraphDocument`를 구성.
-- **안전한 패치 기반 자율 수정**: AI가 도면 데이터를 임의로 즉시 덮어쓰지 않고, 명확한 변경 근거와 diff를 담은 `PatchPreview`를 생성한 후 엔지니어의 최종 확인(Apply/Reject)을 거쳐 확정.
-- **공학적 파라미터 Source of Truth 보존**: 도면 토폴로지와 엑셀 제원 간의 오차를 스스로 진단하고 피드백을 제공하여 조류계산 수치해석 솔버로 전달되는 입력의 무결성을 보장.
+- **도면 토폴로지 완전 무결성 확보**: 국소 ROI 재분석(`roi_reanalysis`)과 포트 인식 선로 재추적(`port_aware_retry`)을 통해 모호 결선과 미탐 객체를 단계적으로 해소.
+- **안전한 패치 기반 자율 수정 (Safety Guarantee)**: AI 에이전트가 도면 데이터를 즉시 덮어쓰지 않고, 변경 전후 diff와 근거를 담은 `PatchPreview`를 생성하여 엔지니어의 최종 승인(Human Apply/Reject)을 거쳐 확정.
+- **결정론적 제어와 생성형 어시스턴트의 엄격한 분리**: 검수 계획과 도구 실행은 외부 API 의존 없이 100% 로컬 결정론적 파이프라인으로 수행하고, Gemini 모델은 별도의 대화형 안내 및 보조 진단 역할로만 한정.
 
 ---
 
 ## 3. 입력 데이터 (Inputs)
 
-에이전트 워크플로우는 다음 3가지 핵심 입력을 기반으로 구동됩니다.
-
-| 입력 항목 | 데이터 타입 / 소스 | 설명 |
+| 입력 항목 | 소스 및 타입 | 설명 |
 | :--- | :--- | :--- |
-| **도면 이미지** | 래스터 이미지 (`.png`, `.jpg`, `.pdf`) | 최초 업로드된 원본 도면 파일 및 단계별 고해상도 ROI 크롭 |
-| **`GraphDocument`** | JSON / 메모리 세션 스토어 | 노드(`ReviewNodeItem`), 선로(`ReviewLineItem`), 메타데이터, 버전 번호(`version`) |
-| **계통 엑셀 데이터** | `.xlsx` 파일 | 모선(BUS), 선로(BRANCH), 발전기(GEN), 변압기(TRANSFORMER) 전기 파라미터 |
+| **도면 이미지 및 ROI 에셋** | `AnalysisAsset` | 원본 도면 이미지 및 분석 에셋 |
+| **`GraphDocument`** | `GraphDocument` | 노드(`nodes`), 선로(`edges`), 포트(`ports`), 이슈 목록(`issues`), 문서 버전(`revision`) |
+| **검수 이슈 (`ReviewIssue`)** | `ReviewIssue` | 검출된 이슈 코드(`issue.code`), 영향 컴포넌트(`component_ids`), 심각도(`severity`) |
 
 ---
 
-## 4. 에이전트 실행 수명주기 (Agent Lifecycle & State Transition)
+## 4. 에이전트 실행 수명주기 (Agent Lifecycle)
 
-PowerLens의 에이전트는 **Observe $\rightarrow$ Plan $\rightarrow$ Tool Selection $\rightarrow$ Execute $\rightarrow$ Evaluate $\rightarrow$ Retry $\rightarrow$ Patch Preview $\rightarrow$ Human Apply/Reject Gate $\rightarrow$ GraphDocument Update**의 엄격한 폐루프(Closed-Loop) 사이클을 준수합니다.
+PowerLens의 Review Agent는 **Observe $\rightarrow$ Plan $\rightarrow$ Tool Selection $\rightarrow$ Execute $\rightarrow$ Evaluate $\rightarrow$ Bounded Retry $\rightarrow$ Patch Preview $\rightarrow$ Human Apply/Reject Gate $\rightarrow$ GraphDocument Update** 순서로 동작합니다.
 
 ```mermaid
 flowchart TD
-    Start([워크플로우 시작]) --> Observe[1. Observe & Issue Detection<br/>ReviewAgentSupervisor.run_turn]
-    Observe --> CheckBlocker{이슈/블로커 존재?}
+    Start([1. 도면 검수 이슈 감지]) --> Supervisor[ReviewAgentSupervisor.run]
+    Supervisor --> Context[Context 구성: ReviewPlanningContext]
+    Context --> Plan[2. LocalRulePlanningProvider.build_plan<br/>최대 2회 순차 도구 계획 수립]
     
-    CheckBlocker -- 없음 --> FinalGate[최종 게이트 통과 준비]
-    CheckBlocker -- 있음 --> Plan[2. Plan<br/>ReviewPlanningProvider]
+    Plan --> Step1[3. 1차 계획 도구 선택 및 실행<br/>registry.execute: port_aware_retry 또는 roi_reanalysis]
+    Step1 --> Eval1[4. 결과 평가: _evaluate<br/>target_improved / topology_improved / adds_node 확인]
     
-    Plan --> SelectTool[3. Tool Selection<br/>ReviewToolRegistry]
-    SelectTool --> Execute[4. Tool Execution<br/>port_aware_retry / roi_reanalysis 등]
+    Eval1 --> Check1{1차 결과 개선 성공?}
+    Check1 -- Yes --> SuccessPatch[PatchStatus.PENDING 패치 생성<br/>Status: AWAITING_APPROVAL]
     
-    Execute --> Evaluate[5. Result Evaluation<br/>_evaluate: 신뢰도 향상 & 잔여 블로커 확인]
-    Evaluate --> EvalCheck{목표 달성 여부}
+    Check1 -- No --> RetryCheck{다음 후보 도구 존재?<br/>index + 1 < len plan}
+    RetryCheck -- Yes --> Step2[5. Bounded Retry: 2차 도구 순차 실행<br/>계획된 다음 대체 도구 candidate 실행]
+    Step2 --> Eval2[2차 결과 평가: _evaluate]
+    Eval2 --> Check2{2차 결과 개선 성공?}
+    Check2 -- Yes --> SuccessPatch
+    Check2 -- No --> NoImprovePatch[PatchStatus.NO_CHANGE 패치 생성<br/>Status: NO_IMPROVEMENT]
     
-    EvalCheck -- 미흡 & 재시도 가능 --> Retry[6. Retry Policy<br/>파라미터 조정 & 재시도, max 2회]
-    Retry --> Execute
+    RetryCheck -- No --> NoImprovePatch
     
-    EvalCheck -- 실패 한도 초과 --> Escalate[사용자 수동 조치 안내 플래그]
-    EvalCheck -- 달성 완료 --> PatchPreview[7. Patch Preview 생성<br/>PatchPreview diff & 신뢰도 계산]
+    SuccessPatch --> HumanGate{6. Human Apply / Reject Gate<br/>엔지니어 UI 확인}
+    NoImprovePatch --> EndNotice([엔지니어 수동 확인 안내])
     
-    PatchPreview --> HumanGate{8. Human Apply / Reject Gate<br/>엔지니어 시각적 확인}
-    HumanGate -- Reject 거절 --> DropPatch[패치 폐기 & 기존 상태 100% 보존]
-    HumanGate -- Apply 승인 --> UpdateDoc[9. GraphDocument Update<br/>버전 증가 version += 1]
+    HumanGate -- Reject 거절 --> Discard[패치 폐기 & 기존 GraphDocument 100% 보존]
+    HumanGate -- Apply 승인 --> ApplyPatch[7. apply_patch 실행<br/>GraphDocument 갱신 & revision 증가]
     
-    UpdateDoc --> LoopNext[다음 검수 턴 / 단계 전이]
-    DropPatch --> EndTurn([턴 종료])
-    LoopNext --> Observe
+    ApplyPatch --> Done([검수 완료])
+    Discard --> Done
 ```
 
 ---
 
-## 5. 단계별 상세 실행 메커니즘
+## 5. 단계별 상세 구현 및 코드 메커니즘
 
-### 1) Observe & Issue Detection (관측 및 이슈 감지)
-- **주체**: [`ReviewAgentSupervisor.run_turn()`](file:///c:/Users/dptjd/Downloads/PowerLens/backend_api/agent/supervisor.py)
-- **동작**:
-  - 현재 활성화된 세션의 `GraphDocument`를 읽어와 단계(Stage)별 이슈를 스캔합니다.
-  - 객체 검수 단계: 신뢰도 미달(`confidence < threshold`), `SUSPICIOUS` 상태, 바운딩 박스 종횡비 결함, 중복 바운딩 박스(IoU > 0.35).
-  - 결선 검수 단계: `review_status == "AMBIGUOUS"`인 선로, 단자 연결 미완료 선로, 고립 모선(Isolated Bus), 단선 선로.
-  - 엑셀 대조 단계: 모선 번호 결측, 선로 양단 모선 불일치.
+### 1) 관측 및 컨텍스트 구성 (Observe & Context)
+- **코드 위치**: [`backend_api/agent/supervisor.py`](backend_api/agent/supervisor.py) (`ReviewAgentSupervisor._context()`)
+- 대상 이슈(`ReviewIssue`)의 코드와 영향 노드를 분석하고, 연결 차수(`_degrees`) 및 열린 이슈 통계를 수집하여 [`ReviewPlanningContext`](backend_api/agent/review_planning_provider.py)를 생성합니다.
 
-### 2) Plan (계획 수립)
-- **주체**: [`ReviewPlanningProvider`](file:///c:/Users/dptjd/Downloads/PowerLens/backend_api/agent/review_planning_provider.py)
-- **구현 방식 (하이브리드)**:
-  - **`LocalRulePlanningProvider` (기본/결정론적 엔진)**:
-    - 외부 네트워크나 API 키 없이도 규칙 기반으로 즉각적인 액션 시퀀스를 도출.
-    - 예: 미확정 노드가 존재하면 `roi_reanalysis` 우선 계획, 모호 결선이 존재하면 `port_aware_retry` 우선 계획.
-  - **`GeminiReviewPlanningProvider` (지능형 보조 엔진)**:
-    - 복합 이슈 상황에서 도면 컨텍스트를 프롬프트로 구성하여 Gemini 모델로부터 구조화된 계획 수신.
-    - API 타임아웃 또는 JSON 파싱 오류 시 안전하게 `LocalRulePlanningProvider`로 자동 폴백.
+### 2) 계획 수립 (Plan)
+- **코드 위치**: [`backend_api/agent/review_planning_provider.py`](backend_api/agent/review_planning_provider.py) (`LocalRulePlanningProvider.build_plan()`)
+- **실제 구현 구조**:
+  - `ReviewPlanningProvider` (추상 기본 클래스)
+  - `LocalRulePlanningProvider` (실제 기본 구현체)
+  - `ReviewPlanningContext` (플래닝 컨텍스트 데이터 클래스)
+- `ReviewAgentSupervisor`의 기본 provider는 `LocalRulePlanningProvider`이며, **외부 API나 LLM 호출 없이 완전히 로컬 규칙으로 최대 2회(`MAX_AGENT_ATTEMPTS = 2`)의 실행 계획(`list[AgentPlanStep]`)을 수립**합니다.
+- 이슈 유형에 따른 도구 우선순위:
+  - 결선/포트 관련 이슈(`invalid_terminal_degree`, `disconnected_generator` 등): `port_aware_retry` $\rightarrow$ `roi_reanalysis` 순
+  - 객체 누락/고립 모선 관련 이슈(`isolated_bus`, `missing_object_candidates` 등): `roi_reanalysis` $\rightarrow$ `port_aware_retry` 순
 
-### 3) Tool Selection (도구 선택)
-- **주체**: [`ReviewToolRegistry`](file:///c:/Users/dptjd/Downloads/PowerLens/backend_api/agent/tool_registry.py)
-- 수립된 계획(`AgentActionPlan`)의 요구사항에 따라 등록된 특화 도구를 매핑합니다.
+### 3) 등록된 에이전트 도구 (ReviewToolRegistry)
+- **코드 위치**: [`backend_api/agent/tool_registry.py`](backend_api/agent/tool_registry.py)
+- **Supervisor가 실제로 실행 가능한 등록 도구는 정확히 아래 2개입니다**:
+  1. **`port_aware_retry`**: 기존 포트 인식과 실제 픽셀 선로 추적을 대상 이슈 주변에서 재실행하여 결선 복원.
+  2. **`roi_reanalysis`**: 기존 Vision/CV 파이프라인을 이슈 국소 ROI에서 재실행하여 대체 객체 검출 후보 확인.
+- 도구 실행 시 [`backend_api/agent_tools/vision_tools.py`](backend_api/agent_tools/vision_tools.py)의 `ReviewVisionToolRunner.create_preview()`를 호출하여 `PatchPreview`를 생성합니다.
 
-| 등록 도구명 | 핵심 기능 | 구현 위치 |
-| :--- | :--- | :--- |
-| `port_aware_retry` | 단자 근접 포트 반경 및 스켈레톤 탐색 파라미터를 조정하여 모호 선로 재추적 | [`vision_tools.py`](file:///c:/Users/dptjd/Downloads/PowerLens/backend_api/agent/vision_tools.py) |
-| `roi_reanalysis` | 저신뢰도 또는 누락 의심 영역에 대해 특화 CV 필터 및 YOLO 재검출 수행 | [`vision_tools.py`](file:///c:/Users/dptjd/Downloads/PowerLens/backend_api/agent/vision_tools.py) |
-| `merge_duplicate_nodes` | 동일 설비에 대해 중복 생성된 바운딩 박스를 IoU 기반으로 병합 정리 | [`tool_registry.py`](file:///c:/Users/dptjd/Downloads/PowerLens/backend_api/agent/tool_registry.py) |
-| `auto_link_bus_numbers` | OCR 번호 검출 박스와 모선 간 투영 근접도를 재계산하여 번호 자동 할당 | [`bus_number_linker.py`](file:///c:/Users/dptjd/Downloads/PowerLens/backend_api/core/bus_number_linker.py) |
-| `validate_topology_rules` | 폐루프, 슬랙 모선 유무, 변압기 단자 적합성 등 전기공학적 토폴로지 검증 | [`electrical_topology.py`](file:///c:/Users/dptjd/Downloads/PowerLens/backend_api/core/electrical_topology.py) |
-| `diagnose_excel_discrepancy` | 도면 검수 결과와 엑셀 시트 설비 목록 간의 차이점 및 원인 분석 | [`excel_discrepancy_agent.py`](file:///c:/Users/dptjd/Downloads/PowerLens/backend_api/agent/excel_discrepancy_agent.py) |
+> [!NOTE]
+> **별도 검수 및 진단 기능과의 구분**:  
+> 프로젝트 내의 다음 기능들은 `ReviewToolRegistry`의 에이전트 등록 도구가 아니며, 별도의 검수 단계 및 진단 모듈로 동작합니다:
+> - **중복 노드 병합**: 1단계 객체 검수 파이프라인의 NMS 및 IoU 필터링 로직에서 처리.
+> - **모선 번호 연계 (`auto_link_bus_numbers`)**: 2단계 모선 매핑 라우터 및 [`backend_api/core/bus_number_linker.py`](backend_api/core/bus_number_linker.py)에서 별도 실행.
+> - **위상 무결성 검증 (`validate_topology_rules`)**: [`backend_api/core/electrical_topology.py`](backend_api/core/electrical_topology.py) 및 `validate_graph()`에서 독립 검증.
+> - **엑셀 제원 불일치 진단 (`diagnose_excel_discrepancy`)**: 4단계 엑셀 대조 모달 및 [`backend_api/agent/excel_discrepancy_agent.py`](backend_api/agent/excel_discrepancy_agent.py)에서 독립 진단.
 
-### 4) Tool Execution (도구 실행)
-- 선택된 도구를 실제 실행 파라미터와 함께 호출합니다.
-- 예: `port_aware_retry` 실행 시 대상 선로 ID, 시작 노드, 끝 노드, 포트 허용 반경(`search_radius_px`)을 인자로 전달하여 픽셀 경로를 재탐색합니다.
+### 4) 결과 평가 메커니즘 (Result Evaluation)
+- **코드 위치**: [`backend_api/agent/supervisor.py`](backend_api/agent/supervisor.py) (`ReviewAgentSupervisor._evaluate()`)
+- 도구 실행 결과 생성된 `PatchPreview`의 가상 적용본을 생성하고, 전후 토폴로지 이슈를 정량 평가합니다:
+  - `target_improved`: 대상 이슈 건수가 감소했는가 (`target_after < target_before`)
+  - `topology_improved`: 가중치 기반 전체 토폴로지 점수가 개선되었는가 (`after_score < before_score`)
+  - `adds_node`: 누락 객체 이슈 해결을 위해 유효 노드가 추가되었는가
+- 위 조건 중 하나 이상을 충족하고 가상 그래프 검증에 성공할 경우 `improved = True`로 판정합니다.
 
-### 5) Result Evaluation (결과 평가)
-- **주체**: `ReviewAgentSupervisor._evaluate()`
-- **평가 지표**:
-  - 도구 실행 후 검출 신뢰도가 임계값 이상으로 상승했는가?
-  - 모호 선로(`AMBIGUOUS`)가 유효 연결(`DETECTED`)로 전환되었는가?
-  - 해당 조치로 인해 새로운 토폴로지 결함(예: 단선 모선 발생)이 유발되지 않았는가?
-  - 평가 결과는 `RESOLVED`, `PARTIALLY_RESOLVED`, `UNRESOLVED`로 판정됩니다.
+### 5) Bounded Retry 정책 (최대 2회 순차 후보 실행)
+- **상수 정의**: `MAX_AGENT_ATTEMPTS = 2`
+- **동작 방식**:
+  - 첫 번째 도구 실행 후 `improved == True`이면 루프를 즉시 중단하고 해당 패치를 사용자 승인 대기 상태로 전달합니다.
+  - 첫 번째 도구 결과가 개선되지 않았고(`improved == False`), 계획된 다음 도구 후보(`index + 1 < len(plan)`)가 존재하면 계획의 2번째 도구를 1회 추가 시도합니다.
+  - 최대 2회 시도 후에도 개선 후보를 찾지 못하면 `PatchStatus.NO_CHANGE` 상태의 패치를 생성하고 `AgentRunStatus.NO_IMPROVEMENT`로 종료합니다. 임의의 무한 재시도나 파라미터 강제 확장은 수행하지 않습니다.
 
-### 6) Retry Policy (재시도 및 적응 제어)
-- `_evaluate()` 결과가 `UNRESOLVED` 또는 `PARTIALLY_RESOLVED`인 경우, 최대 **2회(`max_retries = 2`)**까지 재시도합니다.
-- 재시도 시 파라미터를 적응적으로 완화/확장합니다 (예: 선로 탐색 반경 15px $\rightarrow$ 25px $\rightarrow$ 35px).
-- 2회 초과 시에는 무한 루프를 방지하기 위해 즉시 중단하고, 엔지니어가 수동으로 수정할 수 있도록 에스컬레이션 플래그(`requires_human_intervention: true`)를 설정합니다.
-
-### 7) Patch Preview (패치 프리뷰 생성)
-- **핵심 원칙**: 자율 에이전트의 실행 결과는 즉시 원본 데이터에 적용되지 않습니다.
-- 도구 실행 결과를 바탕으로 [`PatchPreview`](file:///c:/Users/dptjd/Downloads/PowerLens/backend_api/agent/patches.py) 객체를 생성합니다:
+### 6) 패치 프리뷰 생성 (Patch Preview)
+- **코드 위치**: [`backend_api/review/patches.py`](backend_api/review/patches.py) (`PatchPreview`)
+- 에이전트 실행 결과는 즉시 원본 데이터를 변형하지 않고 `PatchPreview` 객체로 격리됩니다:
   - `patch_id`: 고유 식별자
-  - `patch_type`: `NODE_UPDATE`, `LINE_RECONNECT`, `NODE_MERGE`, `BUS_RENUMBER`
-  - `description`: 엔지니어가 이해하기 쉬운 변경 사유 요약 (한국어)
-  - `diff`: 변경 전(`before`) 및 변경 후(`after`)의 상세 속성
-  - `confidence_gain`: 조치 전후의 신뢰도 변화량
+  - `tool_name`: 실행된 도구명 (`port_aware_retry` 또는 `roi_reanalysis`)
+  - `status`: `PatchStatus.PENDING` (개선 성공 시) 또는 `PatchStatus.NO_CHANGE`
+  - `operations`: 구체적 변경 작업 목록 (`add_node`, `remove_node`, `add_edge`, `remove_edge` 등)
+  - `summary`: 엔지니어가 확인할 수 있는 한글 요약 설명
 
-### 8) Human Apply / Reject Gate (인간 승인/거절 게이트)
-- **위치**: 프론트엔드 UI ([`review_page.dart`](file:///c:/Users/dptjd/Downloads/PowerLens/frontend_app/lib/screens/review_page.dart))
-- 엔지니어는 화면에 시각적으로 표시된 패치 프리뷰(변경된 바운딩 박스, 수정된 선로 경로 등)를 확인합니다.
-- **[승인 (Apply)]**: `/review/apply_patch` 호출 $\rightarrow$ 패치가 실제 도면 모델에 반영됩니다.
-- **[거절 (Reject)]**: `/review/reject_patch` 호출 $\rightarrow$ 패치가 폐기되며 도면은 기존 상태 그대로 100% 안전하게 유지됩니다.
-
-### 9) GraphDocument Update (문서 상태 갱신)
-- 승인된 패치는 [`ReviewSessionStore`](file:///c:/Users/dptjd/Downloads/PowerLens/backend_api/review/store.py)의 `GraphDocument`에 불변(Immutable) 방식으로 복제 반영됩니다.
-- 문서 버전 번호가 1 증가(`version += 1`)하여 추적성을 보장하고 다음 검수 턴의 기반 데이터로 사용됩니다.
+### 7) 인간 승인 게이트 (Human Apply / Reject Gate)
+- **프론트엔드 UI**: [`frontend_app/lib/screens/review_page.dart`](frontend_app/lib/screens/review_page.dart)
+- **백엔드 API**: [`backend_api/review/api.py`](backend_api/review/api.py)
+  - `POST /review/apply_patch`: 엔지니어가 승인(Apply)하면 패치의 `operations`가 실제 `GraphDocument`에 반영되고 리비전 번호가 증가합니다.
+  - `POST /review/reject_patch`: 엔지니어가 거절(Reject)하면 패치가 폐기되고 기존 도면 상태가 100% 그대로 보존됩니다.
 
 ---
 
-## 6. 결정론적 Supervisor와 Gemini Assistant의 역할 분리
+## 6. 결정론적 Supervisor와 Gemini Assistant의 명확한 역할 분리
 
-PowerLens의 핵심 아키텍처는 **"결정론적 제어(Deterministic Control)"**와 **"생성형 언어 지능(Generative Intelligence)"**을 명확히 분리하여 안전성과 사용성을 극대화한 구조입니다.
+PowerLens는 안전성이 최우선인 전력 계통 공학의 특성을 반영하여, **감독자(Supervisor)는 100% 로컬 결정론적 파이프라인으로 구동**하고, **Gemini 모델은 인터랙티브 어시스턴트(Lensy AI) 및 보조 진단으로만 분리**했습니다.
 
-| 구분 | 결정론적 감독자 (`ReviewAgentSupervisor`) | Gemini AI 보조자 (`Lensy AI` / `API Provider`) |
+| 구분 | 결정론적 Supervisor (`ReviewAgentSupervisor`) | Gemini Lensy Assistant (`GeminiReviewAssistantProvider`) |
 | :--- | :--- | :--- |
-| **역할 정의** | 전체 에이전트 워크플로우의 안전한 실행 통제 및 상태 관리 | 도면 맥락 해석, 엔지니어 질의응답, 복합 원인 설명 |
-| **상태 전이 제어** | 상태 머신 기반 (게이트 통과 요건, 완료 여부 판단 전담) | 상태 전이를 직접 강제하지 않음 (조언 및 가이드 제공) |
-| **도구 실행 권한** | 도구 호출 권한 검증, 재시도 횟수 제한(2회), 에러 핸들링 | 사용자 의도에 맞는 도구 추천 및 파라미터 제안 |
-| **수정본 반영 방식** | `PatchPreview` 생성 후 엔지니어의 `Apply` 승인 시에만 반영 | 직접 데이터를 덮어쓰지 않음 (환각 데이터 유입 차단) |
-| **오프라인 동작** | 외부 통신 없이 로컬 파이썬 환경에서 100% 자립 구동 | API Key 부재 또는 통신 불가 시 로컬 규칙으로 자동 대체 |
-| **주요 코드 파일** | `backend_api/agent/supervisor.py`<br/>`backend_api/review/staged_api.py` | `backend_api/agent/providers.py`<br/>`backend_api/agent/excel_discrepancy_agent.py` |
+| **역할 정의** | 도면 이슈 관측, 도구 실행 계획 수립, 도구 실행, 정량 평가, 재시도 제어, 패치 생성 | 엔지니어의 자연어 질문 응답, 작업 단계별 가이드, UI 버튼 네온 하이라이트 타깃 추천 |
+| **플래닝 방식** | [`LocalRulePlanningProvider`](backend_api/agent/review_planning_provider.py) 기반 로컬 규칙 계획 (LLM 미사용) | 대화 컨텍스트 기반 프롬프트 생성 (Supervisor 플래닝에 개입하지 않음) |
+| **사용 도구** | `port_aware_retry`, `roi_reanalysis` (엄격히 제한된 2개 도구) | UI 네온 점등 타깃 지정 (`glowing_target_wrapper.dart`) |
+| **모델 설정** | 해당 없음 (로컬 Python 로직) | `gemini-3.5-flash-lite` (`GEMINI_MODEL` 환경변수로 변경 가능) |
+| **타임아웃** | 해당 없음 | `TIMEOUT_SECONDS = 25.0` ([`providers.py:716`](backend_api/agent/providers.py)) |
+| **실행 환경** | 오프라인 로컬 환경에서 100% 자립 구동 | API 키 부재 시 [`LocalReviewAssistantProvider`](backend_api/agent/providers.py)로 자동 폴백 |
 
 ---
 
-## 7. 오류 처리 및 불확실성 관리 정책 (Failure & Uncertainty Policy)
+## 7. 프로젝트 내 Gemini 모델 사용 현황 (Code Truth)
 
-1. **LLM 환각 및 응답 지연 방어**:
-   - Gemini API 호출 타임아웃은 8초로 제한되며, 타임아웃 발생 시 즉시 `LocalRulePlanningProvider`의 결과로 폴백합니다.
-   - LLM 응답 포맷이 올바른 JSON 스키마를 만족하지 않을 경우, 정규식 추출 파서를 거치고 실패 시 로컬 기본값으로 복구합니다.
-2. **도구 실행 실패 격리**:
-   - `port_aware_retry` 또는 `roi_reanalysis` 도중 OpenCV/비전 예외가 발생하더라도 전체 세션이 크래시되지 않으며, 해당 도구 결과만 `FAILED`로 기록되고 이전 `GraphDocument` 상태를 보존합니다.
-3. **인간 최종 결정권 (Human Authority)**:
-   - AI 에이전트의 어떠한 자동 추천이나 패치도 엔지니어의 확인 없이 단독으로 확정되지 않습니다.
-   - 4단계 검수 게이트(Gate 1~4)의 최종 승인은 오직 엔지니어의 명시적 클릭을 통해서만 통과할 수 있습니다.
+코드베이스 전수 분석 결과 확인된 실제 Gemini 모델 구성입니다:
+
+| 소스 파일 경로 | 기본 모델 식별자 | 환경변수 오버라이드 | 기능 및 역할 |
+| :--- | :--- | :--- | :--- |
+| [`backend_api/agent/providers.py`](backend_api/agent/providers.py) | `gemini-3.5-flash-lite` | `GEMINI_MODEL` | Lensy AI 대화형 어시스턴트 및 UI 하이라이트 타깃 추천 (타임아웃 25초) |
+| [`backend_api/core/bus_number_linker.py`](backend_api/core/bus_number_linker.py) | `gemini-3.5-flash` | - | OCR 공간 텍스트 기반 모선 번호 시각적 매핑 (실패 시 `gemini-3.5-flash-lite` 폴백) |
+| [`backend_api/agent/excel_discrepancy_agent.py`](backend_api/agent/excel_discrepancy_agent.py) | `gemini-3.5-flash-lite` | `GEMINI_MODEL` | 도면-엑셀 제원 간 불일치 원인 분석 및 단계별 권장 조치사항 생성 |
+| [`backend_api/agent/object_reviewer.py`](backend_api/agent/object_reviewer.py) | `gemini-3.5-flash-lite` | `GEMINI_MODEL` | 단일 심볼 객체 검수 시 시각적 근거 설명 생성 |
 
 ---
 
-## 8. 코드 구현 대응표 (Implementation Source Mapping)
+## 8. 구현 소스 코드 대응표 (Source Mapping)
 
-| 구성 요소 | 소스 코드 파일 경로 | 핵심 클래스 및 함수 |
+| 워크플로우 구성 요소 | 소스 코드 파일 경로 | 핵심 클래스 및 함수 |
 | :--- | :--- | :--- |
-| **에이전트 총괄 감독자** | `backend_api/agent/supervisor.py` | `ReviewAgentSupervisor`, `run_turn()`, `_evaluate()` |
-| **플래닝 공급자** | `backend_api/agent/review_planning_provider.py` | `ReviewPlanningProvider`, `LocalRulePlanningProvider`, `GeminiReviewPlanningProvider` |
-| **도구 레지스트리** | `backend_api/agent/tool_registry.py` | `ReviewToolRegistry`, `execute_tool()` |
-| **패치 모델** | `backend_api/agent/patches.py` | `PatchPreview`, `PatchType`, `apply_patch()` |
-| **특화 비전 도구** | `backend_api/agent/vision_tools.py` | `port_aware_retry()`, `roi_reanalysis()` |
-| **세션 및 문서 저장소** | `backend_api/review/store.py` | `GraphDocument`, `ReviewSessionStore` |
-| **검수 게이트 REST API** | `backend_api/review/api.py`, `staged_api.py` | `/review/detect_objects`, `/review/apply_patch`, `/review/verify_final_gate` |
-| **불일치 진단 에이전트** | `backend_api/agent/excel_discrepancy_agent.py` | `diagnose_excel_discrepancy()` |
-| **사용자 게이트 UI** | `frontend_app/lib/screens/review_page.dart` | `_showPatchPreviewModal()`, `_applyPatch()`, `_rejectPatch()` |
-| **AI 어시스턴트 패널** | `frontend_app/lib/widgets/powerlens_ai/` | `powerlens_ai_panel.dart`, `glowing_target_wrapper.dart` |
+| **에이전트 총괄 감독자** | [`backend_api/agent/supervisor.py`](backend_api/agent/supervisor.py) | `ReviewAgentSupervisor`, `run()`, `_evaluate()` |
+| **플래닝 인터페이스 및 규칙 구현** | [`backend_api/agent/review_planning_provider.py`](backend_api/agent/review_planning_provider.py) | `ReviewPlanningProvider`, `LocalRulePlanningProvider`, `ReviewPlanningContext` |
+| **도구 레지스트리 (2개 등록 도구)** | [`backend_api/agent/tool_registry.py`](backend_api/agent/tool_registry.py) | `ReviewToolRegistry`, `RegisteredReviewTool`, `ToolCandidate` |
+| **특화 비전 도구 실행기** | [`backend_api/agent_tools/vision_tools.py`](backend_api/agent_tools/vision_tools.py) | `ReviewVisionToolRunner.create_preview()` |
+| **패치 프리뷰 및 연산 모델** | [`backend_api/review/patches.py`](backend_api/review/patches.py) | `PatchPreview`, `PatchOperation`, `PatchStatus` |
+| **세션 및 그래프 문서 저장소** | [`backend_api/review/store.py`](backend_api/review/store.py) | `GraphDocument`, `ReviewStore`, `AnalysisAsset` |
+| **검수 및 패치 적용 REST API** | [`backend_api/review/api.py`](backend_api/review/api.py) | `/review/apply_patch`, `/review/reject_patch` |
+| **인간 승인 검수 UI 화면** | [`frontend_app/lib/screens/review_page.dart`](frontend_app/lib/screens/review_page.dart) | `_showPatchPreviewModal()`, `_applyPatch()`, `_rejectPatch()` |
+| **대화형 어시스턴트 프로바이더** | [`backend_api/agent/providers.py`](backend_api/agent/providers.py) | `GeminiReviewAssistantProvider`, `LocalReviewAssistantProvider` |

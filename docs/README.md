@@ -12,9 +12,13 @@
 **PowerLens = AI Vision + Human Review Gate + Agentic Review Workflow + Excel Cross-Check + deterministic AC Power Flow Solver**  
 *AI 기반 전력 단선도(Single-Line Diagram) 자동 객체 인식, LLM 지능형 검수 안내, 웹 CAD 편집 및 고성능 AC Newton-Raphson 조류계산 원스톱 솔루션*
 
-[프로젝트 개요](#-프로젝트-개요-executive-summary) • [핵심 기술 성과](#-핵심-엔지니어링-및-ai-기술-성과) • [에이전트 워크플로우](../AGENTIC_WORKFLOW.md) • [기술 검증 보고서](../EVALUATION.md) • [시스템 아키텍처](#-시스템-아키텍처-system-architecture) • [빠른 시작 가이드](#-빠른-시작-가이드-quick-start)
+[프로젝트 개요](#-프로젝트-개요-executive-summary) • [핵심 기술 성과](#-핵심-엔지니어링-및-ai-기술-성과) • [에이전트 워크플로우](../AGENTIC_WORKFLOW.md) • [기술 검증 보고서](../EVALUATION.md) • [시스템 기술문서](./SYSTEM_ARCHITECTURE_AND_TECHNICAL_DOCS.md) • [시스템 아키텍처](#-시스템-아키텍처-system-architecture) • [빠른 시작 가이드](#-빠른-시작-가이드-quick-start)
 
-> 👥 **Team & Docs**: 에이전트 상세 구조는 [`../AGENTIC_WORKFLOW.md`](../AGENTIC_WORKFLOW.md), 정량/정성 평가 보고서는 [`../EVALUATION.md`](../EVALUATION.md), 전체 시스템 상세 설계는 [`docs/SYSTEM_ARCHITECTURE_AND_TECHNICAL_DOCS.md`](./SYSTEM_ARCHITECTURE_AND_TECHNICAL_DOCS.md), 팀 인수인계는 [`../TEAM_HANDOFF.md`](../TEAM_HANDOFF.md), 특허 출원 내용은 [`../PowerLens_특허명세서_공식출원용.md`](../PowerLens_특허명세서_공식출원용.md)를 참조하세요.
+> 👥 **Core Documentation**:
+> - 🤖 **에이전트 상세 구조**: [`../AGENTIC_WORKFLOW.md`](../AGENTIC_WORKFLOW.md) — 결정론적 Supervisor, 로컬 플래닝, 2개 도구, Bounded Retry, PatchPreview, 인간 승인 게이트
+> - 🧪 **기술 검증 보고서**: [`../EVALUATION.md`](../EVALUATION.md) — 26장 객체 검출 정밀도(F1 98.01%), AC Newton-Raphson 수렴 및 전력수지 검증, 회귀 테스트
+> - 📐 **시스템 상세 설계**: [`SYSTEM_ARCHITECTURE_AND_TECHNICAL_DOCS.md`](./SYSTEM_ARCHITECTURE_AND_TECHNICAL_DOCS.md) — 모듈별 기술 명세 및 API 규격서
+> - 👥 **팀 인수인계**: [`../TEAM_HANDOFF.md`](../TEAM_HANDOFF.md) • 📜 **특허 출원 명세서**: [`../PowerLens_특허명세서_공식출원용.md`](../PowerLens_특허명세서_공식출원용.md)
 
 </div>
 
@@ -28,22 +32,26 @@
 
 1. **AI Vision & CV 파이프라인**: 래스터 도면 이미지에서 모선(Bus), 발전기(Gen), 부하(Load), 변압기(Tr), 선로(Line)를 자동 탐지하고 토폴로지를 추출합니다.
 2. **4단계 AI-인간 협업 검수 체계**: 100% 자동화의 오류 가능성을 방어하기 위해 객체 검수 → 모선 매핑 → 선로 결선 → 엑셀 대조의 4단계 검증 게이트(Review Gate)를 제공합니다.
-3. **결정론적 Supervisor & Gemini 지능형 어시스턴트**: 결정론적 상태 관리자(`ReviewAgentSupervisor`)가 도구 실행과 패치 프리뷰(`PatchPreview`)를 안전하게 통제하고, Gemini 3.5 기반 어시스턴트가 상황 인지형 조언 및 화면 내 25개 이상의 UI 버튼 네온 점등을 지원합니다.
+3. **결정론적 Supervisor & 독립 Gemini Assistant**: 결정론적 상태 관리자(`ReviewAgentSupervisor`)와 로컬 플래너(`LocalRulePlanningProvider`)가 2개 특화 도구 실행과 패치 프리뷰(`PatchPreview`)를 안전하게 통제하며, 별도의 Gemini 3.5 기반 어시스턴트(Lensy)가 사용자 질의응답 및 화면 내 25개 이상의 UI 버튼 네온 점등을 안내합니다.
 4. **웹 기반 인터랙티브 CAD 캔버스**: 직관적인 마우스 드래그앤드롭, 방향키 미세 정렬(1px/10px Nudge), `Ctrl+R` 90도 회전 및 라벨 방향 자동 보정(Counter-Rotation) 기능을 지원합니다.
-5. **자체 구현 Full AC Newton-Raphson 수치해석 엔진**: 3모선 및 IEEE 24-bus RTS 표준 계통에서 허용 오차 $10^{-4}$ 이하, 4회 반복 내 수렴 및 전력수지 무결성 검증을 통과했습니다.
+5. **자체 구현 Full AC Newton-Raphson 수치해석 엔진**: Dense NumPy 배열 기반으로 IEEE 24-bus RTS 표준 계통에서 허용 오차 $10^{-4}$ 이하, 4회 반복 내 수렴 및 전력수지 무결성($\Delta P = 0.0\text{ MW}$)을 검증했습니다.
 
 ---
 
 ## 🏆 핵심 엔지니어링 및 AI 기술 성과
 
-### 1. 🤖 지능형 에이전트 & 자율 검수 체계 (Agentic Review & Lensy AI)
-- **결정론적 감독자 & LLM 하이브리드 아키텍처**: 전체 워크플로우의 안전한 전이와 게이트 제어는 결정론적 `ReviewAgentSupervisor`가 담당하고, 자연어 의도 해석과 상황 진단은 Gemini 3.5 LLM이 분담.
-- **도구 실행 및 안전한 패치 프리뷰 (`PatchPreview`)**: 선로 재추적(`port_aware_retry`), 영역 재분석(`roi_reanalysis`) 등의 특화 도구를 자율 실행하며, 변경 사항은 즉시 덮어쓰지 않고 diff 프리뷰를 생성하여 엔지니어의 최종 승인(Human Apply/Reject)을 거쳐 확정.
-- **상황 인지형 프롬프트 주입**: 현재 작업 단계(Stage), 미승인 객체 수, 의심(Suspicious) 사유, 결선 상태, 누락 후보군을 구조화하여 프롬프트로 전달.
-- **✨ 실시간 UI 네온 하이라이트 (Glowing Target System)**:
-  - 질문 의도 및 상태에 맞춰 사용자가 조작해야 할 화면 요소를 반짝이는 네온 애니메이션으로 표시 (`GlowingTargetWrapper`).
-  - [정상 객체 일괄 승인], [객체 검수 완료], [미확정 결선], [누락 후보], [시뮬레이션 실행] 등 25개 이상의 타깃 컴포넌트 완벽 지원.
-- **드래그 가능 플로팅 UI 패널 (`PowerLensAIPanel`)**: 캔버스 작업 영역을 가리지 않고 자유롭게 이동 가능하며 실시간 추천 액션 칩 제공.
+### 1. 🤖 Agentic Review Workflow & Lensy AI 어시스턴트
+- **Deterministic ReviewAgentSupervisor & Bounded Workflow**:
+  - **Deterministic ReviewAgentSupervisor**: 전체 검수 흐름과 상태 전이를 100% 로컬 결정론적으로 안전하게 제어.
+  - **LocalRulePlanningProvider**: 외부 LLM 의존 없이 로컬 규칙으로 최대 2회 순차 실행 계획(`AgentPlanStep`) 수립.
+  - **Bounded Review Tools**: 엄격히 검증된 2개 도구(`port_aware_retry`, `roi_reanalysis`)만 제한적으로 호출.
+  - **Evaluation & Bounded Retry**: 가상 적용 후 대상 이슈 감소 및 토폴로지 점수 정량 평가(`_evaluate()`), 미개선 시 계획된 다음 대체 도구 순차 재시도(`MAX_AGENT_ATTEMPTS = 2`).
+  - **PatchPreview**: 도면 데이터를 즉시 변형하지 않고 변경 diff와 영향도를 담은 가상 패치를 생성하여 격리 보관.
+  - **Human Apply/Reject Gate**: 엔지니어가 변경 사항을 시각적으로 확인하고 명시적으로 승인(Apply) 또는 폐기(Reject)하는 최종 권한 보유.
+- **독립된 Gemini Lensy Assistant & 지능형 진단**:
+  - Supervisor의 플래닝과 분리된 별도 어시스턴트로서, 사용자의 자연어 질문 응답 및 단계별 검수 가이드 제공.
+  - 질문 의도에 맞춰 화면 내 25개 이상의 타깃 컴포넌트를 반짝이는 네온 애니메이션으로 표시 (`GlowingTargetWrapper`).
+  - 엑셀 제원과 도면 간의 불일치 원인을 분석하는 독립 진단 모듈(`excel_discrepancy_agent.py`) 지원.
 
 ### 2. 🛡️ 4단계 AI-인간 협업 도면 검수 파이프라인 (Staged Review Gate)
 - **Phase 1 [① 객체 검수 (Object Review)]**:
@@ -67,8 +75,16 @@
 
 ### 4. ⚡ 자체 개발 Full AC Newton-Raphson 전력 조류계산 솔버
 - **정밀 복소 어드미턴스 행렬($Y_{\text{bus}}$) 구축**: 송전선로 $\pi$-등가회로의 병렬 서셉턴스(B/2), 변압기 탭비(Tap Ratio) 오프노미널 모델링 지원.
-- **야코비안(Jacobian) 행렬 방정식 계산**: $\begin{bmatrix} \Delta P \\ \Delta Q \end{bmatrix} = \begin{bmatrix} J_{11} & J_{12} \\ J_{21} & J_{22} \end{bmatrix} \begin{bmatrix} \Delta \theta \\ \Delta |V| \end{bmatrix}$ 반복 수렴 알고리즘을 NumPy 2D 밀집 배열 및 벡터화 연산으로 최적화.
-- **산업 표준 계통 수렴 검증**: IEEE 24-bus RTS 표준 계통에서 **4회 반복(Iteration)** 만에 최대 잔차 $4 \times 10^{-8}$ 수준으로 안정적 수렴 확인.
+- **야코비안(Jacobian) 행렬 방정식 계산**: $\begin{bmatrix} \Delta P \\ \Delta Q \end{bmatrix} = \begin{bmatrix} J_{11} & J_{12} \\ J_{21} & J_{22} \end{bmatrix} \begin{bmatrix} \Delta \theta \\ \Delta |V| \end{bmatrix}$ 반복 수렴 알고리즘을 Dense NumPy 2D 배열(`np.zeros((N, N), dtype=complex)`) 및 벡터화 연산(`np.linalg.solve`)으로 최적화.
+- **전기적 파라미터 무결성 보장 (No Arbitrary Fallbacks)**:
+  - 임의의 $R/X/B$ 기본값(`0.01`, `0.05`, `1.0` 등)과 강제 덮어쓰기 로직을 전면 배제하고, Excel 데이터를 유일한 파라미터 Source of Truth로 확립.
+  - Zero Series Impedance ($R=0, X=0$) 감지 시 사전 검증을 통해 $1/Z$ 연산 발산을 원천 방지하고 명확한 에러 리포트 제공.
+  - 도면 토폴로지는 100% 보존하면서 엑셀 미정의 선로에 대한 사전 시뮬레이션 차단(`MISSING` 상태) 구현.
+  - 무손실 선로($R=0.0, X>0$) 및 $B=0.0$ 정상 수치를 왜곡 없이 보존 (Python Falsy 판정 버그 해결).
+- **일반화된 복회선(Double Circuit) & 2-Port 변압기 토폴로지**:
+  - 특정 모선 번호 하드코딩 없이 복회선 병렬 등가 회로($Z_{eq} = 1/\sum (1/Z_k)$) 자동 합성.
+  - 변압기 물리 연결선(Lead line)과 실제 변압기 2-Port 요소를 분리하여 zero impedance 단락 문제 원천 차단.
+- **표준 계통 자체 수치해석 검증**: PSS/E나 PowerWorld와의 직접 1:1 비교 대신, IEEE 24-bus RTS 표준 계통 입력 데이터에 대한 자체 AC Newton-Raphson 솔버 수렴성(**4회 반복**, 잔차 $4 \times 10^{-8}$)과 전력 수지 평형($\Delta P_{\text{balance}} = 0.0\text{ MW}$)의 물리적 무결성으로 검증.
 
 ### 5. 🎨 웹 기반 인터랙티브 CAD 편집 체계 (Flutter Web)
 - **Direct Drag & Tight Hitbox**: 심볼 몸체를 마우스로 직접 선택하여 이동하는 직관적인 드래그앤드롭 및 기하학적 바운딩 박스 기반의 조작 영역 최적화.
@@ -97,11 +113,12 @@ flowchart TB
 
     subgraph Server ["Backend API (FastAPI / Python 3.11)"]
         Router["FastAPI Router (/review/*, /run_simulation, /apply_excel)"]
-        Supervisor["ReviewAgentSupervisor (Deterministic Control & Retry)"]
-        Agent["Gemini 3.5 Assistant (Dynamic Context Prompt Engine)"]
+        Supervisor["ReviewAgentSupervisor (Deterministic Control & Bounded Retry)"]
+        Planner["LocalRulePlanningProvider (Local Rule Planner)"]
+        Agent["Gemini 3.5 Assistant (Lensy Chat & Guidance Engine)"]
         CV["Vision Engine (YOLO11 + OpenCV Line Tracing)"]
         Importer["Excel Case Importer (Unified Pipeline)"]
-        Solver["AC Newton-Raphson Solver (NumPy Ybus & Jacobian)"]
+        Solver["AC Newton-Raphson Solver (Dense NumPy Ybus & Jacobian)"]
     end
 
     subgraph Data ["Data Layer"]
@@ -111,9 +128,9 @@ flowchart TB
 
     Diagram --> Review
     Review --> Supervisor
+    Supervisor --> Planner
     Supervisor --> CV
     Lensy <--> Agent
-    Agent <--> Supervisor
     Excel --> Importer
     CV --> UI
     Importer --> UI
