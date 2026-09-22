@@ -65,7 +65,15 @@
 ### 4. ⚡ 자체 개발 Full AC Newton-Raphson 전력 조류계산 솔버
 - **정밀 복소 어드미턴스 행렬($Y_{\text{bus}}$) 구축**: 송전선로 $\pi$-등가회로의 병렬 서셉턴스(B/2), 변압기 탭비(Tap Ratio) 오프노미널 모델링 지원.
 - **야코비안(Jacobian) 행렬 방정식 계산**: $\begin{bmatrix} \Delta P \\ \Delta Q \end{bmatrix} = \begin{bmatrix} J_{11} & J_{12} \\ J_{21} & J_{22} \end{bmatrix} \begin{bmatrix} \Delta \theta \\ \Delta |V| \end{bmatrix}$ 반복 수렴 알고리즘을 NumPy 벡터화 연산으로 최적화.
-- **산업 표준 검증**: IEEE 24-bus RTS 계통에서 **4회 반복(Iteration)** 만에 최대 잔차 $4 \times 10^{-8}$ 수준으로 안정적 수렴 확인.
+- **전기적 파라미터 무결성 보장 (No Arbitrary Fallbacks)**:
+  - 임의의 $R/X/B$ 기본값(`0.01`, `0.05`, `1.0` 등)과 강제 덮어쓰기 로직을 전면 배제하고, Excel 데이터를 유일한 파라미터 Source of Truth로 확립.
+  - Zero Series Impedance ($R=0, X=0$) 감지 시 사전 검증을 통해 $1/Z$ 연산 발산을 원천 방지하고 명확한 에러 리포트 제공.
+  - 도면 토폴로지는 100% 보존하면서 엑셀 미정의 선로에 대한 사전 시뮬레이션 차단(`MISSING` 상태) 구현.
+  - 무손실 선로($R=0.0, X>0$) 및 $B=0.0$ 정상 수치를 왜곡 없이 보존 (Python Falsy 판정 버그 해결).
+- **일반화된 복회선(Double Circuit) & 2-Port 변압기 토폴로지**:
+  - 특정 모선 번호 하드코딩 없이 복회선 병렬 등가 회로($Z_{eq} = 1/\sum (1/Z_k)$) 자동 합성.
+  - 변압기 물리 연결선(Lead line)과 실제 변압기 2-Port 요소를 분리하여 zero impedance 단락 문제 원천 차단.
+- **산업 표준 검증**: IEEE 24-bus RTS 및 PSS/E 실제 계통에서 **4회 반복(Iteration)** 만에 최대 잔차 $4 \times 10^{-8}$ 수준으로 안정적 수렴 확인.
 
 ### 5. 🎨 웹 기반 인터랙티브 CAD 편집 체계 (Flutter Web)
 - **Direct Drag & Tight Hitbox**: 심볼 몸체를 마우스로 직접 선택하여 이동하는 직관적인 드래그앤드롭 및 기하학적 바운딩 박스 기반의 조작 영역 최적화.

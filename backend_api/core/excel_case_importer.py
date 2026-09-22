@@ -136,61 +136,123 @@ class ExcelCaseImporter:
         branch_dict = {}
         if 'branch' in sheet_names_lower:
             df_br = pd.read_excel(xl, sheet_name=sheet_names_lower['branch'])
-            from_col = next((c for c in df_br.columns if 'from' in c.lower()), df_br.columns[0])
-            to_col = next((c for c in df_br.columns if 'to' in c.lower()), df_br.columns[1])
-            r_col = next((c for c in df_br.columns if c.strip().lower().startswith('r')), None)
-            x_col = next((c for c in df_br.columns if c.strip().lower().startswith('x')), None)
-            b_col = next((c for c in df_br.columns if c.strip().lower().startswith('b')), None)
+            if not df_br.empty and len(df_br.columns) >= 2:
+                from_col = next((c for c in df_br.columns if 'from' in c.lower()), df_br.columns[0])
+                to_col = next((c for c in df_br.columns if 'to' in c.lower()), df_br.columns[1])
+                r_col = next((c for c in df_br.columns if c.strip().lower().startswith('r')), None)
+                x_col = next((c for c in df_br.columns if c.strip().lower().startswith('x')), None)
+                b_col = next((c for c in df_br.columns if c.strip().lower().startswith('b')), None)
 
-            pair_branches = {}
-            for _, row in df_br.iterrows():
-                try:
-                    f_b = int(row[from_col])
-                    t_b = int(row[to_col])
-                except (ValueError, TypeError):
-                    continue
-                r_val = float(row[r_col]) if r_col and pd.notna(row[r_col]) else 0.01
-                x_val = float(row[x_col]) if x_col and pd.notna(row[x_col]) else 0.05
-                b_val = float(row[b_col]) if b_col and pd.notna(row[b_col]) else 0.0
-                pair_key = (min(f_b, t_b), max(f_b, t_b))
-                pair_branches.setdefault(pair_key, []).append({'r': r_val, 'x': x_val, 'b': b_val})
+                pair_branches = {}
+                for _, row in df_br.iterrows():
+                    try:
+                        f_b = int(row[from_col])
+                        t_b = int(row[to_col])
+                    except (ValueError, TypeError):
+                        continue
+                    r_val = float(row[r_col]) if r_col and pd.notna(row[r_col]) else None
+                    x_val = float(row[x_col]) if x_col and pd.notna(row[x_col]) else None
+                    b_val = float(row[b_col]) if b_col and pd.notna(row[b_col]) else 0.0
+                    pair_key = (min(f_b, t_b), max(f_b, t_b))
+                    pair_branches.setdefault(pair_key, []).append({'r': r_val, 'x': x_val, 'b': b_val})
 
-            for (fb, tb), c_list in pair_branches.items():
-                if len(c_list) == 1:
-                    r_eq, x_eq, b_eq = c_list[0]['r'], c_list[0]['x'], c_list[0]['b']
-                else:
-                    y_tot = sum(1.0 / complex(c['r'], c['x']) for c in c_list)
-                    z_eq = 1.0 / y_tot
-                    r_eq = z_eq.real
-                    x_eq = z_eq.imag
-                    b_eq = sum(c['b'] for c in c_list)
+                for (fb, tb), c_list in pair_branches.items():
+                    has_missing = any(c['r'] is None or c['x'] is None for c in c_list)
+                    if has_missing:
+                        r_eq, x_eq, b_eq = None, None, None
+                    elif len(c_list) == 1:
+                        r_eq, x_eq, b_eq = c_list[0]['r'], c_list[0]['x'], c_list[0]['b']
+                    else:
+                        if any(abs(c['r']) < 1e-9 and abs(c['x']) < 1e-9 for c in c_list):
+                            r_eq, x_eq, b_eq = 0.0, 0.0, sum(c['b'] for c in c_list)
+                        else:
+                            y_tot = sum(1.0 / complex(c['r'], c['x']) for c in c_list)
+                            z_eq = 1.0 / y_tot
+                            r_eq = z_eq.real
+                            x_eq = z_eq.imag
+                            b_eq = sum(c['b'] for c in c_list)
 
-                br_info = {
-                    'from_bus': fb, 'to_bus': tb,
-                    'r_pu': r_eq, 'x_pu': x_eq, 'b_pu': b_eq,
-                    'circuit_count': len(c_list)
-                }
-                branch_dict[f"{fb}_{tb}"] = br_info
-                branch_dict[f"{tb}_{fb}"] = br_info
+                    br_info = {
+                        'from_bus': fb, 'to_bus': tb,
+                        'r_pu': r_eq, 'x_pu': x_eq, 'b_pu': b_eq,
+                        'circuit_count': len(c_list)
+                    }
+                    branch_dict[f"{fb}_{tb}"] = br_info
+                    branch_dict[f"{tb}_{fb}"] = br_info
 
         # 5. Transformer Sheet
         trans_dict = {}
         if 'transformer' in sheet_names_lower:
             df_tr = pd.read_excel(xl, sheet_name=sheet_names_lower['transformer'])
-            from_col = next((c for c in df_tr.columns if 'from' in c.lower()), df_tr.columns[0])
-            to_col = next((c for c in df_tr.columns if 'to' in c.lower()), df_tr.columns[1])
-            tap_col = next((c for c in df_tr.columns if 'tap' in c.lower()), None)
+            if not df_tr.empty and len(df_tr.columns) >= 2:
+                from_col = next((c for c in df_tr.columns if 'from' in c.lower()), df_tr.columns[0])
+                to_col = next((c for c in df_tr.columns if 'to' in c.lower()), df_tr.columns[1])
+                tap_col = next((c for c in df_tr.columns if 'tap' in c.lower() or 'ratio' in c.lower()), None)
+                r_col = next((c for c in df_tr.columns if c.strip().lower().startswith('r')), None)
+                x_col = next((c for c in df_tr.columns if c.strip().lower().startswith('x')), None)
+                b_col = next((c for c in df_tr.columns if c.strip().lower().startswith('b')), None)
 
-            for _, row in df_tr.iterrows():
-                try:
-                    f_b = int(row[from_col])
-                    t_b = int(row[to_col])
-                except (ValueError, TypeError):
-                    continue
-                tap = float(row[tap_col]) if tap_col and pd.notna(row[tap_col]) else 1.0
-                tr_info = {'from_bus': f_b, 'to_bus': t_b, 'tap': tap}
-                trans_dict[f"{f_b}_{t_b}"] = tr_info
-                trans_dict[f"{t_b}_{f_b}"] = tr_info
+                for _, row in df_tr.iterrows():
+                    try:
+                        f_b = int(row[from_col])
+                        t_b = int(row[to_col])
+                    except (ValueError, TypeError):
+                        continue
+                    tap = float(row[tap_col]) if tap_col and pd.notna(row[tap_col]) else 1.0
+                    r_val = float(row[r_col]) if r_col and pd.notna(row[r_col]) else None
+                    x_val = float(row[x_col]) if x_col and pd.notna(row[x_col]) else None
+                    b_val = float(row[b_col]) if b_col and pd.notna(row[b_col]) else None
+
+                    # If r, x, b were not in transformer sheet, look up in branch_dict
+                    if r_val is None or x_val is None:
+                        br = branch_dict.get(f"{f_b}_{t_b}") or branch_dict.get(f"{t_b}_{f_b}")
+                        if br:
+                            r_val = br.get('r_pu') if r_val is None else r_val
+                            x_val = br.get('x_pu') if x_val is None else x_val
+                            b_val = br.get('b_pu', 0.0) if b_val is None else b_val
+
+                    tr_info = {
+                        'from_bus': f_b,
+                        'to_bus': t_b,
+                        'tap': tap,
+                        'r_pu': r_val,
+                        'x_pu': x_val,
+                        'b_pu': b_val if b_val is not None else 0.0,
+                    }
+                    trans_dict[f"{f_b}_{t_b}"] = tr_info
+                    trans_dict[f"{t_b}_{f_b}"] = tr_info
+                    trans_dict[(f_b, t_b)] = tr_info
+                    trans_dict[(t_b, f_b)] = tr_info
+
+        # Also check if branch sheet has a tap column indicating in-line transformers
+        if 'branch' in sheet_names_lower:
+            df_br = pd.read_excel(xl, sheet_name=sheet_names_lower['branch'])
+            if not df_br.empty and len(df_br.columns) >= 2:
+                from_col = next((c for c in df_br.columns if 'from' in c.lower()), df_br.columns[0])
+                to_col = next((c for c in df_br.columns if 'to' in c.lower()), df_br.columns[1])
+                tap_col = next((c for c in df_br.columns if 'tap' in c.lower() or 'ratio' in c.lower()), None)
+                if tap_col:
+                    for _, row in df_br.iterrows():
+                        try:
+                            f_b = int(row[from_col])
+                            t_b = int(row[to_col])
+                            tap_val = float(row[tap_col]) if pd.notna(row[tap_col]) else 1.0
+                        except (ValueError, TypeError):
+                            continue
+                        if abs(tap_val - 1.0) > 1e-4 and f"{f_b}_{t_b}" not in trans_dict:
+                            br = branch_dict.get(f"{f_b}_{t_b}") or branch_dict.get(f"{t_b}_{f_b}")
+                            tr_info = {
+                                'from_bus': f_b,
+                                'to_bus': t_b,
+                                'tap': tap_val,
+                                'r_pu': br.get('r_pu') if br else None,
+                                'x_pu': br.get('x_pu') if br else None,
+                                'b_pu': br.get('b_pu', 0.0) if br else 0.0,
+                            }
+                            trans_dict[f"{f_b}_{t_b}"] = tr_info
+                            trans_dict[f"{t_b}_{f_b}"] = tr_info
+                            trans_dict[(f_b, t_b)] = tr_info
+                            trans_dict[(t_b, f_b)] = tr_info
 
         return {
             'sbase_mva': sbase,
@@ -234,8 +296,6 @@ class ExcelCaseImporter:
                 'sc' in str(g_info.get('label', '')).lower() or
                 '동기조상기' in str(g_info.get('label', ''))
             )
-            if b_num == 14 and not is_slack:
-                is_sc = True
             if is_sc:
                 excel_sc_buses.add(b_num)
 
@@ -301,6 +361,15 @@ class ExcelCaseImporter:
                             b = el_id_to_bus_num.get(other_id)
                             if b is not None and b not in conn_buses:
                                 conn_buses.append(b)
+
+                tr_s = str(tr.get('startElementId') or tr.get('start_element_id') or '')
+                tr_e = str(tr.get('endElementId') or tr.get('end_element_id') or '')
+                b_s = el_id_to_bus_num.get(tr_s)
+                b_e = el_id_to_bus_num.get(tr_e)
+                if b_s is not None and b_s not in conn_buses:
+                    conn_buses.append(b_s)
+                if b_e is not None and b_e not in conn_buses:
+                    conn_buses.append(b_e)
 
                 fb = conn_buses[0] if len(conn_buses) > 0 else None
                 tb = conn_buses[1] if len(conn_buses) > 1 else None
@@ -423,35 +492,76 @@ class ExcelCaseImporter:
                 tr_info = trans_dict.get(f"{fb}_{tb}") or trans_dict.get(f"{tb}_{fb}") or trans_dict.get((fb, tb))
                 br_info = branch_dict.get(f"{fb}_{tb}") or branch_dict.get(f"{tb}_{fb}") or branch_dict.get((fb, tb))
 
-                tap = tr_info['tap'] if tr_info else 1.0
-                r_val = br_info['r_pu'] if br_info else 0.0023
-                x_val = br_info['x_pu'] if br_info else 0.0839
-                b_val = br_info.get('b_pu', 0.0) if br_info else 0.0
+                r_val = None
+                x_val = None
+                b_val = 0.0
+                tap = 1.0
 
-                el['tapRatio'] = tap
-                el['tap'] = tap
-                el['rPu'] = r_val
-                el['xPu'] = x_val
-                el['bPu'] = b_val
-                if fb is not None and tb is not None:
-                    el['label'] = f"T {fb}-{tb} (Tap: {tap})"
-                applied_counts['transformer'] += 1
+                if tr_info:
+                    tap = tr_info.get('tap', 1.0)
+                    r_val = tr_info.get('r_pu')
+                    x_val = tr_info.get('x_pu')
+                    b_val = tr_info.get('b_pu', 0.0)
 
-                # Connecting lines to a transformer reflect the branch impedance
+                if r_val is None or x_val is None:
+                    if br_info:
+                        if r_val is None:
+                            r_val = br_info.get('r_pu')
+                        if x_val is None:
+                            x_val = br_info.get('x_pu')
+                        if b_val is None:
+                            b_val = br_info.get('b_pu', 0.0)
+
+                if r_val is not None and x_val is not None:
+                    el['parameterStatus'] = 'VALID'
+                    el['tapRatio'] = tap
+                    el['tap'] = tap
+                    el['rPu'] = r_val
+                    el['xPu'] = x_val
+                    el['bPu'] = b_val if b_val is not None else 0.0
+                    applied_counts['transformer'] += 1
+                else:
+                    el['parameterStatus'] = 'MISSING'
+                    el['tapRatio'] = tap if tr_info else None
+                    el['tap'] = tap if tr_info else None
+                    el['rPu'] = None
+                    el['xPu'] = None
+                    el['bPu'] = None
+
+                if tr_info:
+                    el['from_bus'] = tr_info['from_bus']
+                    el['to_bus'] = tr_info['to_bus']
+                    el['tapFromBus'] = tr_info['from_bus']
+                    el['tapToBus'] = tr_info['to_bus']
+                    fb_disp, tb_disp = tr_info['from_bus'], tr_info['to_bus']
+                else:
+                    el['from_bus'] = fb
+                    el['to_bus'] = tb
+                    el['tapFromBus'] = fb
+                    el['tapToBus'] = tb
+                    fb_disp, tb_disp = fb, tb
+
+                if fb_disp is not None and tb_disp is not None:
+                    if el.get('parameterStatus') == 'MISSING':
+                        el['label'] = f"T {fb_disp}-{tb_disp} (파라미터 누락)"
+                    else:
+                        el['label'] = f"T {fb_disp}-{tb_disp} (Tap: {tap})"
+
+                # Connecting lines to a transformer are physical leads, NOT separate transmission branches
                 for l in conn_lines:
-                    l['rPu'] = r_val
-                    l['xPu'] = x_val
-                    l['bPu'] = b_val
-                    l['tapRatio'] = tap
-                    l['tap'] = tap
-                    if fb is not None and tb is not None:
-                        l['label'] = f"Line {fb}-{tb} (T: {tap})"
-                    applied_counts['line'] += 1
+                    l['is_transformer_lead'] = True
+                    l['isTransformerLead'] = True
+                    l['rPu'] = 0.0
+                    l['xPu'] = 0.0
+                    l['bPu'] = 0.0
+                    l['tapRatio'] = 1.0
+                    other_id = l.get('startElementId') if str(l.get('endElementId')) == t_id else l.get('endElementId')
+                    l['label'] = f"Lead {other_id} ↔ {t_id}"
 
             # 5. Normal Line (not connected to a transformer)
             elif 'line' in el_type:
-                if str(el.get('id')) in trans_lead_line_ids:
-                    # Already updated via its transformer
+                if str(el.get('id')) in trans_lead_line_ids or el.get('is_transformer_lead') or el.get('isTransformerLead'):
+                    # Already processed as transformer lead line
                     continue
 
                 start_id, end_id = get_line_endpoints(el)
@@ -571,7 +681,8 @@ class ExcelCaseImporter:
                         fb, tb = int(m.group(1)), int(m.group(2))
 
                 br_info = branch_dict.get(f"{fb}_{tb}") or branch_dict.get(f"{tb}_{fb}") or branch_dict.get((fb, tb))
-                if br_info:
+                if br_info and br_info.get('r_pu') is not None and br_info.get('x_pu') is not None:
+                    el['parameterStatus'] = 'VALID'
                     el['rPu'] = br_info['r_pu']
                     el['xPu'] = br_info['x_pu']
                     el['bPu'] = br_info.get('b_pu', 0.0)
@@ -581,10 +692,17 @@ class ExcelCaseImporter:
                         el['isDoubleCircuit'] = True
                         el['label'] = f"Line {fb}-{tb} ({c_count}회선 병렬 등가)"
                     applied_counts['line'] += 1
+                else:
+                    el['parameterStatus'] = 'MISSING'
+                    el['rPu'] = None
+                    el['xPu'] = None
+                    el['bPu'] = None
+                    if fb is not None and tb is not None:
+                        el['label'] = f"Line {fb}-{tb} (파라미터 누락)"
 
                 # Check if this branch is also a transformer with off-nominal tap
                 tr_info = trans_dict.get(f"{fb}_{tb}") or trans_dict.get(f"{tb}_{fb}") or trans_dict.get((fb, tb))
-                if tr_info:
+                if tr_info and tr_info.get('tap') is not None:
                     el['tapRatio'] = tr_info['tap']
                     el['tap'] = tr_info['tap']
                     applied_counts['transformer'] += 1
@@ -773,6 +891,17 @@ class ExcelCaseImporter:
                             if b is not None and b not in conn_buses:
                                 conn_buses.append(b)
                                 all_trans_buses.add(int(b))
+
+                tr_s = str(tr.get('startElementId') or tr.get('start_element_id') or '')
+                tr_e = str(tr.get('endElementId') or tr.get('end_element_id') or '')
+                b_s = el_id_to_bus_num.get(tr_s)
+                b_e = el_id_to_bus_num.get(tr_e)
+                if b_s is not None and b_s not in conn_buses:
+                    conn_buses.append(b_s)
+                    all_trans_buses.add(int(b_s))
+                if b_e is not None and b_e not in conn_buses:
+                    conn_buses.append(b_e)
+                    all_trans_buses.add(int(b_e))
 
                 # If 2 or more buses connect to this transformer (e.g. multi-port tie transformers)
                 if len(conn_buses) >= 2:

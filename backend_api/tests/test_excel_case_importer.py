@@ -7,6 +7,7 @@ if backend_dir not in sys.path:
     sys.path.insert(0, backend_dir)
 
 from core.excel_case_importer import ExcelCaseImporter
+from core.power_flow_solver import PowerFlowSolver
 
 class TestExcelCaseImporter(unittest.TestCase):
     @classmethod
@@ -90,7 +91,6 @@ class TestExcelCaseImporter(unittest.TestCase):
 
         updated, summary = self.importer.apply_to_elements(dummy_elements, data)
         self.assertEqual(summary['applied_counts']['transformer'], 1)
-        self.assertEqual(summary['applied_counts']['line'], 2)
 
         trans_el = next(e for e in updated if e['id'] == 'transformer_43')
         self.assertAlmostEqual(trans_el['tapRatio'], 1.03)
@@ -99,16 +99,22 @@ class TestExcelCaseImporter(unittest.TestCase):
         self.assertIn('3-24', trans_el['label'])
 
         line1 = next(e for e in updated if e['id'] == 'L1')
-        self.assertAlmostEqual(line1['tapRatio'], 1.03)
-        self.assertAlmostEqual(line1['rPu'], 0.0023)
-        self.assertAlmostEqual(line1['xPu'], 0.0839)
-        self.assertIn('3-24', line1['label'])
+        self.assertTrue(line1.get('is_transformer_lead'))
+        self.assertEqual(line1.get('rPu'), 0.0)
 
         line2 = next(e for e in updated if e['id'] == 'L18')
-        self.assertAlmostEqual(line2['tapRatio'], 1.03)
-        self.assertAlmostEqual(line2['rPu'], 0.0023)
-        self.assertAlmostEqual(line2['xPu'], 0.0839)
-        self.assertIn('3-24', line2['label'])
+        self.assertTrue(line2.get('is_transformer_lead'))
+        self.assertEqual(line2.get('rPu'), 0.0)
+
+        # Solver must parse exactly ONE electrical branch (the transformer itself)
+        solver = PowerFlowSolver()
+        parsed = solver.parse_elements(updated)
+        self.assertEqual(len(parsed['branches']), 1)
+        br = parsed['branches'][0]
+        self.assertEqual({br['from_bus'], br['to_bus']}, {3, 24})
+        self.assertAlmostEqual(br['tap'], 1.03)
+        self.assertAlmostEqual(br['r_pu'], 0.0023)
+        self.assertAlmostEqual(br['x_pu'], 0.0839)
 
     def test_apply_to_generator_and_load_leads(self):
         if not os.path.exists(self.excel_path):

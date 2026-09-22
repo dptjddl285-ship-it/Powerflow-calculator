@@ -64,6 +64,29 @@ class PowerFlowSolver:
             return val / self.s_base
         return val
 
+    @staticmethod
+    def _extract_float(el: Dict[str, Any], *keys) -> Optional[float]:
+        """
+        Safely extracts a float value from dictionary 'el' using candidate keys.
+        Preserves 0.0 without falsy bug.
+        Returns None if key is absent, value is None, or value is NaN.
+        """
+        for k in keys:
+            if k in el and el[k] is not None:
+                v = el[k]
+                if isinstance(v, (int, float)):
+                    if isinstance(v, float) and np.isnan(v):
+                        continue
+                    return float(v)
+                if isinstance(v, str) and v.strip() != "":
+                    try:
+                        f = float(v)
+                        if not np.isnan(f):
+                            return f
+                    except ValueError:
+                        pass
+        return None
+
     def parse_elements(self, elements: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Parses canvas DrawingElement JSON list into structured buses, gens, loads, and branches.
@@ -72,6 +95,7 @@ class PowerFlowSolver:
         gens_by_bus: Dict[int, List[Dict[str, Any]]] = {}
         loads_by_bus: Dict[int, List[Dict[str, Any]]] = {}
         branches: List[Dict[str, Any]] = []
+        validation_errors: List[str] = []
 
         # 1. First pass: Collect all Bus elements
         for el in elements:
@@ -197,18 +221,6 @@ class PowerFlowSolver:
                             "q_pu": q_pu,
                         })
 
-        # Ensure Generator 14 (100 MW in IEEE 24 RTS / PSS/E) is present if missing on canvas diagram for 24-bus RTS case
-        if 14 in buses and len(buses) == 24 and 14 not in gens_by_bus:
-            buses_14_spec = str(buses[14].get("bus_type", "")).upper()
-            if buses_14_spec in ("2", "PV") or any("24" in str(b.get("label", "")) for b in buses.values()):
-                gens_by_bus.setdefault(14, []).append({
-                    "p_pu": 1.0,  # 100 MW
-                    "q_pu": 0.46019,
-                    "v_set": 1.0,
-                    "is_slack": False,
-                })
-                buses[14]["v_spec"] = 1.0
-
         # 3. Third pass: Collect Branches (Lines and Transformers)
         transformer_ids = {
             str(el.get("id", ""))
@@ -232,10 +244,15 @@ class PowerFlowSolver:
             if ("line" in el_type or "branch" in el_type) and not ("trans" in el_type):
                 start_id = str(el.get("startElementId") or el.get("start_element_id") or "")
                 end_id = str(el.get("endElementId") or el.get("end_element_id") or "")
+                conns = [str(c) for c in (el.get("connected_to") or [])]
                 label = str(el.get("label", ""))
 
                 # Skip feeder / lead lines wired to transformers, generators, or loads
                 if start_id in transformer_ids or end_id in transformer_ids:
+                    continue
+                if any(cid in transformer_ids for cid in conns):
+                    continue
+                if el.get("is_transformer_lead") or el.get("isTransformerLead"):
                     continue
                 if start_id in generator_ids or end_id in generator_ids:
                     continue
@@ -286,12 +303,39 @@ class PowerFlowSolver:
                 if fb is None or tb is None or fb == tb:
                     continue
 
-                r_pu = float(el.get("rPu") or el.get("r_pu") or 0.01)
-                x_pu = float(el.get("xPu") or el.get("x_pu") or 0.05)
-                b_pu = float(el.get("bPu") or el.get("b_pu") or 0.0)
-                tap = float(el.get("tapRatio") or el.get("tap_ratio") or 1.0)
-                if abs(x_pu) < 1e-5:
-                    x_pu = 0.05
+                param_status = str(el.get("parameterStatus") or el.get("parameter_status") or "").upper()
+                if param_status == "MISSING":
+                    validation_errors.append(
+                        f"Missing electrical parameters (R/X) for branch between Bus {fb} and Bus {tb} in Excel dataset."
+                    )
+                    continue
+
+                r_pu = self._extract_float(el, "rPu", "r_pu")
+                x_pu = self._extract_float(el, "xPu", "x_pu")
+                b_pu = self._extract_float(el, "bPu", "b_pu")
+                if b_pu is None:
+                    b_pu = 0.0
+                tap = self._extract_float(el, "tapRatio", "tap_ratio", "tap")
+                if tap is None:
+                    tap = 1.0
+
+                if r_pu is None or x_pu is None:
+                    validation_errors.append(
+                        f"Missing electrical parameters (R/X) for branch between Bus {fb} and Bus {tb} in Excel dataset."
+                    )
+                    continue
+
+                if abs(r_pu) < 1e-9 and abs(x_pu) < 1e-9:
+                    validation_errors.append(
+                        f"Branch between Bus {fb} and Bus {tb} has zero series impedance (R=0, X=0). Non-zero impedance required for power flow calculation."
+                    )
+                    continue
+
+                if tap <= 0:
+                    validation_errors.append(
+                        f"Branch between Bus {fb} and Bus {tb} has invalid tap ratio ({tap}). Tap must be positive."
+                    )
+                    continue
 
                 branches.append({
                     "from_bus": fb,
@@ -304,102 +348,128 @@ class PowerFlowSolver:
                 })
 
         # 3.2 Second: Process Transformers
-        # Note: 3 physical transformer units on the diagram expand to 5 electrical branches:
-        # - TR connected to Bus 11 with Buses 9 & 10 -> branches (9, 11) & (10, 11)
-        # - TR connected to Bus 12 with Buses 9 & 10 -> branches (9, 12) & (10, 12)
-        # - TR connected between Bus 3 and Bus 24   -> branch (3, 24)
+        # Treat each transformer component as a 2-port component connecting Bus A and Bus B.
         for el in elements:
             el_type = str(el.get("type", "")).lower()
             if "trans" in el_type:
                 el_id = str(el.get("id", ""))
                 label = str(el.get("label", ""))
 
-                connected_buses = set()
-                for other in elements:
-                    if "line" in str(other.get("type", "")).lower():
-                        s_id = str(other.get("startElementId") or other.get("start_element_id") or "")
-                        e_id = str(other.get("endElementId") or other.get("end_element_id") or "")
-                        conns = [str(c) for c in (other.get("connected_to") or [])]
-                        if s_id == el_id and e_id:
-                            b_cand = el_id_to_bus.get(e_id) or self._extract_bus_number("", e_id)
-                            if b_cand in buses:
-                                connected_buses.add(b_cand)
-                        elif e_id == el_id and s_id:
-                            b_cand = el_id_to_bus.get(s_id) or self._extract_bus_number("", s_id)
-                            if b_cand in buses:
-                                connected_buses.add(b_cand)
-                        elif el_id in conns:
-                            for c in conns:
-                                if c != el_id:
-                                    b_cand = el_id_to_bus.get(c) or self._extract_bus_number("", c)
-                                    if b_cand in buses:
-                                        connected_buses.add(b_cand)
-
-                pairs = []
-                high_buses = [b for b in connected_buses if b >= 11]
-                low_buses = [b for b in connected_buses if b < 11]
-
-                if high_buses and low_buses:
-                    for h in high_buses:
-                        for l in low_buses:
-                            pairs.append((min(l, h), max(l, h)))
-                elif len(connected_buses) >= 2:
-                    c_list = sorted(connected_buses)
-                    pairs.append((c_list[0], c_list[1]))
+                # Check explicit from_bus / to_bus / tapFromBus
+                fb = el.get("from_bus") or el.get("fromBus") or el.get("tapFromBus") or el.get("tap_from_bus")
+                tb = el.get("to_bus") or el.get("toBus") or el.get("tapToBus") or el.get("tap_to_bus")
+                if fb is not None and tb is not None and int(fb) in buses and int(tb) in buses and int(fb) != int(tb):
+                    fb = int(fb)
+                    tb = int(tb)
                 else:
-                    # Fallback by label or ID string pattern
-                    m = re.search(r'(\d+)\s*[-~_↔]\s*(\d+)', f"{label} {el_id}")
-                    if m:
-                        c1, c2 = int(m.group(1)), int(m.group(2))
-                        if c1 in buses and c2 in buses:
-                            pairs.append((min(c1, c2), max(c1, c2)))
-                    elif "11" in f"{label} {el_id}":
-                        pairs.extend([(9, 11), (10, 11)])
-                    elif "12" in f"{label} {el_id}":
-                        pairs.extend([(9, 12), (10, 12)])
-                    elif "24" in f"{label} {el_id}" or "3" in f"{label} {el_id}":
-                        pairs.append((3, 24))
+                    fb = None
+                    tb = None
 
-                for fb, tb in pairs:
-                    pair = (min(fb, tb), max(fb, tb))
-                    # Avoid duplicate branches
-                    if any((min(b["from_bus"], b["to_bus"]) == pair[0] and max(b["from_bus"], b["to_bus"]) == pair[1]) for b in branches):
-                        continue
+                # If not explicit, trace connected buses via lead lines or direct endpoints
+                if fb is None or tb is None:
+                    connected_buses = []
+                    # Direct endpoints
+                    s_id = str(el.get("startElementId") or el.get("start_element_id") or "")
+                    e_id = str(el.get("endElementId") or el.get("end_element_id") or "")
+                    if s_id in el_id_to_bus and el_id_to_bus[s_id] not in connected_buses:
+                        connected_buses.append(el_id_to_bus[s_id])
+                    if e_id in el_id_to_bus and el_id_to_bus[e_id] not in connected_buses:
+                        connected_buses.append(el_id_to_bus[e_id])
 
-                    r_pu = float(el.get("rPu") or el.get("r_pu") or 0.0023)
-                    x_pu = float(el.get("xPu") or el.get("x_pu") or 0.0839)
-                    b_pu = float(el.get("bPu") or el.get("b_pu") or 0.0)
-                    tap = float(el.get("tapRatio") or el.get("tap_ratio") or 1.0)
-                    if tap <= 0:
-                        tap = 1.0
+                    # Connecting lead lines
+                    for other in elements:
+                        if "line" in str(other.get("type", "")).lower():
+                            os_id = str(other.get("startElementId") or other.get("start_element_id") or "")
+                            oe_id = str(other.get("endElementId") or other.get("end_element_id") or "")
+                            conns = [str(c) for c in (other.get("connected_to") or [])]
+                            other_bus = None
+                            if os_id == el_id and oe_id:
+                                other_bus = el_id_to_bus.get(oe_id) or self._extract_bus_number("", oe_id)
+                            elif oe_id == el_id and os_id:
+                                other_bus = el_id_to_bus.get(os_id) or self._extract_bus_number("", os_id)
+                            elif el_id in conns:
+                                for c in conns:
+                                    if c != el_id:
+                                        other_bus = el_id_to_bus.get(c) or self._extract_bus_number("", c)
+                                        if other_bus in buses:
+                                            break
+                            if other_bus in buses and other_bus not in connected_buses:
+                                connected_buses.append(other_bus)
 
-                    branches.append({
-                        "from_bus": min(fb, tb),
-                        "to_bus": max(fb, tb),
-                        "r_pu": r_pu,
-                        "x_pu": x_pu,
-                        "b_pu": b_pu,
-                        "tap": tap,
-                        "label": f"T {min(fb, tb)}-{max(fb, tb)} (Tap: {tap})",
-                    })
+                    if len(connected_buses) >= 2:
+                        fb, tb = connected_buses[0], connected_buses[1]
+                    else:
+                        # Fallback by label or ID string pattern (e.g. "T 3-24", "TR_3_24")
+                        m = re.search(r'(\d+)\s*[-~_↔]\s*(\d+)', f"{label} {el_id}")
+                        if m:
+                            c1, c2 = int(m.group(1)), int(m.group(2))
+                            if c1 in buses and c2 in buses and c1 != c2:
+                                fb, tb = c1, c2
 
-        # Handle 4 double-circuit corridors (15-21, 18-21, 19-20, 20-23) if only single line was drawn in 24-bus case
-        if len(buses) == 24:
-            double_circuit_pairs = {(15, 21), (18, 21), (19, 20), (20, 23)}
-            for br in branches:
-                pair = (min(br["from_bus"], br["to_bus"]), max(br["from_bus"], br["to_bus"]))
-                if pair in double_circuit_pairs:
-                    cnt = sum(1 for b in branches if (min(b["from_bus"], b["to_bus"]), max(b["from_bus"], b["to_bus"])) == pair)
-                    if cnt == 1 and br["r_pu"] > 0.004:
-                        br["r_pu"] /= 2.0
-                        br["x_pu"] /= 2.0
-                        br["b_pu"] *= 2.0
+                if fb is None or tb is None or fb == tb:
+                    continue
+
+                param_status = str(el.get("parameterStatus") or el.get("parameter_status") or "").upper()
+                if param_status == "MISSING":
+                    validation_errors.append(
+                        f"Missing electrical parameters (R/X) for transformer between Bus {fb} and Bus {tb} in Excel dataset."
+                    )
+                    continue
+
+                r_pu = self._extract_float(el, "rPu", "r_pu")
+                x_pu = self._extract_float(el, "xPu", "x_pu")
+                b_pu = self._extract_float(el, "bPu", "b_pu")
+                if b_pu is None:
+                    b_pu = 0.0
+                tap = self._extract_float(el, "tapRatio", "tap_ratio", "tap")
+                if tap is None:
+                    tap = 1.0
+
+                if r_pu is None or x_pu is None:
+                    validation_errors.append(
+                        f"Missing electrical parameters (R/X) for transformer between Bus {fb} and Bus {tb} in Excel dataset."
+                    )
+                    continue
+
+                if abs(r_pu) < 1e-9 and abs(x_pu) < 1e-9:
+                    validation_errors.append(
+                        f"Transformer between Bus {fb} and Bus {tb} has zero series impedance (R=0, X=0). Non-zero impedance required for power flow calculation."
+                    )
+                    continue
+
+                if tap <= 0:
+                    validation_errors.append(
+                        f"Transformer between Bus {fb} and Bus {tb} has invalid tap ratio ({tap}). Tap must be positive."
+                    )
+                    continue
+
+                # If tapFromBus is specified, orient fb to be the tapped bus
+                tap_from = el.get("tapFromBus") or el.get("tap_from_bus")
+                if tap_from is not None:
+                    try:
+                        tap_from = int(tap_from)
+                        if tap_from == tb:
+                            fb, tb = tb, fb
+                    except (ValueError, TypeError):
+                        pass
+
+                branches.append({
+                    "from_bus": fb,
+                    "to_bus": tb,
+                    "r_pu": r_pu,
+                    "x_pu": x_pu,
+                    "b_pu": b_pu,
+                    "tap": tap,
+                    "is_transformer": True,
+                    "label": label or f"T {fb}-{tb} (Tap: {tap})",
+                })
 
         return {
             "buses": buses,
             "gens_by_bus": gens_by_bus,
             "loads_by_bus": loads_by_bus,
             "branches": branches,
+            "validation_errors": validation_errors,
         }
 
     def solve(self, elements: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -407,6 +477,15 @@ class PowerFlowSolver:
         Main entry point: Solves power flow for elements and returns formatted results.
         """
         parsed = self.parse_elements(elements)
+        validation_errors = parsed.get("validation_errors", [])
+        if validation_errors:
+            return {
+                "status": "error",
+                "converged": False,
+                "message": "\n".join(validation_errors),
+                "validation_errors": validation_errors,
+            }
+
         buses_dict = parsed["buses"]
         gens_by_bus = parsed["gens_by_bus"]
         loads_by_bus = parsed["loads_by_bus"]
