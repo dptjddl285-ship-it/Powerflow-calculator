@@ -341,6 +341,24 @@ class ObjectReviewGateEvaluator {
     }
     return ids;
   }
+
+  static String getSpeechBubbleText({
+    required int suspiciousCount,
+    required int unresolvedCandidatesCount,
+    String? selectedLabel,
+  }) {
+    if (suspiciousCount > 0) {
+      final label = selectedLabel ?? '첫 번째 검토 항목';
+      return "객체를 확인해봤어요. 대부분 괜찮고, 제가 다시 봤으면 하는 것부터 보여드릴게요.\n"
+          "도면에 표시된 $label의 AI 판단 근거를 확인한 뒤 [맞음] 또는 [수정]을 선택해주세요.";
+    }
+    if (unresolvedCandidatesCount > 0) {
+      return "의심 객체는 모두 확인되었으나, 누락 후보 $unresolvedCandidatesCount건이 남아 있어요.\n"
+          "목록에서 복구하거나 문제없음 처리 후 [객체 검수 완료]를 눌러주세요.";
+    }
+    return "도면 내 모든 객체 인식이 정상적으로 완료되었어요!\n"
+        "검토가 필요한 항목이 없으니 아래의 [객체 검수 완료]를 눌러 다음 단계로 가면 돼요.";
+  }
 }
 
 class CompletenessReviewResult {

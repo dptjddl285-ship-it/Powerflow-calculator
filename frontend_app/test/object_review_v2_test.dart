@@ -706,5 +706,43 @@ void main() {
 
       expect(selectedCandidate?.id, 'candidate_xfmr_1');
     });
+
+    // -------------------------------------------------------------
+    // TEST K: Object Review Lensy stage guidance / speech bubble has 0 legacy approval phrases and uses V2 [맞음] / [수정]
+    // -------------------------------------------------------------
+    test('TEST K: Object Review Lensy speech bubble text has 0 legacy phrases and uses V2 [맞음] / [수정]', () {
+      // 1. Suspicious objects present
+      final suspSpeech = ObjectReviewGateEvaluator.getSpeechBubbleText(
+        suspiciousCount: 1,
+        unresolvedCandidatesCount: 0,
+        selectedLabel: '변압기 (TR1)',
+      );
+      expect(suspSpeech.contains('승인하고 다음'), isFalse);
+      expect(suspSpeech.contains('정상 객체 일괄 승인'), isFalse);
+      expect(suspSpeech.contains('정상 객체 전체 승인'), isFalse);
+      expect(suspSpeech.contains('[맞음]'), isTrue);
+      expect(suspSpeech.contains('[수정]'), isTrue);
+      expect(suspSpeech.contains('변압기 (TR1)'), isTrue);
+
+      // 2. Unresolved candidates present
+      final candSpeech = ObjectReviewGateEvaluator.getSpeechBubbleText(
+        suspiciousCount: 0,
+        unresolvedCandidatesCount: 2,
+      );
+      expect(candSpeech.contains('승인하고 다음'), isFalse);
+      expect(candSpeech.contains('정상 객체 일괄 승인'), isFalse);
+      expect(candSpeech.contains('정상 객체 전체 승인'), isFalse);
+      expect(candSpeech.contains('[객체 검수 완료]'), isTrue);
+
+      // 3. Clean state
+      final cleanSpeech = ObjectReviewGateEvaluator.getSpeechBubbleText(
+        suspiciousCount: 0,
+        unresolvedCandidatesCount: 0,
+      );
+      expect(cleanSpeech.contains('승인하고 다음'), isFalse);
+      expect(cleanSpeech.contains('정상 객체 일괄 승인'), isFalse);
+      expect(cleanSpeech.contains('정상 객체 전체 승인'), isFalse);
+      expect(cleanSpeech.contains('[객체 검수 완료]'), isTrue);
+    });
   });
 }

@@ -213,10 +213,6 @@ def sanitize_and_validate_agent_response(
     else:
         res["highlight_target"] = None
 
-    # In OBJECT_REVIEW stage, suppress legacy object_approve / object_batch_approve highlight targets
-    if (stage or "").upper() == "OBJECT_REVIEW" and res.get("highlight_target") in ("object_approve", "object_batch_approve"):
-        res["highlight_target"] = None
-
     if res.get("action_id") == "RUN_POWER_FLOW" and not res.get("highlight_target"):
         res["highlight_target"] = "final_powerflow"
 

@@ -1430,19 +1430,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     }
     switch (_currentPhase) {
       case ReviewPhase.objectReview:
-        final suspCount = _objSuspiciousCount;
-        if (suspCount > 0) {
-          final selectedLabel =
-              _selectedNode?.effectiveDisplayLabel ?? '첫 번째 검토 항목';
-          return "객체를 확인해봤어요. 대부분 괜찮고, 제가 다시 봤으면 하는 것부터 보여드릴게요.\n"
-              "$selectedLabel의 검토 이유를 확인한 뒤 [승인하고 다음] 또는 [제외]를 선택해주세요.";
-        }
-        if (_unresolvedCandidatesCount > 0) {
-          return "의심 객체는 모두 확인되었으나, 누락 후보 $_unresolvedCandidatesCount건이 남아 있어요.\n"
-              "목록에서 복구하거나 문제없음 처리 후 [객체 검수 완료]를 눌러주세요.";
-        }
-        return "도면 내 모든 객체 인식이 정상적으로 완료되었어요!\n"
-            "검토가 필요한 항목이 없으니 아래의 [객체 검수 완료]를 눌러 다음 단계로 가면 돼요.";
+        return ObjectReviewGateEvaluator.getSpeechBubbleText(
+          suspiciousCount: _objSuspiciousCount,
+          unresolvedCandidatesCount: _unresolvedCandidatesCount,
+          selectedLabel: _selectedNode?.effectiveDisplayLabel,
+        );
       case ReviewPhase.busMappingReview:
         final hasBusIssues = _busUncertainCount > 0 || _duplicateBusNumbers.isNotEmpty;
         if (!hasBusIssues) {
