@@ -30,6 +30,83 @@ ReviewLineItem makeConnectionLine({
 
 void main() {
   group('Connection Review V2 production evaluator', () {
+    test('AA-AE: production filters preserve empty results and clear stale selection', () {
+      final normalA = makeConnectionLine(id: 'normal_a');
+      final normalB = makeConnectionLine(id: 'normal_b');
+      final normalC = makeConnectionLine(id: 'normal_c');
+      final ambiguous = makeConnectionLine(
+        id: 'exception_1',
+        status: 'AMBIGUOUS',
+      );
+      final lines = [normalA, normalB, normalC, ambiguous];
+
+      expect(
+        ConnectionReviewGateEvaluator.filter(
+          lines,
+          status: ConnectionReviewGateEvaluator.filterAll,
+        ),
+        hasLength(4),
+      );
+      expect(
+        ConnectionReviewGateEvaluator.filter(
+          [normalA, normalB, normalC],
+          status: ConnectionReviewGateEvaluator.filterNeedsReview,
+        ),
+        isEmpty,
+      );
+      expect(
+        ConnectionReviewGateEvaluator.filter(
+          [normalA, normalB, normalC],
+          status: ConnectionReviewGateEvaluator.filterCrossing,
+        ),
+        isEmpty,
+      );
+      expect(
+        ConnectionReviewGateEvaluator.filter(
+          lines,
+          status: ConnectionReviewGateEvaluator.filterNeedsReview,
+        ),
+        [ambiguous],
+      );
+      expect(
+        ConnectionReviewGateEvaluator.selectedLineForFilter(
+          workingLines: lines,
+          status: ConnectionReviewGateEvaluator.filterNeedsReview,
+          selectedLine: normalA,
+        ),
+        isNull,
+      );
+      expect(
+        ConnectionReviewGateEvaluator.selectedLineForFilter(
+          workingLines: lines,
+          status: ConnectionReviewGateEvaluator.filterNeedsReview,
+          selectedLine: ambiguous,
+        ),
+        same(ambiguous),
+      );
+    });
+
+    test('COUNT: duplicate line/topology critical evidence counts once', () {
+      const Map<String, dynamic> shared = {
+        'id': 'shared_error',
+        'code': 'EXPLICIT_LINE_ERROR',
+        'severity': 'error',
+        'message': '동일한 결선 오류',
+      };
+      final line = makeConnectionLine(
+        id: 'line_shared',
+        issues: [shared],
+      );
+
+      expect(
+        ConnectionReviewGateEvaluator.criticalErrorCount(
+          workingLines: [line],
+          topologyIssues: [shared],
+        ),
+        1,
+      );
+    });
+
     test('A/F/O: clean DETECTED line is usable without approval', () {
       final lines = [makeConnectionLine()];
       expect(

@@ -67,7 +67,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   String _objSortOption = 'SEVERITY'; // SEVERITY, CONFIDENCE_ASC, ID_ASC
 
   String _connFilterStatus =
-      'ALL'; // ALL, AMBIGUOUS, AUTO_CONFIRMED, HUMAN_CONFIRMED, REJECTED, ERROR_ONLY
+      'ALL'; // ALL, NEEDS_REVIEW, CROSSING, REJECTED, ERROR_ONLY
   String _connSortOption = 'SEVERITY'; // SEVERITY, ID_ASC
   static const int _nodePageSize = 8;
   int _nodePage = 0;
@@ -274,7 +274,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   int get _lineRejectedCount =>
       _workingLines.where((l) => l.reviewStatus == 'REJECTED').length;
   int get _criticalIssuesCount =>
-      _topologyIssues.where(ConnectionReviewGateEvaluator.isCriticalIssue).length;
+      ConnectionReviewGateEvaluator.criticalErrorCount(
+        workingLines: _workingLines,
+        topologyIssues: _topologyIssues,
+      );
 
   List<ReviewLineItem> get _activeConnectionLines =>
       ConnectionReviewGateEvaluator.activeLines(_workingLines);
@@ -335,24 +338,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   // Filtered & Sorted Working Lines
   List<ReviewLineItem> get _filteredAndSortedWorkingLines {
-    List<ReviewLineItem> list = _connFilterStatus == 'REJECTED'
-        ? _workingLines.where((l) => l.reviewStatus == 'REJECTED').toList()
-        : _activeConnectionLines;
-
-    if (_connFilterStatus == 'AMBIGUOUS' ||
-        _connFilterStatus == 'NEEDS_REVIEW') {
-      list = list
-          .where(ConnectionReviewGateEvaluator.isExceptionLine)
-          .toList();
-    } else if (_connFilterStatus == 'CROSSING') {
-      list = list
-          .where(ConnectionReviewGateEvaluator.isUnresolvedCrossing)
-          .toList();
-    } else if (_connFilterStatus == 'ERROR_ONLY') {
-      list = list
-          .where(ConnectionReviewGateEvaluator.lineHasCriticalIssue)
-          .toList();
-    }
+    final list = ConnectionReviewGateEvaluator.filter(
+      _workingLines,
+      status: _connFilterStatus,
+    );
 
     if (_connSortOption == 'SEVERITY') {
       list.sort((a, b) {
@@ -586,7 +575,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _showAllLinesList = true;
         _showTopologyDetails = _topologyIssues.isNotEmpty;
         final issues = _filteredAndSortedWorkingLines;
-        _selectedLine = issues.isNotEmpty ? issues.first : _selectedLine;
+        _selectedLine = issues.isNotEmpty ? issues.first : null;
         _selectedNode = null;
       }
     });
@@ -4607,8 +4596,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   Widget _buildConnectionReviewV2SidePanel() {
     final active = _activeConnectionLines;
     final filtered = _filteredAndSortedWorkingLines;
-    final selected = _selectedLine;
-    final visible = filtered.isEmpty ? active : filtered;
+    final selected = ConnectionReviewGateEvaluator.selectedLineForFilter(
+      workingLines: _workingLines,
+      status: _connFilterStatus,
+      selectedLine: _selectedLine,
+    );
+    final visible = filtered;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -4657,19 +4650,19 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               '전체',
               active.length,
               const Color(0xFF475569),
-              'ALL',
+              ConnectionReviewGateEvaluator.filterAll,
             ),
             _buildFilterableConnStatBadge(
               '확인 필요',
               _connectionExceptionLines.length,
               const Color(0xFFD97706),
-              'NEEDS_REVIEW',
+              ConnectionReviewGateEvaluator.filterNeedsReview,
             ),
             _buildFilterableConnStatBadge(
               '교차',
               _connectionCrossingCount,
               const Color(0xFF9333EA),
-              'CROSSING',
+              ConnectionReviewGateEvaluator.filterCrossing,
             ),
           ],
         ),
@@ -4692,6 +4685,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               ),
             ),
           )
+        else if (visible.isEmpty)
+          _buildConnectionFilterEmptyState()
         else ...[
           const Text(
             '선로 선택',
@@ -4731,9 +4726,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             }).toList(),
           ),
           const SizedBox(height: 12),
-          if (selected != null && selected.reviewStatus != 'REJECTED')
-            _buildConnectionReviewV2Inspector(selected)
-          else if (selected != null)
+          if (selected != null)
             _buildConnectionReviewV2Inspector(selected)
           else
             _buildNoSelectionPrompt('결선'),
@@ -4741,6 +4734,26 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         const SizedBox(height: 12),
         _buildConnectionV2TopologySummary(),
       ],
+    );
+  }
+
+  Widget _buildConnectionFilterEmptyState() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+      ),
+      child: const Text(
+        '해당 조건의 결선이 없습니다.',
+        style: TextStyle(
+          color: Color(0xFF64748B),
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
     );
   }
 
@@ -8161,11 +8174,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         setState(() {
           _connFilterStatus = filterKey;
           _linePage = 0;
-          // Auto select first matching line
+          _selectedNode = null;
+          _selectedTopologyIssue = null;
+          // Select the first matching line, or clear stale inspector state
+          // when the selected filter has no results.
           final matches = _filteredAndSortedWorkingLines;
-          if (matches.isNotEmpty) {
-            _selectedLine = matches.first;
-          }
+          _selectedLine = matches.isNotEmpty ? matches.first : null;
         });
       },
       child: Container(

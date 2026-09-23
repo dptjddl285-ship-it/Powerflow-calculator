@@ -660,6 +660,9 @@ class ConnectionReviewGateEvaluator {
   static const noActiveLineMessage =
       '유효한 결선 선로가 없습니다. 결선 검출을 확인해주세요.';
   static const primaryActionLabel = '결선 검수 완료';
+  static const filterAll = 'ALL';
+  static const filterNeedsReview = 'NEEDS_REVIEW';
+  static const filterCrossing = 'CROSSING';
 
   static List<ReviewLineItem> activeLines(
     Iterable<ReviewLineItem> lines,
@@ -667,6 +670,66 @@ class ConnectionReviewGateEvaluator {
     return lines
         .where((line) => line.reviewStatus.toUpperCase() != 'REJECTED')
         .toList();
+  }
+
+  /// Production filter contract shared by the Connection V2 widget and tests.
+  /// Empty filtered results stay empty; callers must not fall back to ALL.
+  static List<ReviewLineItem> filter(
+    Iterable<ReviewLineItem> lines, {
+    String status = filterAll,
+  }) {
+    final normalized = status.toUpperCase();
+    if (normalized == 'REJECTED') {
+      return lines
+          .where((line) => line.reviewStatus.toUpperCase() == 'REJECTED')
+          .toList();
+    }
+
+    final active = activeLines(lines);
+    switch (normalized) {
+      case filterNeedsReview:
+      case 'AMBIGUOUS':
+        return active.where(isExceptionLine).toList();
+      case filterCrossing:
+        return active.where(isUnresolvedCrossing).toList();
+      case 'ERROR_ONLY':
+        return active.where(lineHasCriticalIssue).toList();
+      case 'DETECTED':
+        return active
+            .where((line) => line.reviewStatus.toUpperCase() == 'DETECTED')
+            .toList();
+      case 'AUTO_CONFIRMED':
+        return active
+            .where(
+              (line) =>
+                  line.reviewStatus.toUpperCase() == 'CONFIRMED' &&
+                  !line.source.contains('human'),
+            )
+            .toList();
+      case 'HUMAN_CONFIRMED':
+        return active
+            .where(
+              (line) =>
+                  line.reviewStatus.toUpperCase() == 'CONFIRMED' &&
+                  line.source.contains('human'),
+            )
+            .toList();
+      case filterAll:
+      default:
+        return active;
+    }
+  }
+
+  static ReviewLineItem? selectedLineForFilter({
+    required Iterable<ReviewLineItem> workingLines,
+    required String status,
+    ReviewLineItem? selectedLine,
+  }) {
+    if (selectedLine == null) return null;
+    final visible = filter(workingLines, status: status);
+    return visible.any((line) => line.lineId == selectedLine.lineId)
+        ? selectedLine
+        : null;
   }
 
   static bool isCriticalIssue(Map<String, dynamic> issue) {
@@ -686,6 +749,44 @@ class ConnectionReviewGateEvaluator {
 
   static bool lineHasCriticalIssue(ReviewLineItem line) {
     return _lineIssues(line).any(isCriticalIssue);
+  }
+
+  static String _criticalIssueIdentity(
+    Map<String, dynamic> issue, {
+    String fallback = '',
+  }) {
+    final code = issue['code']?.toString().trim() ?? '';
+    final message = issue['message']?.toString().trim() ?? '';
+    if (code.isNotEmpty || message.isNotEmpty) {
+      return 'evidence:$code:$message';
+    }
+    final id = issue['issue_id'] ?? issue['id'];
+    if (id != null && id.toString().trim().isNotEmpty) {
+      return 'id:${id.toString()}';
+    }
+    final lineId = issue['line_id'] ?? issue['lineId'];
+    if (lineId != null && lineId.toString().trim().isNotEmpty) {
+      return 'line:${lineId.toString()}';
+    }
+    return 'fallback:$fallback:${issue.toString()}';
+  }
+
+  static int criticalErrorCount({
+    required List<ReviewLineItem> workingLines,
+    List<Map<String, dynamic>> topologyIssues = const [],
+  }) {
+    final identities = <String>{};
+    for (final line in activeLines(workingLines)) {
+      for (final issue in _lineIssues(line).where(isCriticalIssue)) {
+        identities.add(
+          _criticalIssueIdentity(issue, fallback: line.lineId),
+        );
+      }
+    }
+    for (final issue in topologyIssues.where(isCriticalIssue)) {
+      identities.add(_criticalIssueIdentity(issue));
+    }
+    return identities.length;
   }
 
   static bool _containsCrossingKey(String key) {
@@ -774,11 +875,13 @@ class ConnectionReviewGateEvaluator {
       blockers.add('교차 여부 확인이 필요한 결선 $crossingCount건이 남아 있습니다.');
     }
 
-    final lineErrorCount = active.where(lineHasCriticalIssue).length;
-    final topologyErrorCount = topologyIssues.where(isCriticalIssue).length;
-    if (lineErrorCount + topologyErrorCount > 0) {
+    final criticalErrorCountValue = criticalErrorCount(
+      workingLines: workingLines,
+      topologyIssues: topologyIssues,
+    );
+    if (criticalErrorCountValue > 0) {
       blockers.add(
-        '전기적 연결 오류 ${lineErrorCount + topologyErrorCount}건을 해결해야 합니다.',
+        '전기적 연결 오류 $criticalErrorCountValue건을 해결해야 합니다.',
       );
     }
     return blockers;

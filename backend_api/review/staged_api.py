@@ -23,6 +23,11 @@ from core.bus_number_linker import (
     synchronize_node_and_line_ids,
 )
 from core.pipeline_policy import validate_graph
+from agent.connection_review_contract import (
+    active_connection_lines,
+    connection_blockers,
+    critical_connection_error_count,
+)
 from review.session_store import session_store
 from review.schemas import (
     AgentChatRequest,
@@ -615,6 +620,24 @@ async def review_verify_final_gate(request: VerifyFinalGateRequest):
                 "message": f"Document session '{request.document_id}' not found or expired",
             }
 
+        # Connection Review V2 is authoritative before any normalization or
+        # graph repair: raw line evidence must not be hidden by a clean graph.
+        raw_connection_blockers = connection_blockers(request.working_lines, [])
+        if raw_connection_blockers:
+            active_lines = active_connection_lines(request.working_lines)
+            critical_count = critical_connection_error_count(
+                active_lines,
+                [],
+            )
+            return {
+                "status": "success",
+                "gate_status": "BLOCKED",
+                "document_id": request.document_id,
+                "message": raw_connection_blockers[0],
+                "critical_issue_count": max(1, critical_count),
+                "issues": [],
+            }
+
         # 1. Check confirmed nodes (clean DETECTED are auto-confirmed)
         confirmed_nodes = []
         suspicious_nodes = []
@@ -638,46 +661,16 @@ async def review_verify_final_gate(request: VerifyFinalGateRequest):
                 "critical_issue_count": len(suspicious_nodes),
             }
 
-        # Connection Review V2 requires at least one usable connection. A
-        # document containing only rejected lines must not silently pass the
-        # connection gate with an empty accepted_lines collection.
-        active_lines = [
-            line
-            for line in request.working_lines
-            if str(line.get("review_status", "")).upper() != "REJECTED"
-        ]
-        if not active_lines:
-            return {
-                "status": "success",
-                "gate_status": "BLOCKED",
-                "document_id": request.document_id,
-                "message": "유효한 결선 선로가 없습니다. 결선 검출을 확인해주세요.",
-                "critical_issue_count": 1,
-                "issues": [],
-            }
-
         # 2. Check confirmed lines (clean DETECTED are auto-confirmed)
         accepted_lines = []
-        ambiguous_lines = []
         for l in request.working_lines:
             status = str(l.get("review_status", "")).upper()
             if status == "REJECTED":
                 continue
-            elif status == "AMBIGUOUS":
-                ambiguous_lines.append(l)
             else:
                 l_copy = dict(l)
                 l_copy["review_status"] = "CONFIRMED"
                 accepted_lines.append(l_copy)
-
-        if len(ambiguous_lines) > 0:
-            return {
-                "status": "success",
-                "gate_status": "BLOCKED",
-                "document_id": request.document_id,
-                "message": f"미해결 결선 오류 선로(AMBIGUOUS)가 {len(ambiguous_lines)}개 남아있습니다. (승인 또는 제외 필요)",
-                "critical_issue_count": len(ambiguous_lines),
-            }
 
         # 3. Synchronize IDs so bus_XX, gen_XX, load_XX match bus numbers 1:1!
         confirmed_nodes = propagate_bus_numbers_to_devices(confirmed_nodes, accepted_lines)

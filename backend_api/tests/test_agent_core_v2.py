@@ -45,6 +45,52 @@ from agent.providers import (
 )
 
 
+def _valid_final_gate_payload(
+    *,
+    first_status="DETECTED",
+    first_issues=None,
+    second_issues=None,
+    second_endpoints=None,
+):
+    nodes = [
+        {
+            "id": "bus_1",
+            "class": "bus",
+            "review_status": "CONFIRMED",
+            "bbox": [10, 10, 80, 10],
+        },
+        {
+            "id": "gen_1",
+            "class": "generator",
+            "review_status": "CONFIRMED",
+            "bbox": [10, 40, 20, 20],
+        },
+        {
+            "id": "load_1",
+            "class": "load",
+            "review_status": "CONFIRMED",
+            "bbox": [80, 40, 20, 20],
+        },
+    ]
+    lines = [
+        {
+            "line_id": "line_gen",
+            "connected_to": ["bus_1", "gen_1"],
+            "path": [[20, 15], [20, 40]],
+            "review_status": first_status,
+            "validation_issues": first_issues or [],
+        },
+        {
+            "line_id": "line_load",
+            "connected_to": second_endpoints or ["bus_1", "load_1"],
+            "path": [[80, 15], [90, 40]],
+            "review_status": "DETECTED",
+            "validation_issues": second_issues or [],
+        },
+    ]
+    return nodes, lines
+
+
 class AgentCoreV2Test(unittest.TestCase):
     def setUp(self):
         self.local_prov = LocalReviewAssistantProvider()
@@ -950,6 +996,139 @@ class AgentCoreV2Test(unittest.TestCase):
 
         self.assertEqual(result["gate_status"], "BLOCKED")
         self.assertIn("유효한 결선", result["message"])
+
+    def test_39_connection_final_gate_blocks_raw_line_error(self):
+        """TEST AF: raw line severity=error blocks before graph normalization."""
+        import asyncio
+        from review.schemas import VerifyFinalGateRequest
+        from review.staged_api import review_verify_final_gate
+
+        nodes, lines = _valid_final_gate_payload(
+            first_issues=[
+                {
+                    "id": "shared_line_error",
+                    "code": "EXPLICIT_LINE_ERROR",
+                    "severity": "error",
+                    "message": "명시적 선로 검증 오류",
+                }
+            ]
+        )
+        request = VerifyFinalGateRequest(
+            document_id="doc_conn_gate_line_error",
+            working_nodes=nodes,
+            working_lines=lines,
+        )
+        with patch(
+            "review.staged_api.session_store.get_session",
+            return_value=MagicMock(width=100, height=100),
+        ):
+            result = asyncio.run(review_verify_final_gate(request))
+
+        self.assertEqual(result["gate_status"], "BLOCKED")
+        self.assertIn("전기적 연결 오류", result["message"])
+
+    def test_40_connection_final_gate_warning_info_do_not_block(self):
+        """TEST AG: warning/info line evidence alone still reaches VERIFIED."""
+        import asyncio
+        from review.schemas import VerifyFinalGateRequest
+        from review.staged_api import review_verify_final_gate
+
+        nodes, lines = _valid_final_gate_payload(
+            first_issues=[{"id": "warn", "severity": "warning", "message": "간격 안내"}],
+            second_issues=[{"id": "info", "severity": "info", "message": "추적 정보"}],
+        )
+        request = VerifyFinalGateRequest(
+            document_id="doc_conn_gate_warning_info",
+            working_nodes=nodes,
+            working_lines=lines,
+        )
+        with patch(
+            "review.staged_api.session_store.get_session",
+            return_value=MagicMock(width=100, height=100),
+        ):
+            result = asyncio.run(review_verify_final_gate(request))
+
+        self.assertEqual(result["gate_status"], "VERIFIED")
+
+    def test_41_connection_final_gate_preserves_ambiguous_and_graph_blockers(self):
+        """TEST AH: AMBIGUOUS and later validate_graph errors remain blockers."""
+        import asyncio
+        from review.schemas import VerifyFinalGateRequest
+        from review.staged_api import review_verify_final_gate
+
+        nodes, ambiguous_lines = _valid_final_gate_payload(first_status="AMBIGUOUS")
+        ambiguous_request = VerifyFinalGateRequest(
+            document_id="doc_conn_gate_ambiguous",
+            working_nodes=nodes,
+            working_lines=ambiguous_lines,
+        )
+        nodes2, invalid_graph_lines = _valid_final_gate_payload(
+            second_endpoints=["bus_1", "missing_node"]
+        )
+        graph_request = VerifyFinalGateRequest(
+            document_id="doc_conn_gate_graph_error",
+            working_nodes=nodes2,
+            working_lines=invalid_graph_lines,
+        )
+        with patch(
+            "review.staged_api.session_store.get_session",
+            return_value=MagicMock(width=100, height=100),
+        ):
+            ambiguous_result = asyncio.run(
+                review_verify_final_gate(ambiguous_request)
+            )
+            graph_result = asyncio.run(review_verify_final_gate(graph_request))
+
+        self.assertEqual(ambiguous_result["gate_status"], "BLOCKED")
+        self.assertIn("불확실", ambiguous_result["message"])
+        self.assertEqual(graph_result["gate_status"], "BLOCKED")
+        self.assertGreater(graph_result["critical_issue_count"], 0)
+
+    def test_42_connection_error_count_deduplicates_line_and_topology_evidence(self):
+        """The same critical issue in both payloads counts once."""
+        shared = {
+            "id": "shared_error",
+            "code": "EXPLICIT_LINE_ERROR",
+            "severity": "error",
+            "message": "동일한 결선 오류",
+        }
+        result = self.local_prov.generate_proactive_summary(
+            document_id="doc_conn_duplicate_error",
+            stage="CONNECTION_REVIEW",
+            working_lines=[
+                {
+                    "line_id": "line_shared",
+                    "review_status": "DETECTED",
+                    "validation_issues": [shared],
+                }
+            ],
+            topology_issues=[shared],
+        )
+
+        self.assertEqual(result["evidence_summary"]["topology_error_count"], 1)
+        self.assertIn("전기 오류: **1건**", result["summary_text"])
+
+    def test_43_connection_final_gate_blocks_explicit_unresolved_crossing(self):
+        """Explicit crossing payloads block; no crossing detector is inferred."""
+        import asyncio
+        from review.schemas import VerifyFinalGateRequest
+        from review.staged_api import review_verify_final_gate
+
+        nodes, lines = _valid_final_gate_payload()
+        lines[0]["evidence"] = {"crossing_candidate": True}
+        request = VerifyFinalGateRequest(
+            document_id="doc_conn_gate_crossing",
+            working_nodes=nodes,
+            working_lines=lines,
+        )
+        with patch(
+            "review.staged_api.session_store.get_session",
+            return_value=MagicMock(width=100, height=100),
+        ):
+            result = asyncio.run(review_verify_final_gate(request))
+
+        self.assertEqual(result["gate_status"], "BLOCKED")
+        self.assertIn("교차", result["message"])
 
 
 if __name__ == "__main__":

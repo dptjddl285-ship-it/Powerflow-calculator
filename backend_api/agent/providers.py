@@ -52,9 +52,9 @@ from core.bus_review_contract import BUS_NO_ACTIVE_MESSAGE, evaluate_bus_mapping
 from .connection_review_contract import (
     CONNECTION_NO_ACTIVE_MESSAGE,
     active_connection_lines,
-    connection_blockers,
     connection_exception_line_ids,
     connection_has_blockers,
+    critical_connection_error_count,
     issue_identifier,
     is_error_issue,
     line_has_critical_issue,
@@ -160,8 +160,11 @@ def sanitize_and_validate_agent_response(
     miss_cnt = len([c for c in cands if str(c.get("status", "")).upper() == "OPEN"])
     active_lines = active_connection_lines(w_lines)
     amb_cnt = len([l for l in active_lines if str(l.get("review_status") or l.get("status", "")).upper() == "AMBIGUOUS"])
-    # topology_error_count only aggregates issues with severity == 'error'
+    # Connection error counts deduplicate the same evidence when it appears
+    # in both a line payload and topology_issues.
     err_cnt = len([i for i in issues if is_error_issue(i)])
+    if _is_connection_review_stage(stage):
+        err_cnt = critical_connection_error_count(active_lines, issues)
     line_error_cnt = len([l for l in active_lines if line_has_critical_issue(l)])
 
     bus_state = evaluate_bus_mapping(w_nodes) if _is_bus_mapping_stage(stage) else None
@@ -383,7 +386,10 @@ def sanitize_and_validate_agent_response(
             if not active_lines
             else "확인이 필요한 결선 예외를 표시했습니다. 정상 선로는 AI가 확인했으며, 표시된 예외만 확인해주세요."
         )
+        critical_count = critical_connection_error_count(active_lines, issues)
         res["summary_text"] = res["reply_ko"]
+        if critical_count:
+            res["summary_text"] += f"\n전기 오류: **{critical_count}건**"
     elif _is_connection_review_stage(stage) and not connection_blocked and not user_message:
         # Proactive clean summaries must not look like a human approval queue.
         res["decision"] = "PROCEED"
@@ -708,7 +714,7 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
 
             total_lines = len(active_lines)
             clean_lines = max(0, total_lines - len(exception_ids))
-            error_count = len(critical_topology) + len(critical_line_ids)
+            error_count = critical_connection_error_count(active_lines, issues)
             v2_lines = ["📊 **[AI 검토 현황 - 결선 검수]**"]
             v2_lines.append(f"• **전체 결선**: {total_lines}개 (정상 연결: **{clean_lines}개**)")
             v2_lines.append(f"• **확인 필요**: **{len(exception_ids)}건**")
@@ -1137,9 +1143,7 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
         elif _is_connection_review_stage(stage):
             active_lines = active_connection_lines(w_lines)
             exception_ids = connection_exception_line_ids(active_lines, issues)
-            error_count = len([i for i in issues if is_error_issue(i)]) + sum(
-                1 for line in active_lines if line_has_critical_issue(line)
-            )
+            error_count = critical_connection_error_count(active_lines, issues)
             reply = "🧭 **[다음 단계 진행 가이드 - ③ 결선 검수]:**\n"
             if not active_lines:
                 dec = "BLOCKED"
@@ -1405,7 +1409,17 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
             "total_lines": len(w_lines),
             "ambiguous_lines_count": len(ambiguous_lines),
             "ambiguous_lines": ambiguous_lines,
-            "topology_error_count": len([i for i in issues if str(i.get("severity", "")).lower() == "error"]),
+            "topology_error_count": (
+                critical_connection_error_count(w_lines, issues)
+                if _is_connection_review_stage(stage)
+                else len(
+                    [
+                        i
+                        for i in issues
+                        if str(i.get("severity", "")).lower() == "error"
+                    ]
+                )
+            ),
             "topology_errors": [i for i in issues if str(i.get("severity", "")).lower() == "error"],
             "topology_warning_count": len([i for i in issues if str(i.get("severity", "")).lower() != "error"]),
             "topology_warnings": [i for i in issues if str(i.get("severity", "")).lower() != "error"],

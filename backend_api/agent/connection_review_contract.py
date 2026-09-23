@@ -106,6 +106,43 @@ def issue_identifier(issue: Mapping[str, Any]) -> str:
     return ""
 
 
+def _critical_issue_identity(
+    issue: Mapping[str, Any],
+    *,
+    fallback: str = "",
+) -> str:
+    code = str(issue.get("code") or "").strip()
+    message = str(issue.get("message") or "").strip()
+    if code or message:
+        return f"evidence:{code}:{message}"
+    identifier = issue_identifier(issue)
+    if identifier:
+        return f"id:{identifier}"
+    line_id_value = issue.get("line_id", issue.get("lineId"))
+    if line_id_value is not None and str(line_id_value).strip():
+        return f"line:{line_id_value}"
+    return f"fallback:{fallback}:{sorted((str(key), str(value)) for key, value in issue.items())}"
+
+
+def critical_connection_error_count(
+    lines: Iterable[Mapping[str, Any]],
+    topology_issues: Iterable[Mapping[str, Any]],
+) -> int:
+    """Count unique critical evidence across line and topology payloads."""
+    identities: set[str] = set()
+    for line in active_connection_lines(lines):
+        current_line_id = line_id(line)
+        for issue in line_validation_issues(line):
+            if is_error_issue(issue):
+                identities.add(
+                    _critical_issue_identity(issue, fallback=current_line_id)
+                )
+    for issue in topology_issues:
+        if is_error_issue(issue):
+            identities.add(_critical_issue_identity(issue))
+    return len(identities)
+
+
 def issue_component_ids(issue: Mapping[str, Any]) -> set[str]:
     raw = issue.get("component_ids")
     if not isinstance(raw, (list, tuple, set)):
@@ -179,11 +216,11 @@ def connection_blockers(
     if crossing_count:
         blockers.append(f"교차 여부 확인이 필요한 선로 {crossing_count}개가 있습니다.")
 
-    critical_line_count = sum(1 for line in active if line_has_critical_issue(line))
-    critical_topology_count = sum(1 for issue in issues if is_error_issue(issue))
-    if critical_line_count or critical_topology_count:
-        total = max(critical_line_count, critical_topology_count)
-        blockers.append(f"전기적 연결 오류 {total}건을 해결해야 합니다.")
+    critical_error_count = critical_connection_error_count(active, issues)
+    if critical_error_count:
+        blockers.append(
+            f"전기적 연결 오류 {critical_error_count}건을 해결해야 합니다."
+        )
     return blockers
 
 
@@ -198,6 +235,7 @@ __all__ = [
     "CONNECTION_NO_ACTIVE_MESSAGE",
     "active_connection_lines",
     "connection_blockers",
+    "critical_connection_error_count",
     "connection_exception_line_ids",
     "connection_has_blockers",
     "crossing_is_resolved",
