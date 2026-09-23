@@ -108,6 +108,7 @@ python backend_api/tests/test_power_flow_solver.py
 | [`test_excel_case_importer.py`](backend_api/tests/test_excel_case_importer.py) | - PSSE / Matpower 표준 엑셀 시트 파싱 및 단위 정규화<br/>- 슬랙 모선 자동 탐색 및 동기조상기($P_g=0$) 등가 식별 | **Pass (6/6)** |
 | [`test_power_flow_solver.py`](backend_api/tests/test_power_flow_solver.py) | - 3-Bus 및 IEEE 24-bus RTS 계통에 대한 AC Newton-Raphson 수렴 검증<br/>- 모선 전압 크기/위상각 및 전력 수지 무결성 확인 | **Pass** |
 | [`test_excel_discrepancy_checker.py`](backend_api/tests/test_excel_discrepancy_checker.py) | - 도면 설비 vs 엑셀 설비 간 누락/초과 설비 분리 판별<br/>- 2-Port 변압기 및 계통 브랜치 연결 대조 검증 | **Pass (4/4)** |
+| [`test_excel_generator_auto_supplement.py`](backend_api/tests/test_excel_generator_auto_supplement.py) | - 모선 검증 게이트키퍼(Bus Validation Gatekeeper) 선행 및 모선 불일치 시 자동보완 원천 차단(ERROR)<br/>- 도면 미검출 발전기(`gen_auto_N`) 및 물리 인입선(`lead_gen_auto_N`) 자동 보완<br/>- 인입선의 전기적 브랜치($Y_{\text{bus}}$) 배제 및 선로 개수 불변성 검증<br/>- Load/Gen 독립성 보장 및 임의 모선(Bus 37) 비의존성 검증 | **Pass (10/10)** |
 
 ---
 
