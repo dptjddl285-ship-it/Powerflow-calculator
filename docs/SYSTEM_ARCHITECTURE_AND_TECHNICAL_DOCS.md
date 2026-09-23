@@ -12,7 +12,7 @@ PowerLens Pro는 설계 도면(이미지)에서 전력망 토폴로지를 추출
 
 ### 🎯 핵심 설계 원칙 (No-Hallucination & Reality-First)
 1. **정밀성과 투명성**: AI가 도면을 100% 완벽하게 인식할 수 없다는 현실을 인정하고, 4단계 검수 게이트(Gate)를 두어 사용자가 이상치와 결선을 직접 확인하고 수정할 수 있도록 지원합니다.
-2. **전기공학적 무결성**: 단순 그래픽 처리를 넘어 슬랙(Slack) 모선 식별, 동기조상기(P=0) 등가성, 2-Port 변압기 토폴로지 모델링, $\pi$-등가 선로 모델 등 실제 전력 계통 공학 규칙을 엄격히 적용합니다.
+2. **전기공학적 무결성**: 단순 그래픽 처리를 넘어 슬랙(Slack) 모선 식별, 명시적 메타데이터 기반 동기조상기(SC) 식별, 변압기 토폴로지 매핑, $\pi$-등가 선로 모델 등 실제 전력 계통 공학 규칙을 엄격히 적용합니다.
 3. **독립 실행 구조**: 외부 클라우드 DB에 의존하지 않고 로컬 세션 스토어(`session_store.py`)와 메모리 캐시를 기반으로 신속하게 동작하며, Gemini LLM은 원인 진단 및 보조 질의용으로 탑재되어 오프라인 환경에서도 규칙 기반(Rule-based) 폴백으로 완벽하게 자립 구동됩니다.
 
 ---
@@ -137,7 +137,7 @@ sequenceDiagram
     Server-->>Front: VerifiedSLD 확정 객체 반환
     User->>Front: 엑셀 계통 파일(.xlsx) 선택
     Front->>Server: POST /apply_excel_to_elements
-    Server->>CV: compare_elements_with_excel (동기조상기/변압기 등가 검증)
+    Server->>CV: compare_elements_with_excel (설비 제원 및 변압기 매핑 검증)
     alt 도면-엑셀 불일치 감지 시
         Server-->>Front: mismatch_report (is_matched: false) 반환
         Front->>Front: ExcelMismatchDialog 경고 팝업 표시
@@ -189,9 +189,9 @@ sequenceDiagram
   - 4순위: 1번 모선 존재 시 1번 모선
   - 5순위: 발전기가 존재하는 첫 번째 모선
   - 6순위: 전체 모선 중 첫 번째 모선 번호
-* **동기조상기(Synchronous Condenser) 상호 등가 인식**:
-  - IEEE 24 RTS 계통의 Bus 14 등 유효전력 출력이 0인 동기조상기($P_g = 0\text{ MW}$)가 도면상 부하(Load) 또는 커패시터 심볼로 작도된 경우, 이를 누락 발전기로 오경보하지 않고 상호 등가 매칭 처리.
-  - 중복 기기 자동 생성을 방지하고 `isSynchronousCondenser: True` 플래그 부여.
+* **명시적 동기조상기(Synchronous Condenser) 식별**:
+  - `Pg=0`이나 `Bus 14`, `PV 모선`이라는 조건만으로 자동 판정하지 않으며, 엑셀 및 도면의 타입 속성(`type == 'sc'`, `condenser`)이나 라벨(`SC_`, `동기조상기`), 명시적 속성(`isSynchronousCondenser`) 등 명확한 메타데이터 근거가 존재할 때만 동기조상기로 식별하고 `isSynchronousCondenser: True` 플래그를 부여.
+  - 도면상 부하(Load)와 발전기(Gen/SC)는 독립적인 설비로 엄격히 분리 취급되며, 부하 기호가 존재하더라도 엑셀 발전기/동기조상기를 임의로 대체 매칭하지 않고 누락 시 수리 제안(Repair Proposal)을 생성.
 * **발전기/부하 수리 제안(Repair Proposals) 및 사용자 승인(Apply/Reject) 게이트**:
   - 엑셀에는 존재하지만 도면에서 미검출된 발전기 및 부하 발견 시, **캔버스와 솔버를 절대로 임의 자동 변형하지 않음**.
   - `summary['repair_proposals']`에 수리 제안(`action: suggest_add`, `reason: EXCEL_EXISTS_VISION_MISSING`)을 생성하여 UI에 전달.
@@ -340,13 +340,13 @@ sequenceDiagram
 
 | 테스트 스위트 | 테스트 대상 파일 | 주요 검증 항목 | 결과 |
 | :--- | :--- | :--- | :---: |
-| **전기 파라미터 무결성 테스트** | `backend_api/tests/test_electrical_parameters_and_fallbacks.py` | 임의의 R/X/B fallback 배제, 제로 임피던스 $1/Z$ 발산 방지, 미정의 선로 사전 차단 | **Pass (12/12)** |
-| **일반화 회로 및 변압기 테스트** | `backend_api/tests/test_generalized_circuits_and_transformers.py` | 복회선 병렬 합성, 변압기 리드선 바이패스, 탭비 방향 보존 | **Pass (8/8)** |
-| **변압기 토폴로지 해석 테스트** | `backend_api/tests/test_transformer_topology_resolution.py` | 5개 변압기 브랜치(3-24, 9-11, 9-12, 10-11, 10-12) 매핑 및 $Y_{\text{bus}}$ 스탬핑 | **Pass (1/1)** |
+| **전기 파라미터 무결성 테스트** | `backend_api/tests/test_electrical_parameters_and_fallbacks.py` | 임의의 R/X/B fallback 배제, 제로 임피던스 $1/Z$ 발산 방지, 미정의 선로 사전 차단 | **Pass (10/10)** |
+| **일반화 회로 및 변압기 테스트** | `backend_api/tests/test_generalized_circuits_and_transformers.py` | 복회선 병렬 합성, 변압기 리드선 바이패스, 탭비 방향 보존 | **Pass (7/7)** |
+| **변압기 토폴로지 해석 테스트** | `backend_api/tests/test_transformer_topology_resolution.py` | 5개 변압기 브랜치(3-24, 9-11, 9-12, 10-11, 10-12) 매핑 및 $Y_{\text{bus}}$ 스탬핑 | **Pass (7/7)** |
 | **Excel 케이스 파서 테스트** | `backend_api/tests/test_excel_case_importer.py` | PSSE/Matpower 시트 파싱, 다중 Sbase(100/50/200/KV) 파싱, 슬랙 탐색 | **Pass (9/9)** |
 | **발전기/부하 수리 제안 검증** | `backend_api/tests/test_excel_generator_auto_supplement.py` | 도면 미검출 발전기/부하 수리제안 생성, 사용자 Apply/Reject 게이트, Bus/Line/Tr 자동생성 제외 | **Pass (10/10)** |
-| **Excel 불일치 검증기 단위 테스트** | `backend_api/tests/test_excel_discrepancy_checker.py` | 100% 일치 케이스 검증, 모선/선로 누락 감지, 동기조상기 부하 기호 등가 인식 | **Pass (4/4)** |
-| **AC Newton-Raphson Solver 검증** | `backend_api/tests/test_power_flow_solver.py` | IEEE 24 RTS 및 3-Bus 케이스에 대한 4회 반복 수렴 및 전력수지 보존 검증 | **Pass** |
+| **Excel 불일치 검증기 단위 테스트** | `backend_api/tests/test_excel_discrepancy_checker.py` | 100% 일치 케이스 검증, 모선/선로 누락 감지, 부하/발전기 독립성 및 누락 수리제안 검증 | **Pass (4/4)** |
+| **AC Newton-Raphson Solver 검증** | `backend_api/tests/test_power_flow_solver.py` | IEEE 24 RTS 및 3-Bus 케이스에 대한 4회 반복 수렴 및 전력수지 보존 검증 | **Pass (10/10)** |
 | **Flutter Web 프론트엔드 빌드** | `frontend_app/` | 다트 컴파일 오류 없는 프로덕션 웹 빌드 (`flutter build web`) | **Pass (Exit 0)** |
 
 ---

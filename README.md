@@ -68,7 +68,7 @@
 - **Phase 3 [③ 선로 결선 검수 (Connection Review)]**:
   - 픽셀 스켈레톤화 및 선로 추적(Line Tracing)으로 송전선로(Branch), 변압기, 인입선 결선 검수. 모호 결선(Ambiguous) 수동 교정 및 단선/고립 모선 토폴로지 검증.
 - **Phase 4 [④ 최종 확인 & 엑셀 대조 (Verified Final & Excel Cross-Check)]**:
-  - 무결점 `VerifiedSLD` 확정 요약 확인, 전력계통 엑셀 파일(.xlsx, .csv)과 도면 설비 제원(Bus/Branch/Gen/Load) 자동 교차 대조.
+  - 무결점 `VerifiedSLD` 확정 요약 확인, 전력계통 엑셀 파일(.xlsx)과 도면 설비 제원(Bus/Branch/Gen/Load) 자동 교차 대조.
   - 도면-엑셀 간 발전기/부하 불일치 발견 시 캔버스나 솔버를 임의 자동 변경하지 않고, 수리 제안(`repair_proposals`)을 엔지니어에게 표시하여 명시적 승인([Apply]) 시에만 반영. (※ 모선, 송전선로, 변압기는 절대로 자동 생성하지 않음).
   - 불일치 원인 분석 AI 진단 모달(`excel_discrepancy_agent.py`) 제공 후 캔버스 전송.
 
@@ -86,10 +86,10 @@
   - Zero Series Impedance ($R=0, X=0$) 감지 시 사전 검증을 통해 $1/Z$ 연산 발산을 원천 방지하고 명확한 에러 리포트 제공.
   - 도면 토폴로지는 100% 보존하면서 엑셀 미정의 선로에 대한 사전 시뮬레이션 차단(`MISSING` 상태) 구현.
   - 무손실 선로($R=0.0, X>0$) 및 $B=0.0$ 정상 수치를 왜곡 없이 보존 (Python Falsy 판정 버그 해결).
-- **일반화된 복회선(Double Circuit) & 2-Port 변압기 토폴로지**:
+- **일반화된 복회선(Double Circuit) & 변압기 토폴로지 매핑**:
   - 특정 계통/모선 번호 하드코딩 없이 복회선 병렬 등가 회로($Z_{eq} = 1/\sum (1/Z_k)$) 자동 합성.
-  - 변압기는 일반화된 2-Port 요소(`Bus A -> lead line -> Transformer -> lead line -> Bus B`)로 모델링하며, 물리 연결선(Lead line)은 토폴로지 전용 가상 선로(`is_transformer_lead: True`, $rPu=0, xPu=0$)로 식별하여 조류계산 시 일반 송전선로에서 제외(Bypass)함으로써 영임피던스 나눗셈($1/Z$) 발산 문제를 원천 차단.
-  - 양단 리드선 바이패스 후 최종 솔버에는 A-B 간 정확히 1개의 변압기 브랜치만 생성/투입되며, Excel 데이터를 R, X, B, tap ratio, tapFromBus(방향)의 유일한 Source of Truth로 사용하여 min/max 강제 정렬 없이 실제 탭 방향성을 완벽히 보존.
+  - Transformer 주변 인입선은 토폴로지 전용 가상 선로(`is_transformer_lead: True`, $rPu=0, xPu=0$)로 식별하여 조류계산 시 일반 송전선로에서 제외(Bypass)함으로써 영임피던스 나눗셈($1/Z$) 발산을 원천 차단.
+  - 각 Transformer element에 연결된 Bus 집합과 Excel transformer pair를 교차검증하여 하나 이상의 electrical_branches를 구성할 수 있으며(예: 서브스테이션 내 9-11, 10-11 등 다중 브랜치 매핑), 실제 R, X, B, tap ratio, tapFromBus(방향)는 synthesized electrical branch에 적용되고 인입선 자체는 Ybus branch로 사용하지 않음.
 - **표준 계통 자체 수치해석 검증**: PSS/E나 PowerWorld와의 직접 1:1 비교 대신, IEEE 24-bus RTS 표준 계통 입력 데이터에 대한 자체 AC Newton-Raphson 솔버 수렴성(**4회 반복**, 잔차 $4 \times 10^{-8}$)과 전력 수지 평형($\Delta P_{\text{balance}} = 0.0\text{ MW}$)의 물리적 무결성으로 검증.
 
 ### 5. 🎨 웹 기반 인터랙티브 CAD 편집 체계 (Flutter Web)
@@ -128,7 +128,7 @@ flowchart TB
     end
 
     subgraph Data ["Data Layer"]
-        Excel["PSSE / IEEE Case Files (.xlsx, .csv)"]
+        Excel["PSSE / IEEE Case Files (.xlsx)"]
         Diagram["Single-Line Diagram Images (.png, .jpg, .jpeg)"]
     end
 

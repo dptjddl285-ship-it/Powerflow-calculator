@@ -112,12 +112,12 @@ python backend_api/tests/test_power_flow_solver.py
 
 | 테스트 스위트 파일 | 핵심 검증 내용 | 통과 여부 |
 | :--- | :--- | :---: |
-| [`test_electrical_parameters_and_fallbacks.py`](backend_api/tests/test_electrical_parameters_and_fallbacks.py) | - 임의의 R/X/B 기본 fallback(`0.01`, `0.05`, `1.0` 등) 전면 제거 확인<br/>- 엑셀 미정의 선로에 대한 사전 시뮬레이션 차단(`MISSING` 상태 반환)<br/>- 무손실 선로($R=0.0, X>0$) 및 $B=0.0$ 정상 수치의 보존 검증<br/>- 직렬 제로 임피던스($R=0, X=0$) 진단 시 $1/Z$ 연산 발산 차단 확인 | **Pass (12/12)** |
-| [`test_generalized_circuits_and_transformers.py`](backend_api/tests/test_generalized_circuits_and_transformers.py) | - 모선 번호 하드코딩 없는 일반화된 복회선(Double Circuit) 병렬 합성<br/>- 변압기 물리 인입선(Lead line) 바이패스 및 2-Port 브랜치 합성 검증<br/>- 변압기 tap ratio 및 tapFromBus 방향 보존 검증 | **Pass (8/8)** |
-| [`test_transformer_topology_resolution.py`](backend_api/tests/test_transformer_topology_resolution.py) | - 서브스테이션 내 다중 변압기 브랜치 매핑 (3-24, 9-11, 9-12, 10-11, 10-12 총 5개 브랜치)<br/>- `electrical_branches` 단위 탭 방향성 및 $Y_{\text{bus}}$ 스탬핑 검증 | **Pass (1/1)** |
-| [`test_excel_case_importer.py`](backend_api/tests/test_excel_case_importer.py) | - PSSE / Matpower 표준 엑셀 시트 파싱 및 단위 정규화<br/>- 다중 스키마 `Sbase` 파싱(100, 50, 200 MVA, Key-Value 행, 기본값 폴백)<br/>- 슬랙 모선 자동 탐색 및 동기조상기($P_g=0$) 등가 식별 | **Pass (9/9)** |
-| [`test_power_flow_solver.py`](backend_api/tests/test_power_flow_solver.py) | - 3-Bus 및 IEEE 24-bus RTS 계통에 대한 AC Newton-Raphson 수렴 검증<br/>- 모선 전압 크기/위상각 및 전력 수지 무결성 확인 | **Pass** |
-| [`test_excel_discrepancy_checker.py`](backend_api/tests/test_excel_discrepancy_checker.py) | - 도면 설비 vs 엑셀 설비 간 누락/초과 설비 분리 판별<br/>- 2-Port 변압기 및 계통 브랜치 연결 대조 검증 | **Pass (4/4)** |
+| [`test_electrical_parameters_and_fallbacks.py`](backend_api/tests/test_electrical_parameters_and_fallbacks.py) | - 임의의 R/X/B 기본 fallback(`0.01`, `0.05`, `1.0` 등) 전면 제거 확인<br/>- 엑셀 미정의 선로에 대한 사전 시뮬레이션 차단(`MISSING` 상태 반환)<br/>- 무손실 선로($R=0.0, X>0$) 및 $B=0.0$ 정상 수치의 보존 검증<br/>- 직렬 제로 임피던스($R=0, X=0$) 진단 시 $1/Z$ 연산 발산 차단 확인 | **Pass (10/10)** |
+| [`test_generalized_circuits_and_transformers.py`](backend_api/tests/test_generalized_circuits_and_transformers.py) | - 모선 번호 하드코딩 없는 일반화된 복회선(Double Circuit) 병렬 합성<br/>- 변압기 물리 인입선(Lead line) 바이패스 및 2-Port 브랜치 합성 검증<br/>- 변압기 tap ratio 및 tapFromBus 방향 보존 검증 | **Pass (7/7)** |
+| [`test_transformer_topology_resolution.py`](backend_api/tests/test_transformer_topology_resolution.py) | - 서브스테이션 내 다중 변압기 브랜치 매핑 (3-24, 9-11, 9-12, 10-11, 10-12 총 5개 브랜치)<br/>- `electrical_branches` 단위 탭 방향성 및 $Y_{\text{bus}}$ 스탬핑 검증 | **Pass (7/7)** |
+| [`test_excel_case_importer.py`](backend_api/tests/test_excel_case_importer.py) | - PSSE / Matpower 표준 엑셀 시트 파싱 및 단위 정규화<br/>- 다중 스키마 `Sbase` 파싱(100, 50, 200 MVA, Key-Value 행, 기본값 폴백)<br/>- 슬랙 모선 자동 탐색 및 다중 스키마 제원 주입 검증 | **Pass (9/9)** |
+| [`test_power_flow_solver.py`](backend_api/tests/test_power_flow_solver.py) | - 3-Bus 및 IEEE 24-bus RTS 계통에 대한 AC Newton-Raphson 수렴 검증<br/>- 모선 전압 크기/위상각 및 전력 수지 무결성 확인 | **Pass (10/10)** |
+| [`test_excel_discrepancy_checker.py`](backend_api/tests/test_excel_discrepancy_checker.py) | - 도면 설비 vs 엑셀 설비 간 누락/초과 설비 분리 판별<br/>- 2-Port 변압기 및 계통 브랜치 연결 대조, 부하/발전기 독립성 검증 | **Pass (4/4)** |
 | [`test_excel_generator_auto_supplement.py`](backend_api/tests/test_excel_generator_auto_supplement.py) | - 모선 검증 게이트키퍼(Bus Validation Gatekeeper) 선행 및 모선 불일치 시 수리 제안 차단(ERROR)<br/>- 도면 미검출 발전기/부하에 대한 임의 자동 주입 배제 및 수리 제안(Repair Proposal) 생성 검증<br/>- 사용자의 명시적 승인(Apply) 시에만 설비 및 인입선 추가, 거절(Reject) 시 도면/솔버 100% 불변 검증<br/>- 모선, 선로, 변압기는 절대로 자동 생성하지 않는 무결성 검증<br/>- 승인된 인입선의 전기적 브랜치($Y_{\text{bus}}$) 배제 및 선로 개수 불변성 검증 | **Pass (10/10)** |
 
 ---
