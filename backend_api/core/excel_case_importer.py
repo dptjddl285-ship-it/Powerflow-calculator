@@ -278,22 +278,6 @@ class ExcelCaseImporter:
         sbase = float(excel_data.get('sbase_mva', 100.0))
 
         applied_counts = {'bus': 0, 'generator': 0, 'load': 0, 'line': 0, 'transformer': 0}
-        
-        # Identify Synchronous Condenser buses (P=0, SC, or Bus 14)
-        excel_sc_buses = set()
-        for b_str, g_info in gen_by_bus.items():
-            b_num = int(b_str)
-            pg = float(g_info.get('pg_pu', 0) or g_info.get('pg_mw', 0) or 0)
-            is_slack = bool(g_info.get('is_slack', False))
-            is_sc = (not is_slack) and (
-                bool(g_info.get('is_synchronous_condenser') or g_info.get('isSynchronousCondenser')) or
-                pg == 0.0 or
-                'sc' in str(g_info.get('type', '')).lower() or
-                'sc' in str(g_info.get('label', '')).lower() or
-                '동기조상기' in str(g_info.get('label', ''))
-            )
-            if is_sc:
-                excel_sc_buses.add(b_num)
 
         # Build ID lookup and type lookup
         el_by_id = {str(el.get('id')): el for el in elements if el.get('id') is not None}
@@ -468,13 +452,6 @@ class ExcelCaseImporter:
                     el['pPu'] = float(b_info.get('pload_pu', 0.0))
                     el['qPu'] = float(b_info.get('qload_pu', 0.0))
                     el['label'] = f"Load_{b_num}"
-                    if b_num in excel_sc_buses:
-                        g_info = gen_by_bus.get(str(b_num)) or gen_by_bus.get(b_num)
-                        if g_info:
-                            el['isSynchronousCondenser'] = True
-                            el['vPu'] = float(g_info.get('voltage_setpoint', 1.0))
-                            el['label'] = f"Load_{b_num} (SC 동기조상기)"
-                            applied_gen_buses.add(int(b_num))
                     applied_counts['load'] += 1
 
             # 4. Transformer
@@ -703,28 +680,73 @@ class ExcelCaseImporter:
                     el['tap'] = tr_info['tap']
                     applied_counts['transformer'] += 1
         # Ensure all generators from Excel exist in elements (e.g. Bus 14 missing on diagram)
+        added_auto_generators = []
         for b_str, g_info in gen_by_bus.items():
             b_num = int(b_str)
+            # Generator status check: if status is 0 (out of service), skip
+            if g_info.get('status') == 0:
+                continue
             if b_num not in applied_gen_buses:
                 target_bus_id = None
                 for bid, bno in el_id_to_bus_num.items():
                     if bno == b_num:
                         target_bus_id = bid
                         break
-                if target_bus_id:
-                    auto_gen = {
-                        'id': f"gen_auto_{b_num}",
-                        'type': 'generator',
-                        'parentBusId': target_bus_id,
-                        'bus_number': b_num,
-                        'isSlack': g_info['is_slack'],
-                        'pPu': g_info['pg_pu'],
-                        'qPu': g_info['qg_pu'],
-                        'vPu': g_info['voltage_setpoint'],
-                        'label': f"G_{b_num}" + (" (Slack)" if g_info['is_slack'] else ""),
-                    }
-                    elements.append(auto_gen)
-                    applied_counts['generator'] += 1
+                if not target_bus_id:
+                    continue
+
+                # Duplicate prevention check
+                already_exists = any(
+                    str(e.get('id')) == f"gen_auto_{b_num}" or
+                    (get_el_type(e) in ('generator', 'tool.generator') and (
+                        e.get('bus_number') == b_num or 
+                        str(e.get('parentBusId') or '') == str(target_bus_id)
+                    ))
+                    for e in elements
+                )
+                if already_exists:
+                    applied_gen_buses.add(b_num)
+                    continue
+
+                is_slack = bool(g_info.get('is_slack', False))
+                is_explicit_sc = bool(
+                    g_info.get('is_synchronous_condenser') or
+                    g_info.get('isSynchronousCondenser') or
+                    'condenser' in str(g_info.get('type', '')).lower() or
+                    str(g_info.get('type', '')).lower() == 'sc' or
+                    '동기조상기' in str(g_info.get('label', ''))
+                )
+                is_sc = (not is_slack) and is_explicit_sc
+
+                auto_gen = {
+                    'id': f"gen_auto_{b_num}",
+                    'type': 'generator',
+                    'parentBusId': target_bus_id,
+                    'bus_number': b_num,
+                    'isSlack': is_slack,
+                    'isSynchronousCondenser': is_sc,
+                    'pPu': float(g_info.get('pg_pu', 0.0)),
+                    'qPu': float(g_info.get('qg_pu', 0.0)),
+                    'vPu': float(g_info.get('voltage_setpoint', 1.0)),
+                    'label': f"G_{b_num}" + (" (Slack)" if is_slack else ""),
+                    'source': 'excel_auto',
+                }
+                elements.append(auto_gen)
+                applied_counts['generator'] += 1
+                applied_gen_buses.add(b_num)
+                added_auto_generators.append({
+                    'id': auto_gen['id'],
+                    'bus_number': b_num,
+                    'parent_bus_id': target_bus_id,
+                    'pg_mw': g_info.get('pg_mw', 0.0),
+                    'pg_pu': auto_gen['pPu'],
+                    'qg_mvar': g_info.get('qg_mvar', 0.0),
+                    'qg_pu': auto_gen['qPu'],
+                    'v_pu': auto_gen['vPu'],
+                    'is_slack': is_slack,
+                    'label': auto_gen['label'],
+                    'source': 'excel_auto',
+                })
 
         mismatch_report = self.compare_elements_with_excel(elements, excel_data)
 
@@ -733,6 +755,7 @@ class ExcelCaseImporter:
             'applied_counts': applied_counts,
             'total_elements_updated': sum(applied_counts.values()),
             'mismatch_report': mismatch_report,
+            'added_auto_generators': added_auto_generators,
         }
         return elements, summary
 
@@ -838,34 +861,6 @@ class ExcelCaseImporter:
             pair = tuple(sorted([fb, tb]))
             excel_branches.add(pair)
             excel_transformers.add(pair)
-
-        # Identify Synchronous Condensers (동기조상기, SC) in Excel
-        excel_sc_buses = set()
-        for b_str, g_info in excel_data.get('generators', {}).items():
-            b_num = int(b_str)
-            pg = float(g_info.get('pg_pu', 0) or g_info.get('pg_mw', 0) or 0)
-            is_slack = bool(g_info.get('is_slack', False))
-            is_sc = (not is_slack) and (
-                bool(g_info.get('is_synchronous_condenser') or g_info.get('isSynchronousCondenser')) or
-                pg == 0.0 or
-                'sc' in str(g_info.get('type', '')).lower() or
-                'sc' in str(g_info.get('label', '')).lower() or
-                '동기조상기' in str(g_info.get('label', ''))
-            )
-            if b_num == 14 and not is_slack:
-                is_sc = True
-            if is_sc:
-                excel_sc_buses.add(b_num)
-
-        # Synchronous Condenser Equivalence:
-        # In power system SLDs, synchronous condensers are often drawn using load symbols
-        # (or reactive compensators). If a bus has a load in the diagram and an SC in Excel,
-        # count the device as satisfying the synchronous condenser device requirement.
-        for sc_bus in excel_sc_buses:
-            if sc_bus in diagram_loads or sc_bus in diagram_gens:
-                diagram_gens.add(sc_bus)
-                if sc_bus not in excel_loads:
-                    diagram_loads.discard(sc_bus)
 
         # 5. Extract diagram branches (Lines between buses + Transformers)
         diagram_branches = set()

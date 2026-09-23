@@ -430,7 +430,9 @@ class _InspectorPanelState extends State<InspectorPanel> {
       typeIcon = Icons.horizontal_rule;
     } else if (e.type == Tool.generator) {
       typeColor = e.isSlack ? Colors.redAccent : Colors.green;
-      typeName = e.isSlack ? "슬랙 발전기 (Swing)" : "PV 발전기 (전압 제어)";
+      typeName = e.isSlack
+          ? "슬랙 발전기 (Swing)"
+          : (e.isAutoAddedFromExcel ? "PV 발전기 [Excel 보완]" : "PV 발전기 (전압 제어)");
       typeIcon = Icons.motion_photos_on;
     } else if (e.type == Tool.load) {
       typeColor = Colors.orange;

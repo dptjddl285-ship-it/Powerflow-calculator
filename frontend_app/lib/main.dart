@@ -2897,14 +2897,50 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         final res = jsonDecode(response.body);
         if (res['status'] == 'success' && res['elements'] is List) {
           final updatedList = res['elements'] as List;
+          final List<DrawingElement> newlyAddedGens = [];
           setState(() {
+            final existingIds = elements.map((e) => e.id).toSet();
             for (var updated in updatedList) {
               if (updated is! Map<String, dynamic>) continue;
               final id = updated['id']?.toString();
-              for (var e in elements) {
-                if (e.id == id) {
-                  e.updateFromJson(updated);
-                  break;
+              if (id == null) continue;
+              if (existingIds.contains(id)) {
+                for (var e in elements) {
+                  if (e.id == id) {
+                    e.updateFromJson(updated);
+                    break;
+                  }
+                }
+              } else {
+                // New element from backend (e.g. gen_auto_...)
+                final typeStr = updated['type']?.toString().toLowerCase() ?? '';
+                if (typeStr == 'generator' || typeStr == 'tool.generator') {
+                  final parentBusId = updated['parentBusId']?.toString();
+                  DrawingElement? parentBus;
+                  if (parentBusId != null) {
+                    for (var e in elements) {
+                      if (e.id == parentBusId && e.type == Tool.bus) {
+                        parentBus = e;
+                        break;
+                      }
+                    }
+                  }
+                  final bPos = parentBus?.position ?? Offset.zero;
+                  final gPos = parentBus != null ? Offset(bPos.dx, bPos.dy - 60) : Offset.zero;
+                  final newGenData = Map<String, dynamic>.from(updated);
+                  if (newGenData['position'] == null) {
+                    newGenData['position'] = {'dx': gPos.dx, 'dy': gPos.dy};
+                  }
+                  if (newGenData['width'] == null) {
+                    newGenData['width'] = 44.0;
+                  }
+                  if (newGenData['height'] == null) {
+                    newGenData['height'] = 44.0;
+                  }
+                  final newEl = DrawingElement.fromJson(newGenData);
+                  elements.add(newEl);
+                  existingIds.add(id);
+                  newlyAddedGens.add(newEl);
                 }
               }
             }
@@ -2913,9 +2949,27 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           final mismatchReport = (res['mismatch_report'] ?? summary['mismatch_report']) as Map<String, dynamic>?;
 
           if (mounted) {
+            if (newlyAddedGens.isNotEmpty) {
+              String msg;
+              if (newlyAddedGens.length == 1) {
+                final g = newlyAddedGens.first;
+                final bNum = _getBusNum(g.label.isNotEmpty ? g.label : (g.parentBusId ?? g.id));
+                final mw = (g.pPu * 100.0).toStringAsFixed(1).replaceAll(RegExp(r'\.0$'), '');
+                msg = "Excel 교차검증으로 도면에서 미검출된 발전기 1개를 자동 보완했습니다.\nBus $bNum: $mw MW";
+              } else {
+                msg = "도면에서 미검출된 발전기 ${newlyAddedGens.length}개를 Excel 데이터 기준으로 자동 보완했습니다.";
+              }
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(msg),
+                  backgroundColor: Colors.blue.shade700,
+                  duration: const Duration(seconds: 4),
+                ),
+              );
+            }
             if (mismatchReport != null && mismatchReport['is_matched'] == false) {
               _showMismatchDialog(mismatchReport, excelData);
-            } else {
+            } else if (newlyAddedGens.isEmpty) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
                   content: Text(
@@ -5523,7 +5577,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
             ),
           ),
           Positioned(
-            top: -18,
+            top: e.isAutoAddedFromExcel ? -28 : -18,
             child: RotatedBox(
               quarterTurns: counterQuarterTurns,
               child: Container(
@@ -5533,13 +5587,36 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                   borderRadius: BorderRadius.circular(3),
                   border: Border.all(color: isSelected ? const Color(0xFF2563EB) : Colors.black12),
                 ),
-                child: Text(
-                  e.label.isNotEmpty ? e.label : e.id,
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold, 
-                    color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF0F172A), 
-                    fontSize: 10,
-                  ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      e.label.isNotEmpty ? e.label : e.id,
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold, 
+                        color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF0F172A), 
+                        fontSize: 10,
+                      ),
+                    ),
+                    if (e.isAutoAddedFromExcel)
+                      Container(
+                        margin: const EdgeInsets.only(top: 1),
+                        padding: const EdgeInsets.symmetric(horizontal: 2.5, vertical: 0.5),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFEF3C7),
+                          borderRadius: BorderRadius.circular(2),
+                          border: Border.all(color: const Color(0xFFD97706), width: 0.5),
+                        ),
+                        child: const Text(
+                          "Excel 보완",
+                          style: TextStyle(
+                            fontSize: 7.5,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFFB45309),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               ),
             ),

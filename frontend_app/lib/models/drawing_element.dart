@@ -33,6 +33,10 @@ class DrawingElement {
   double tapRatio = 1.0;
   int? circuitCount;
   String? busType;
+  String? source;
+
+  bool get isAutoAddedFromExcel =>
+      source == 'excel_auto' || id.startsWith('gen_auto_');
 
   bool get isDoubleCircuit =>
       (circuitCount != null && circuitCount! > 1) ||
@@ -76,6 +80,7 @@ class DrawingElement {
     this.rawAiPath,
     this.circuitCount,
     this.busType,
+    this.source,
     this.isSynchronousCondenserExplicit,
   }) {
     if (type == Tool.generator && isSynchronousCondenserExplicit == null) {
@@ -108,6 +113,7 @@ class DrawingElement {
       rawAiPath: rawAiPath != null ? List.from(rawAiPath!) : null,
       circuitCount: circuitCount,
       busType: busType,
+      source: source,
     )
       ..showInfo = showInfo
       ..isSlack = isSlack
@@ -119,7 +125,8 @@ class DrawingElement {
       ..xPu = xPu
       ..bPu = bPu
       ..tapRatio = tapRatio
-      ..isSynchronousCondenserExplicit = isSynchronousCondenserExplicit;
+      ..isSynchronousCondenserExplicit = isSynchronousCondenserExplicit
+      ..source = source;
   }
 
   Map<String, dynamic> toJson() {
@@ -142,6 +149,7 @@ class DrawingElement {
       'tapRatio': tapRatio,
       'circuitCount': circuitCount,
       'bus_type': busType,
+      'source': source,
     };
   }
 
@@ -218,6 +226,9 @@ class DrawingElement {
     if (json.containsKey('endElementId') && json['endElementId'] != null) {
       endElementId = json['endElementId'].toString();
     }
+    if (json.containsKey('source') && json['source'] != null) {
+      source = json['source'].toString();
+    }
   }
 
   factory DrawingElement.fromJson(Map<String, dynamic> json) {
@@ -254,6 +265,7 @@ class DrawingElement {
       label: json['label']?.toString() ?? '',
       circuitCount: (json['circuitCount'] as num?)?.toInt(),
       busType: json['bus_type']?.toString(),
+      source: json['source']?.toString(),
     );
     el.updateFromJson(json);
     if (el.type == Tool.bus && el.width < el.height) {
