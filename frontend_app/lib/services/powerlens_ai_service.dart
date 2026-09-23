@@ -60,6 +60,21 @@ class PowerLensAIService extends ChangeNotifier {
   int _requestSerial = 0;
 
   String? _lastNotifiedStage;
+  String? get lastNotifiedStage => _lastNotifiedStage;
+
+  /// Prevent duplicate proactive summaries per (document_id, stage)
+  final Set<String> _requestedProactiveKeys = {};
+
+  bool shouldRequestProactive(String? documentId, String stage) {
+    final key = '${documentId ?? "no_doc"}_$stage';
+    if (_requestedProactiveKeys.contains(key)) return false;
+    _requestedProactiveKeys.add(key);
+    return true;
+  }
+
+  void clearProactiveKeys() {
+    _requestedProactiveKeys.clear();
+  }
 
   String _geminiStatus =
       'LOCAL_READY'; // 'CONNECTED' | 'LOCAL_FALLBACK' | 'LOCAL_READY'
@@ -220,6 +235,66 @@ class PowerLensAIService extends ChangeNotifier {
       }
     }
     return false;
+  }
+
+  /// Maps backend canonical action_id to Flutter PowerLensAppAction
+  PowerLensAppAction? mapBackendActionId(String? actionId) {
+    if (actionId == null || actionId.isEmpty) return null;
+    switch (actionId.toUpperCase()) {
+      case 'GO_HOME':
+        return PowerLensAppAction.goHome;
+      case 'OPEN_DIAGRAM_PICKER':
+        return PowerLensAppAction.triggerPhotoUpload;
+      case 'LOAD_SAMPLE_DIAGRAM':
+        return PowerLensAppAction.loadSampleDiagram;
+      case 'SHOW_REVIEW_ISSUES':
+        return PowerLensAppAction.showReviewIssues;
+      case 'COMPLETE_CURRENT_STAGE':
+        return PowerLensAppAction.goToNextStage;
+      case 'OPEN_EXCEL_PICKER':
+        return PowerLensAppAction.triggerExcelUpload;
+      case 'HANDOFF_TO_CANVAS':
+        return PowerLensAppAction.handoffToCanvas;
+      case 'RUN_POWER_FLOW':
+        return PowerLensAppAction.runPowerFlow;
+      case 'SHOW_POWER_FLOW_RESULTS':
+        return PowerLensAppAction.showPowerFlowResults;
+      case 'SHOW_FLOW_DIRECTION':
+        return PowerLensAppAction.showFlowDirection;
+      case 'HIDE_FLOW_DIRECTION':
+        return PowerLensAppAction.hideFlowDirection;
+      case 'SHOW_VALUE_LABELS':
+        return PowerLensAppAction.showValueLabels;
+      case 'HIDE_VALUE_LABELS':
+        return PowerLensAppAction.hideValueLabels;
+      case 'NO_ACTION':
+      default:
+        return null;
+    }
+  }
+
+  /// Safe Action Executor: Only dispatches when actionMode is 'EXECUTE'.
+  /// GUIDE, CONFIRM_REQUIRED, and NONE illuminate or inform without execution.
+  Future<bool> executeBackendAction({
+    required String? actionMode,
+    required String? actionId,
+    Map<String, dynamic>? actionParams,
+    String? highlightTarget,
+  }) async {
+    if (highlightTarget != null &&
+        highlightTarget.isNotEmpty &&
+        highlightTarget.toLowerCase() != 'null') {
+      triggerHighlight(highlightTarget);
+    }
+
+    if (actionMode != 'EXECUTE') {
+      return false;
+    }
+
+    final appAction = mapBackendActionId(actionId);
+    if (appAction == null) return false;
+
+    return await dispatchAction(appAction, actionParams);
   }
 
   String _normalizeQuery(String text) {
@@ -597,7 +672,7 @@ class PowerLensAIService extends ChangeNotifier {
 
   void notifyStageChange(PowerLensAssistantContext context) {
     final newStage = context.workflowStage;
-    if (_lastNotifiedStage == newStage) return;
+    if (!shouldRequestProactive(context.documentId, newStage)) return;
     _lastNotifiedStage = newStage;
 
     final proactiveText = _getStageProactiveText(context);
@@ -617,7 +692,7 @@ class PowerLensAIService extends ChangeNotifier {
   }
 
   void onStageChanged(String stage, [PowerLensAssistantContext? context]) {
-    if (_lastNotifiedStage == stage) return;
+    if (!shouldRequestProactive(context?.documentId, stage)) return;
     _lastNotifiedStage = stage;
 
     String? proactiveText;
@@ -686,51 +761,9 @@ class PowerLensAIService extends ChangeNotifier {
 
     var finalMascotState = 'idle';
     try {
-      // 1. Resolve and execute safe, explicit UI actions before asking the
-      // backend for an explanation. Compound display commands are executed in
-      // order, so "숫자는 치우고 흐름만 보여줘" updates both controls.
-      final intentActions = resolveIntentActions(trimmed, context);
       final fallbackHighlightTarget = determineTargetForContext(context, query: trimmed);
 
-      final uiExecutableActions = intentActions
-          .where((a) => a != PowerLensAppAction.explainCurrentStage)
-          .toList();
-
-      if (uiExecutableActions.isNotEmpty) {
-        final handledActions = <bool>[];
-        for (final action in uiExecutableActions) {
-          if (requestId != _requestSerial) return;
-          if (_isPointingAction(action)) {
-            _mascotState = 'speaking';
-            notifyListeners();
-          }
-          handledActions.add(await dispatchAction(action));
-        }
-        if (requestId != _requestSerial) return;
-
-        final replies = <String>[];
-        for (var i = 0; i < uiExecutableActions.length; i++) {
-          replies.add(
-            _getActionReply(uiExecutableActions[i], handledActions[i], context),
-          );
-        }
-        _messages.add(
-          PowerLensAIMessageItem(
-            id: 'ai_action_${DateTime.now().millisecondsSinceEpoch}',
-            sender: 'assistant',
-            text: replies.join(' '),
-            stage: context.workflowStage,
-            suggestedActions: _getQuickActions(context.workflowStage, context),
-            agentStatus: _geminiStatus,
-          ),
-        );
-        finalMascotState = handledActions.every((handled) => handled)
-            ? 'success'
-            : 'blocked';
-        return;
-      }
-
-      // 2. Open-ended questions use the backend's evidence-aware provider.
+      // 1. Semantic Routing First: Send query to backend Agent /review/agent_chat
       final uri = Uri.parse('$baseUrl/review/agent_chat');
       final payload = {
         'document_id': context.documentId,
@@ -756,9 +789,6 @@ class PowerLensAIService extends ChangeNotifier {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes));
-        // The staged review endpoint returns the assistant payload at the
-        // top level. Keep compatibility with older wrappers that used a
-        // nested `result` object.
         final rawResult = data is Map ? data['result'] : null;
         final result = rawResult is Map
             ? Map<String, dynamic>.from(rawResult)
@@ -769,7 +799,6 @@ class PowerLensAIService extends ChangeNotifier {
           result['reply_ko']?.toString() ?? '답변을 생성하지 못했습니다.',
         );
 
-        // Gemini LLM directly determines the exact UI widget to illuminate (highlight_target)
         final backendHighlight = result['highlight_target']?.toString();
         final effectiveHighlight = (backendHighlight != null &&
                 backendHighlight.isNotEmpty &&
@@ -783,6 +812,24 @@ class PowerLensAIService extends ChangeNotifier {
             replyKo += "\n\n✨ 지금 진행할 위치가 화면에서 반짝반짝 빛나고 있어요!";
           }
         }
+
+        final actionMode = result['action_mode']?.toString().toUpperCase() ?? 'NONE';
+        final actionId = result['action_id']?.toString();
+        final rawActionParams = result['action_params'];
+        final actionParams = rawActionParams is Map
+            ? Map<String, dynamic>.from(rawActionParams)
+            : null;
+
+        bool actionExecuted = false;
+        if (actionMode == 'EXECUTE') {
+          actionExecuted = await executeBackendAction(
+            actionMode: actionMode,
+            actionId: actionId,
+            actionParams: actionParams,
+            highlightTarget: effectiveHighlight,
+          );
+        }
+
         final agentStatus =
             result['agent_status']?.toString() ?? 'LOCAL_FALLBACK';
         final providerMode = result['provider_mode']?.toString().toLowerCase();
@@ -806,28 +853,23 @@ class PowerLensAIService extends ChangeNotifier {
             agentStatus: agentStatus,
           ),
         );
-        finalMascotState = 'speaking';
+        finalMascotState = (actionMode == 'EXECUTE' && actionExecuted)
+            ? 'success'
+            : 'speaking';
       } else {
-        _geminiStatus = 'LOCAL_FALLBACK';
-        _lastFailedQuery = trimmed;
-        _addLocalFallbackMessage(trimmed, context);
+        // Backend offline or non-200 -> Fall back to offline local keyword routing
+        await _executeOfflineFallback(trimmed, context, requestId, fallbackHighlightTarget);
         finalMascotState = 'blocked';
       }
     } on TimeoutException {
       if (requestId != _requestSerial) return;
-      _geminiStatus = 'LOCAL_FALLBACK';
-      _lastFailedQuery = trimmed;
-      _addLocalFallbackMessage(
-        '응답 시간이 길어졌어요. $trimmed',
-        context,
-        timeout: true,
-      );
+      final fallbackHighlightTarget = determineTargetForContext(context, query: trimmed);
+      await _executeOfflineFallback(trimmed, context, requestId, fallbackHighlightTarget, timeout: true);
       finalMascotState = 'blocked';
     } catch (_) {
       if (requestId != _requestSerial) return;
-      _geminiStatus = 'LOCAL_FALLBACK';
-      _lastFailedQuery = trimmed;
-      _addLocalFallbackMessage(trimmed, context);
+      final fallbackHighlightTarget = determineTargetForContext(context, query: trimmed);
+      await _executeOfflineFallback(trimmed, context, requestId, fallbackHighlightTarget);
       finalMascotState = 'blocked';
     } finally {
       // A stale response must never append a late answer or unlock a newer
@@ -851,6 +893,58 @@ class PowerLensAIService extends ChangeNotifier {
           );
         }
       }
+    }
+  }
+
+  Future<void> _executeOfflineFallback(
+    String trimmed,
+    PowerLensAssistantContext context,
+    int requestId,
+    String? fallbackHighlightTarget, {
+    bool timeout = false,
+  }) async {
+    _geminiStatus = 'LOCAL_FALLBACK';
+    _lastFailedQuery = trimmed;
+
+    final intentActions = resolveIntentActions(trimmed, context);
+    final uiExecutableActions = intentActions
+        .where((a) => a != PowerLensAppAction.explainCurrentStage)
+        .toList();
+
+    if (uiExecutableActions.isNotEmpty) {
+      final handledActions = <bool>[];
+      for (final action in uiExecutableActions) {
+        if (requestId != _requestSerial) return;
+        if (_isPointingAction(action)) {
+          _mascotState = 'speaking';
+          notifyListeners();
+        }
+        handledActions.add(await dispatchAction(action));
+      }
+      if (requestId != _requestSerial) return;
+
+      final replies = <String>[];
+      for (var i = 0; i < uiExecutableActions.length; i++) {
+        replies.add(
+          _getActionReply(uiExecutableActions[i], handledActions[i], context),
+        );
+      }
+      _messages.add(
+        PowerLensAIMessageItem(
+          id: 'ai_action_${DateTime.now().millisecondsSinceEpoch}',
+          sender: 'assistant',
+          text: replies.join(' '),
+          stage: context.workflowStage,
+          suggestedActions: _getQuickActions(context.workflowStage, context),
+          agentStatus: _geminiStatus,
+        ),
+      );
+    } else {
+      _addLocalFallbackMessage(
+        timeout ? '응답 시간이 길어졌어요. $trimmed' : trimmed,
+        context,
+        timeout: timeout,
+      );
     }
   }
 

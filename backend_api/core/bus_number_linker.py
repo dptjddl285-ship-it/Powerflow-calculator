@@ -26,6 +26,8 @@ try:
 except Exception:
     pass
 
+from core.model_config import get_gemini_model_name, get_gemini_fallback_model_name
+
 
 
 
@@ -33,7 +35,7 @@ def link_and_validate_bus_numbers(
     image_bytes: bytes,
     nodes: List[Dict[str, Any]],
     api_key: str = '',
-    model_name: str = 'gemini-3.8-flash',
+    model_name: Optional[str] = None,
     expected_bus_range: Optional[Tuple[int, int]] = None
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
@@ -124,8 +126,9 @@ def link_and_validate_bus_numbers(
         "Return strict JSON dictionary: {\"B1\": 1, \"B2\": 2, ...}"
     )
     
-    fallback_m = os.environ.get('GEMINI_FALLBACK_MODEL', 'gemini-3.5-flash-lite').strip() or 'gemini-3.5-flash-lite'
-    candidate_models = [model_name, fallback_m, 'gemini-3.5-flash-lite', 'gemini-3.5-flash']
+    active_model = model_name or get_gemini_model_name()
+    fallback_m = get_gemini_fallback_model_name()
+    candidate_models = [active_model, fallback_m]
     # Deduplicate preserving order
     seen_models = set()
     models_to_try = [m for m in candidate_models if not (m in seen_models or seen_models.add(m))]

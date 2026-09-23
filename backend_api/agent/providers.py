@@ -15,6 +15,12 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from .system_knowledge import POWERLENS_SYSTEM_KNOWLEDGE
+from .model_config import (
+    DEFAULT_GEMINI_PRIMARY_MODEL,
+    DEFAULT_GEMINI_FALLBACK_MODEL,
+    get_gemini_model_name,
+    get_gemini_fallback_model_name,
+)
 
 try:
     from pydantic import BaseModel
@@ -33,6 +39,182 @@ except ImportError:
 
 # Chat History Window Limit to prevent unbounded memory growth
 MAX_CHAT_HISTORY = 15
+
+from .system_knowledge import (
+    ALLOW_LISTED_ACTIONS,
+    CANONICAL_RESPONSE_SCHEMA,
+    VALID_ACTION_MODES,
+    VALID_DECISIONS,
+)
+
+
+def sanitize_and_validate_agent_response(
+    raw_dict: Dict[str, Any],
+    user_message: str = "",
+    working_nodes: Optional[List[Dict[str, Any]]] = None,
+    working_lines: Optional[List[Dict[str, Any]]] = None,
+    missing_candidates: Optional[List[Dict[str, Any]]] = None,
+    topology_issues: Optional[List[Dict[str, Any]]] = None,
+    stage: str = "HOME",
+) -> Dict[str, Any]:
+    """Sanitize and enforce the Canonical Agent Response Contract.
+
+    Guarantees:
+    1. decision is in {PROCEED, HUMAN_CHECK, BLOCK, UNKNOWN}.
+    2. action_mode is in {NONE, GUIDE, EXECUTE, CONFIRM_REQUIRED}.
+    3. action_mode is downgraded to GUIDE for location/how-to questions ('어디', '어떻게', etc.).
+    4. action_mode is set to CONFIRM_REQUIRED for circuit mutations ('바꿔', '변경', etc.).
+    5. action_id is restricted to ALLOW_LISTED_ACTIONS (or None).
+    6. focus_targets only contain real IDs existing in working_nodes, lines, candidates, or issues.
+    7. Fabricated targets (e.g. node_999, line_fake) are completely stripped.
+    8. evidence_summary is populated with verifiable counts.
+    """
+    res = dict(raw_dict)
+
+    # 1. Clean reply_ko
+    reply_ko = str(res.get("reply_ko") or res.get("reply") or res.get("summary_text") or "").strip()
+    if reply_ko.startswith("```json"):
+        reply_ko = reply_ko[7:]
+    elif reply_ko.startswith("```"):
+        reply_ko = reply_ko[3:]
+    if reply_ko.endswith("```"):
+        reply_ko = reply_ko[:-3]
+    reply_ko = reply_ko.strip()
+    if reply_ko.startswith("{") and reply_ko.endswith("}"):
+        try:
+            inner_json = json.loads(reply_ko)
+            if isinstance(inner_json, dict) and "reply_ko" in inner_json:
+                reply_ko = str(inner_json["reply_ko"]).strip()
+        except Exception:
+            pass
+    if not reply_ko:
+        reply_ko = "현재 상태를 확인했습니다. 안내가 필요하시면 언제든 질문해주세요."
+    res["reply_ko"] = reply_ko
+
+    # 2. Decision validation
+    dec = str(res.get("decision", "")).strip().upper()
+    if dec not in VALID_DECISIONS:
+        susp_cnt = len([n for n in (working_nodes or []) if (n.get("review_status") or n.get("status")) == "SUSPICIOUS"])
+        miss_cnt = len([c for c in (missing_candidates or []) if c.get("status") == "OPEN"])
+        amb_cnt = len([l for l in (working_lines or []) if (l.get("review_status") or l.get("status")) == "AMBIGUOUS"])
+        err_cnt = len(topology_issues or [])
+        if susp_cnt > 0 or miss_cnt > 0 or amb_cnt > 0 or err_cnt > 0:
+            dec = "HUMAN_CHECK"
+        else:
+            dec = "PROCEED"
+    res["decision"] = dec
+
+    # 3. Action Mode & Semantic Safety Guards
+    act_mode = str(res.get("action_mode", "")).strip().upper()
+    if act_mode not in VALID_ACTION_MODES:
+        act_mode = "NONE"
+
+    msg_norm = (user_message or "").strip().lower().replace(" ", "")
+
+    # Location / Guidance questions must be GUIDE, NEVER EXECUTE
+    is_where_how = any(k in msg_norm for k in [
+        "어디", "어떻게", "뭐눌러", "뭘눌러", "무엇을눌러", "어느버튼", "버튼어디", "위치", "방법", "어디야", "어디서", "어디에"
+    ])
+    # Circuit mutations must be CONFIRM_REQUIRED
+    is_mutation = any(k in msg_norm for k in [
+        "바꿔", "변경", "수정", "삭제", "지워", "바꿔줘", "바꿔라", "제외해", "추가해", "클래스변경"
+    ])
+
+    if is_mutation:
+        act_mode = "CONFIRM_REQUIRED"
+        res["action_id"] = None
+    elif is_where_how:
+        if act_mode == "EXECUTE":
+            act_mode = "GUIDE"
+
+    res["action_mode"] = act_mode
+
+    # 4. Action ID allow-listing
+    act_id = res.get("action_id")
+    if act_id and isinstance(act_id, str):
+        act_id_upper = act_id.strip().upper()
+        if act_id_upper in ALLOW_LISTED_ACTIONS:
+            res["action_id"] = act_id_upper
+        else:
+            res["action_id"] = None
+    else:
+        res["action_id"] = None
+
+    if res["action_mode"] in ("NONE", "CONFIRM_REQUIRED"):
+        res["action_id"] = None
+
+    if "action_params" not in res or not isinstance(res["action_params"], dict):
+        res["action_params"] = {}
+
+    # 5. Fabricated Target Prevention (Section 17)
+    valid_node_ids = {str(n.get("id")) for n in (working_nodes or []) if n.get("id")}
+    valid_line_ids = {str(l.get("line_id", l.get("id"))) for l in (working_lines or []) if l.get("line_id", l.get("id"))}
+    valid_cand_ids = {str(c.get("id", c.get("candidate_id"))) for c in (missing_candidates or []) if c.get("id", c.get("candidate_id"))}
+    valid_issue_ids = {str(i.get("id", i.get("line_id", i.get("node_id")))) for i in (topology_issues or []) if i.get("id", i.get("line_id", i.get("node_id")))}
+    valid_ui_ids = {
+        "object_batch_approve", "missing_candidates", "object_approve", "object_gate",
+        "bus_input", "bus_gate", "connection_priority", "connection_gate",
+        "final_excel_upload", "final_canvas_handoff", "final_powerflow", "result_flow",
+        "home_upload", "sample_diagram", "cad_excel_import", "canvas_node", "canvas_line"
+    }
+
+    raw_focus = res.get("focus_targets", [])
+    sanitized_focus = []
+    if isinstance(raw_focus, list):
+        for item in raw_focus:
+            if not isinstance(item, dict):
+                continue
+            tid = str(item.get("id", "")).strip()
+            ttype = str(item.get("type", "")).upper()
+            if not tid:
+                continue
+            if ttype == "OBJECT" and tid in valid_node_ids:
+                sanitized_focus.append(item)
+            elif ttype == "LINE" and tid in valid_line_ids:
+                sanitized_focus.append(item)
+            elif ttype in ("CANDIDATE", "MISSING") and tid in valid_cand_ids:
+                sanitized_focus.append(item)
+            elif ttype == "ISSUE" and tid in valid_issue_ids:
+                sanitized_focus.append(item)
+            elif ttype == "UI" and tid in valid_ui_ids:
+                sanitized_focus.append(item)
+            elif tid in valid_node_ids or tid in valid_line_ids or tid in valid_cand_ids or tid in valid_issue_ids:
+                sanitized_focus.append(item)
+            # Unknown / fabricated targets like node_999 or line_fake are dropped here!
+    res["focus_targets"] = sanitized_focus
+
+    # 6. Highlight target validation
+    hl = res.get("highlight_target")
+    if hl and isinstance(hl, str):
+        hl_clean = hl.strip()
+        if hl_clean.lower() in ("null", "none", ""):
+            res["highlight_target"] = None
+        else:
+            res["highlight_target"] = hl_clean
+    else:
+        res["highlight_target"] = None
+
+    if res.get("action_id") == "RUN_POWER_FLOW" and not res.get("highlight_target"):
+        res["highlight_target"] = "final_powerflow"
+
+    # 7. Evidence Summary computation
+    ev_summary = res.get("evidence_summary")
+    if not isinstance(ev_summary, dict) or not ev_summary:
+        susp_cnt = len([n for n in (working_nodes or []) if (n.get("review_status") or n.get("status")) == "SUSPICIOUS"])
+        miss_cnt = len([c for c in (missing_candidates or []) if c.get("status") == "OPEN"])
+        amb_cnt = len([l for l in (working_lines or []) if (l.get("review_status") or l.get("status")) == "AMBIGUOUS"])
+        err_cnt = len(topology_issues or [])
+        res["evidence_summary"] = {
+            "suspicious_count": susp_cnt,
+            "missing_count": miss_cnt,
+            "ambiguous_count": amb_cnt,
+            "topology_error_count": err_cnt,
+        }
+
+    # 8. Backward compatibility
+    if not res.get("summary_text"):
+        res["summary_text"] = res.get("reply_ko", "")
+    return res
 
 
 class ReviewAssistantProvider(abc.ABC):
@@ -111,233 +293,261 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
         topology_issues: Optional[List[Dict[str, Any]]] = None,
         app_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Generate proactive summary informing the user where to look first."""
+        """Generate proactive summary conforming to Canonical Agent Response Contract."""
         w_nodes = working_nodes or []
         w_lines = working_lines or []
         cands = missing_candidates or []
         issues = topology_issues or []
         stage_upper = (stage or "HOME").upper()
 
+        suspicious = [n for n in w_nodes if (n.get("review_status") or n.get("status")) == "SUSPICIOUS"]
+        open_cands = [c for c in cands if c.get("status") == "OPEN"]
+        ambiguous = [l for l in w_lines if (l.get("review_status") or l.get("status")) == "AMBIGUOUS"]
+        error_issues = [i for i in issues if i.get("severity") in ("error", "ERROR")]
+
+        priority_items: List[Dict[str, Any]] = []
+        focus_targets: List[Dict[str, Any]] = []
+        target: Optional[str] = None
+        decision = "PROCEED"
+        reply_ko = ""
+        summary_text = ""
+
         if stage_upper in ("HOME", "EMPTY_HOME"):
-            return {
-                "summary_text": (
-                    "👋 **안녕하세요! PowerLens AI입니다.** ✦\n\n"
-                    "단선도를 불러오시면 AI가 모선, 발전기, 변압기, 부하 설비와 연결 선로를 자동으로 인식하고 검수를 도와드립니다.\n\n"
-                    "💡 **시작 가이드:**\n"
-                    "• 중앙의 **[단선도 AI 분석 시작하기]** 버튼을 눌러 회로도 이미지를 선택하세요.\n"
-                    "• IEEE-24 표준 계통 샘플 도면으로 즉시 체험해볼 수도 있습니다."
-                ),
-                "total_count": 0,
-                "clean_count": 0,
-                "suspicious_count": 0,
-                "missing_count": 0,
-                "priority_items": [],
-                "provider_mode": self.provider_name,
-                "display_mode": self.display_mode_name,
-            }
+            target = "home_upload"
+            reply_ko = "단선도 도면을 불러오시면 AI가 객체와 결선 상태를 자동으로 인식하고 검수를 도와드립니다."
+            summary_text = (
+                "👋 **안녕하세요! PowerLens AI입니다.** ✦\n\n"
+                "단선도를 불러오시면 AI가 모선, 발전기, 변압기, 부하 설비와 연결 선로를 자동으로 인식하고 검수를 도와드립니다.\n\n"
+                "💡 **시작 가이드:**\n"
+                "• 중앙의 **[단선도 AI 분석 시작하기]** 버튼을 눌러 회로도 이미지를 선택하세요.\n"
+                "• IEEE-24 표준 계통 샘플 도면으로 즉시 체험해볼 수도 있습니다."
+            )
 
         elif stage_upper == "OBJECT_REVIEW":
             total_nodes = len(w_nodes)
-            suspicious = [n for n in w_nodes if n.get("review_status") == "SUSPICIOUS"]
-            open_cands = [c for c in cands if c.get("status") == "OPEN"]
             clean_count = total_nodes - len(suspicious)
 
-            priority_items = []
             for s in suspicious:
                 disp = s.get("display_label", s.get("id", "Unknown"))
                 reasons = s.get("review_reasons", ["신뢰도 경계"])
                 reason_str = reasons[0] if reasons else "신뢰도 경계"
-                priority_items.append({
+                item = {
                     "id": s.get("id", ""),
                     "display_label": disp,
                     "target_type": "NODE",
+                    "reason": reason_str,
+                    "severity": "WARNING",
+                }
+                priority_items.append(item)
+                focus_targets.append({
+                    "type": "OBJECT",
+                    "id": s.get("id", ""),
                     "reason": reason_str,
                     "severity": "WARNING",
                 })
 
             for c in open_cands:
                 cand_cls = str(c.get("suspected_class", "")).upper()
-                priority_items.append({
+                desc = c.get("description_ko", "미검출 설비 가능성")
+                item = {
                     "id": c.get("id", ""),
                     "display_label": f"{cand_cls} 누락 후보",
                     "target_type": "MISSING_CANDIDATE",
-                    "reason": c.get("description_ko", "미검출 설비 가능성"),
+                    "reason": desc,
+                    "severity": "ALERT",
+                }
+                priority_items.append(item)
+                focus_targets.append({
+                    "type": "CANDIDATE",
+                    "id": c.get("id", ""),
+                    "reason": desc,
                     "severity": "ALERT",
                 })
 
-            lines = [f"📊 **[AI 검토 우선순위 요약 - 객체 검수]**"]
+            lines = ["📊 **[AI 검토 우선순위 요약 - 객체 검수]**"]
             lines.append(f"• **총 검출 객체**: {total_nodes}개 (정상/자동승인 대상: **{clean_count}개**)")
             lines.append(f"• **우선 검토 대상**: **{len(suspicious)}건** (누락 의심 설비: **{len(open_cands)}건**)")
 
             if priority_items:
+                decision = "HUMAN_CHECK"
+                target = "object_approve" if suspicious else "missing_candidates"
+                total_susp = len(suspicious) + len(open_cands)
+                reply_ko = f"객체 분석이 끝났어요. 제가 한 번 더 확인했으면 하는 곳이 {total_susp}군데 있어요."
                 lines.append("\n🔍 **먼저 확인해야 할 항목:**")
                 for idx, p in enumerate(priority_items[:4]):
                     lines.append(f"  {idx + 1}) **{p['display_label']}** - {p['reason']}")
                 lines.append("\n💡 정상 객체는 `[정상 객체 일괄 승인]`으로 한 번에 통과시키고, 위 의심 항목만 검토하세요.")
             else:
+                decision = "PROCEED"
+                target = "object_gate"
+                reply_ko = "모든 객체가 정상으로 잘 감지되었습니다. 하단 [객체 검수 완료] 버튼을 눌러 다음 단계로 진행할 수 있습니다."
                 lines.append("\n✓ 모든 객체가 명확한 정상 심볼로 판정되었습니다. 하단 `[객체 검수 완료 (다음: 모선 매핑)]` 버튼을 눌러 진행할 수 있습니다.")
 
-            return {
-                "summary_text": "\n".join(lines),
-                "total_count": total_nodes,
-                "clean_count": clean_count,
-                "suspicious_count": len(suspicious),
-                "missing_count": len(open_cands),
-                "priority_items": priority_items,
-                "provider_mode": self.provider_name,
-                "display_mode": self.display_mode_name,
-            }
+            summary_text = "\n".join(lines)
 
         elif stage_upper == "BUS_MAPPING":
-            return {
-                "summary_text": (
-                    "📊 **[AI 검토 우선순위 요약 - 모선 번호 매핑]**\n\n"
-                    "도면에서 인식된 각 모선에 고유한 번호(예: Bus 1~24)가 바르게 부여되었는지 확인합니다.\n\n"
-                    "💡 **확인 사항:**\n"
-                    "• 번호가 지정되지 않은 미할당 모선이나 중복된 번호가 있는지 확인하세요.\n"
-                    "• 번호 부여가 끝나면 상단 **[다음: 결선 검수]** 단계로 이동하세요."
-                ),
-                "total_count": len(w_nodes),
-                "clean_count": len(w_nodes),
-                "suspicious_count": 0,
-                "missing_count": 0,
-                "priority_items": [],
-                "provider_mode": self.provider_name,
-                "display_mode": self.display_mode_name,
-            }
+            uncertain_buses = [n for n in w_nodes if (n.get("class") or n.get("className")) == "bus" and (n.get("bus_number") is None or n.get("bus_number_status") == "UNCERTAIN")]
+            if uncertain_buses:
+                decision = "HUMAN_CHECK"
+                target = "bus_input"
+                reply_ko = f"모선 번호 확인 단계입니다. 번호 확인이 필요한 모선이 {len(uncertain_buses)}개 있습니다."
+                for b in uncertain_buses:
+                    focus_targets.append({
+                        "type": "BUS",
+                        "id": b.get("id", ""),
+                        "reason": "모선 번호 미할당 또는 불확실",
+                        "severity": "REVIEW",
+                    })
+            else:
+                decision = "PROCEED"
+                target = "bus_gate"
+                reply_ko = "모든 모선에 고유 번호가 바르게 부여되었습니다. 결선 검수 단계로 진행할 수 있습니다."
+
+            summary_text = (
+                "📊 **[AI 검토 우선순위 요약 - 모선 번호 매핑]**\n\n"
+                "도면에서 인식된 각 모선에 고유한 번호(예: Bus 1~24)가 바르게 부여되었는지 확인합니다.\n\n"
+                "💡 **확인 사항:**\n"
+                "• 번호가 지정되지 않은 미할당 모선이나 중복된 번호가 있는지 확인하세요.\n"
+                "• 번호 부여가 끝나면 상단 **[다음: 결선 검수]** 단계로 이동하세요."
+            )
 
         elif stage_upper in ("CONNECTION_REVIEW", "LINE_REVIEW"):
             total_lines = len(w_lines)
-            ambiguous = [l for l in w_lines if l.get("review_status") == "AMBIGUOUS"]
-            error_issues = [i for i in issues if i.get("severity") == "error"]
             clean_lines = total_lines - len(ambiguous)
 
-            priority_items = []
             for a in ambiguous:
                 disp = a.get("display_label", a.get("line_id", "Unknown"))
                 conn_name = a.get("display_name", disp)
-                priority_items.append({
+                item = {
                     "id": a.get("line_id", a.get("id", "")),
                     "display_label": disp,
                     "target_type": "LINE",
                     "reason": f"결선 다중 모선 후보 ({conn_name})",
                     "severity": "WARNING",
+                }
+                priority_items.append(item)
+                focus_targets.append({
+                    "type": "LINE",
+                    "id": a.get("line_id", a.get("id", "")),
+                    "reason": f"결선 다중 모선 후보 ({conn_name})",
+                    "severity": "WARNING",
                 })
 
             for iss in error_issues:
-                priority_items.append({
-                    "id": iss.get("line_id", iss.get("node_id", "")),
+                iid = iss.get("line_id", iss.get("node_id", ""))
+                item = {
+                    "id": iid,
                     "display_label": iss.get("code", "GRAPH_ERROR"),
                     "target_type": "TOPOLOGY_ISSUE",
                     "reason": iss.get("message", "전기적 규칙 위반"),
                     "severity": "ERROR",
+                }
+                priority_items.append(item)
+                focus_targets.append({
+                    "type": "ISSUE",
+                    "id": iid,
+                    "reason": iss.get("message", "전기적 규칙 위반"),
+                    "severity": "ERROR",
                 })
 
-            lines = [f"📊 **[AI 검토 우선순위 요약 - 결선 검수]**"]
+            lines = ["📊 **[AI 검토 우선순위 요약 - 결선 검수]**"]
             lines.append(f"• **총 인식 선로**: {total_lines}개 (정상 결선: **{clean_lines}개**)")
             lines.append(f"• **결선 오류/검토 필요**: **{len(ambiguous)}건** (연결 구조 결함: **{len(error_issues)}건**)")
 
             if priority_items:
+                decision = "HUMAN_CHECK"
+                target = "connection_priority"
+                reply_ko = f"선로 연결 검토가 필요합니다. 검토 대상 선로 및 토폴로지 오류가 {len(priority_items)}건 감지되었습니다."
                 lines.append("\n🔗 **먼저 확인해야 할 결선:**")
                 for idx, p in enumerate(priority_items[:4]):
                     lines.append(f"  {idx + 1}) **{p['display_label']}** - {p['reason']}")
                 lines.append("\n💡 정상 선로는 `[정상 결선 일괄 승인]`으로 승인하고, 오류 선로만 [연결 대상 재지정]을 진행하세요.")
             else:
+                decision = "PROCEED"
+                target = "connection_gate"
+                reply_ko = "모든 결선이 전기적 무결성 검증을 통과했습니다. 회로도 검증 완료를 진행하세요."
                 lines.append("\n✓ 모든 결선이 전기적 무결성 검증을 통과했습니다. `[회로도 검증 완료]`를 진행하세요.")
 
-            return {
-                "summary_text": "\n".join(lines),
-                "total_count": total_lines,
-                "clean_count": clean_lines,
-                "suspicious_count": len(ambiguous),
-                "missing_count": len(error_issues),
-                "priority_items": priority_items,
-                "provider_mode": self.provider_name,
-                "display_mode": self.display_mode_name,
-            }
+            summary_text = "\n".join(lines)
 
-        elif stage_upper == "FINAL_REVIEW":
-            return {
-                "summary_text": (
-                    "🎉 **[회로도 최종 검증 완료]**\n\n"
-                    "단선도 토폴로지 검증이 통과되어 검증된 단선도(Verified SLD)가 생성되었습니다.\n\n"
-                    "💡 **다음 단계:**\n"
-                    "• 조류계산에 필요한 선로 임피던스(R, X, B)와 발전·부하 제원 엑셀(.xlsx)을 연결하세요.\n"
-                    "• **[캔버스 편집 화면으로 이동]** 버튼을 클릭하여 CAD에서 회로도를 확인할 수 있습니다."
-                ),
-                "total_count": len(w_nodes),
-                "clean_count": len(w_nodes),
-                "suspicious_count": 0,
-                "missing_count": 0,
-                "priority_items": [],
-                "provider_mode": self.provider_name,
-                "display_mode": self.display_mode_name,
-            }
+        elif stage_upper in ("FINAL_REVIEW", "FINAL", "VERIFIED_FINAL"):
+            decision = "PROCEED"
+            target = "final_excel_upload"
+            reply_ko = "단선도 토폴로지 검증이 통과되었습니다. 조류계산을 위한 계통 제원 엑셀(.xlsx)을 연결할 수 있습니다."
+            summary_text = (
+                "🎉 **[회로도 최종 검증 완료]**\n\n"
+                "단선도 토폴로지 검증이 통과되어 검증된 단선도(Verified SLD)가 생성되었습니다.\n\n"
+                "💡 **다음 단계:**\n"
+                "• 조류계산에 필요한 선로 임피던스(R, X, B)와 발전·부하 제원 엑셀(.xlsx)을 연결하세요.\n"
+                "• **[캔버스 편집 화면으로 이동]** 버튼을 클릭하여 CAD에서 회로도를 확인할 수 있습니다."
+            )
 
         elif stage_upper in ("CAD", "EXCEL_MAPPING"):
-            return {
-                "summary_text": (
-                    "⚡ **[CAD 캔버스 & 계통 제원]**\n\n"
-                    "단선도가 CAD 캔버스에 배치되었습니다.\n\n"
-                    "💡 **다음 단계:**\n"
-                    "• 상단 **[엑셀 가져오기]** 버튼을 눌러 계통 파라미터 엑셀 파일(예: case24_psse.xlsx)을 연결하세요.\n"
-                    "• 제원이 연결되면 파란색 **[조류계산 실행]** 버튼이 활성화됩니다."
-                ),
-                "total_count": len(w_nodes),
-                "clean_count": len(w_nodes),
-                "suspicious_count": 0,
-                "missing_count": 0,
-                "priority_items": [],
-                "provider_mode": self.provider_name,
-                "display_mode": self.display_mode_name,
-            }
+            decision = "PROCEED"
+            target = "cad_excel_import"
+            reply_ko = "단선도가 CAD 캔버스에 배치되었습니다. 상단 [엑셀 가져오기]로 제원을 연결하세요."
+            summary_text = (
+                "⚡ **[CAD 캔버스 & 계통 제원]**\n\n"
+                "단선도가 CAD 캔버스에 배치되었습니다.\n\n"
+                "💡 **다음 단계:**\n"
+                "• 상단 **[엑셀 가져오기]** 버튼을 눌러 계통 파라미터 엑셀 파일(예: case24_psse.xlsx)을 연결하세요.\n"
+                "• 제원이 연결되면 파란색 **[조류계산 실행]** 버튼이 활성화됩니다."
+            )
 
         elif stage_upper == "POWERFLOW_READY":
-            return {
-                "summary_text": (
-                    "🚀 **[조류계산 준비 완료]**\n\n"
-                    "모든 모선 토폴로지와 선로 제원이 연결되었습니다.\n\n"
-                    "💡 **다음 단계:**\n"
-                    "• 상단 파란색 **[조류계산 실행]** 버튼을 클릭하여 뉴턴-랩슨 수치해석을 시작하세요."
-                ),
-                "total_count": len(w_nodes),
-                "clean_count": len(w_nodes),
-                "suspicious_count": 0,
-                "missing_count": 0,
-                "priority_items": [],
-                "provider_mode": self.provider_name,
-                "display_mode": self.display_mode_name,
-            }
+            decision = "PROCEED"
+            target = "final_powerflow"
+            reply_ko = "모든 모선 토폴로지와 선로 제원이 연결되었습니다. 조류계산을 실행할 수 있습니다."
+            summary_text = (
+                "🚀 **[조류계산 준비 완료]**\n\n"
+                "모든 모선 토폴로지와 선로 제원이 연결되었습니다.\n\n"
+                "💡 **다음 단계:**\n"
+                "• 상단 파란색 **[조류계산 실행]** 버튼을 클릭하여 뉴턴-랩슨 수치해석을 시작하세요."
+            )
 
         elif stage_upper == "POWERFLOW_RESULT":
-            return {
-                "summary_text": (
-                    "📈 **[조류계산 수렴 완료]**\n\n"
-                    "뉴턴-랩슨 조류계산이 성공적으로 수렴했습니다!\n\n"
-                    "💡 **확인 방법:**\n"
-                    "• 상단 **[수치 결과표]** 버튼을 클릭하여 모선 전압과 선로 조류/손실 표를 확인하세요.\n"
-                    "• 도면 위 각 모선/발전기에 표시된 전압(pu)과 위상각(deg)을 살펴보세요."
-                ),
-                "total_count": len(w_nodes),
-                "clean_count": len(w_nodes),
-                "suspicious_count": 0,
-                "missing_count": 0,
-                "priority_items": [],
-                "provider_mode": self.provider_name,
-                "display_mode": self.display_mode_name,
-            }
+            decision = "PROCEED"
+            target = "result_flow"
+            reply_ko = "뉴턴-랩슨 조류계산이 수렴했습니다! 상단 [수치 결과표]에서 모선 전압과 선로 조류를 확인하세요."
+            summary_text = (
+                "📈 **[조류계산 수렴 완료]**\n\n"
+                "뉴턴-랩슨 조류계산이 성공적으로 수렴했습니다!\n\n"
+                "💡 **확인 방법:**\n"
+                "• 상단 **[수치 결과표]** 버튼을 클릭하여 모선 전압과 선로 조류/손실 표를 확인하세요.\n"
+                "• 도면 위 각 모선/발전기에 표시된 전압(pu)과 위상각(deg)을 살펴보세요."
+            )
 
         else:
-            return {
-                "summary_text": f"현재 **{stage}** 단계입니다. 안내가 필요하시면 질문해주세요.",
-                "total_count": len(w_nodes),
-                "clean_count": len(w_nodes),
-                "suspicious_count": 0,
-                "missing_count": 0,
-                "priority_items": [],
-                "provider_mode": self.provider_name,
-                "display_mode": self.display_mode_name,
-            }
+            decision = "UNKNOWN"
+            reply_ko = f"현재 {stage} 단계입니다. 안내가 필요하시면 질문해주세요."
+            summary_text = f"현재 **{stage}** 단계입니다. 안내가 필요하시면 질문해주세요."
+
+        res = {
+            "reply_ko": reply_ko or summary_text,
+            "decision": decision,
+            "intent": "STAGE_PROACTIVE_SUMMARY",
+            "action_mode": "NONE",
+            "action_id": None,
+            "action_params": {},
+            "highlight_target": target,
+            "focus_targets": focus_targets,
+            "evidence_summary": {
+                "suspicious_count": len(suspicious),
+                "missing_count": len(open_cands),
+                "ambiguous_count": len(ambiguous),
+                "topology_error_count": len(error_issues),
+            },
+            "summary_text": summary_text,
+            "total_count": len(w_nodes) if stage_upper != "CONNECTION_REVIEW" else len(w_lines),
+            "clean_count": len(w_nodes) - len(suspicious) if stage_upper != "CONNECTION_REVIEW" else len(w_lines) - len(ambiguous),
+            "suspicious_count": len(suspicious) if stage_upper != "CONNECTION_REVIEW" else len(ambiguous),
+            "missing_count": len(open_cands) if stage_upper != "CONNECTION_REVIEW" else len(error_issues),
+            "priority_items": priority_items,
+            "provider_mode": self.provider_name,
+            "display_mode": self.display_mode_name,
+            "agent_status": "LOCAL_PROACTIVE",
+        }
+        return sanitize_and_validate_agent_response(res, "", w_nodes, w_lines, cands, issues, stage)
 
     def answer_chat(
         self,
@@ -354,13 +564,83 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
         app_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         msg = (message or "").strip().lower()
+        msg_norm = msg.replace(" ", "")
         w_nodes = working_nodes or []
         w_lines = working_lines or []
         cands = missing_candidates or []
         issues = topology_issues or []
         stage_upper = (stage or "HOME").upper()
 
-        # 1. Selected Node Inquiry
+        susp_cnt = len([n for n in w_nodes if (n.get("review_status") or n.get("status")) == "SUSPICIOUS"])
+        miss_cnt = len([c for c in cands if c.get("status") == "OPEN"])
+        amb_cnt = len([l for l in w_lines if (l.get("review_status") or l.get("status")) == "AMBIGUOUS"])
+        err_cnt = len(issues)
+
+        # 1. Action Intent Routing
+        # Power flow execution vs guidance
+        if any(k in msg_norm for k in ["조류계산", "계산해", "계산진행", "runpowerflow"]):
+            is_where = any(k in msg_norm for k in ["어디", "어떻게", "뭐눌러", "위치", "어느버튼", "버튼어디", "어디야", "어디서"])
+            if is_where:
+                res = {
+                    "reply_ko": "화면 상단 파란색 [조류계산 실행] 버튼을 클릭하시면 뉴턴-랩슨 조류계산이 수행됩니다. 위치가 화면에서 반짝이고 있어요.",
+                    "decision": "PROCEED",
+                    "intent": "ASK_RUN_POWER_FLOW_GUIDE",
+                    "action_mode": "GUIDE",
+                    "action_id": "RUN_POWER_FLOW",
+                    "highlight_target": "final_powerflow",
+                    "agent_status": "LOCAL_DETERMINISTIC",
+                }
+            else:
+                res = {
+                    "reply_ko": "조류계산을 실행합니다. 수치해석이 완료될 때까지 잠시만 기다려주세요.",
+                    "decision": "PROCEED",
+                    "intent": "RUN_POWER_FLOW",
+                    "action_mode": "EXECUTE",
+                    "action_id": "RUN_POWER_FLOW",
+                    "highlight_target": "final_powerflow",
+                    "agent_status": "LOCAL_DETERMINISTIC",
+                }
+            return sanitize_and_validate_agent_response(res, message, w_nodes, w_lines, cands, issues, stage)
+
+        # Power flow results show vs guidance
+        if any(k in msg_norm for k in ["결과보여", "결과표", "수치결과", "showresult", "결과는어디"]):
+            is_where = any(k in msg_norm for k in ["어디", "어떻게", "뭐눌러", "위치", "어느버튼", "어디서", "어디야"])
+            if is_where:
+                res = {
+                    "reply_ko": "상단 메뉴의 [수치 결과표] 버튼에서 모선 전압과 선로 조류/손실 결과를 확인하실 수 있습니다.",
+                    "decision": "PROCEED",
+                    "intent": "ASK_SHOW_POWER_FLOW_RESULTS_GUIDE",
+                    "action_mode": "GUIDE",
+                    "action_id": "SHOW_POWER_FLOW_RESULTS",
+                    "highlight_target": "result_flow",
+                    "agent_status": "LOCAL_DETERMINISTIC",
+                }
+            else:
+                res = {
+                    "reply_ko": "조류계산 수치 결과표를 표시합니다.",
+                    "decision": "PROCEED",
+                    "intent": "SHOW_POWER_FLOW_RESULTS",
+                    "action_mode": "EXECUTE",
+                    "action_id": "SHOW_POWER_FLOW_RESULTS",
+                    "highlight_target": "result_flow",
+                    "agent_status": "LOCAL_DETERMINISTIC",
+                }
+            return sanitize_and_validate_agent_response(res, message, w_nodes, w_lines, cands, issues, stage)
+
+        # Home navigation
+        if any(k in msg_norm for k in ["홈으로", "처음으로", "gohome", "시작화면"]):
+            res = {
+                "reply_ko": "홈 화면으로 이동합니다.",
+                "decision": "PROCEED",
+                "intent": "GO_HOME",
+                "action_mode": "EXECUTE",
+                "action_id": "GO_HOME",
+                "highlight_target": "home_upload",
+                "agent_status": "LOCAL_DETERMINISTIC",
+            }
+            return sanitize_and_validate_agent_response(res, message, w_nodes, w_lines, cands, issues, stage)
+
+        # 2. Selected Node Inquiry
         if selected_node and any(k in msg for k in ["왜", "이유", "판단", "의심", "바꾸면", "변경", "영향", "설명", "심볼", "why"]):
             node_id = str(selected_node.get("id", "Unknown"))
             node_cls = str(selected_node.get("class", selected_node.get("className", "UNKNOWN"))).upper()
@@ -374,27 +654,53 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                     f"현재 객체는 **모선(BUS)** 심볼로 인식되어 있습니다.\n"
                     f"• **계통 영향**: 모선(Bus)을 부하(Load)나 타 설비로 변경하면 연결된 송전선로와 인입선 토폴로지 구조가 재구성되며, 조류계산 모선 방정식의 차수가 달라집니다."
                 )
+                res = {
+                    "reply_ko": reply,
+                    "decision": "HUMAN_CHECK",
+                    "intent": "INSPECT_CLASS_CHANGE_IMPACT",
+                    "action_mode": "CONFIRM_REQUIRED",
+                    "action_id": None,
+                    "highlight_target": "canvas_node",
+                    "focus_targets": [{"type": "OBJECT", "id": node_id, "reason": "클래스 변경 영향 분석", "severity": "WARNING"}],
+                    "agent_status": "LOCAL_NODE_INFO",
+                }
+                return sanitize_and_validate_agent_response(res, message, w_nodes, w_lines, cands, issues, stage)
+
+            lines = [f"🔍 **[선택 객체 AI 분석 - {node_id} ({node_cls})]**\n"]
+            lines.append(f"• **설비 분류**: **{node_cls}** (AI 신뢰도: **{conf:.2f}**)")
+            if expl:
+                lines.append(f"• **판단 설명**: {expl}")
+            if reasons:
+                lines.append(f"• **검토 사유/근거**: {', '.join(str(r) for r in reasons)}")
             else:
-                lines = [f"🔍 **[선택 객체 AI 분석 - {node_id} ({node_cls})]**\n"]
-                lines.append(f"• **설비 분류**: **{node_cls}** (AI 신뢰도: **{conf:.2f}**)")
-                if expl:
-                    lines.append(f"• **판단 설명**: {expl}")
-                if reasons:
-                    lines.append(f"• **검토 사유/근거**: {', '.join(str(r) for r in reasons)}")
-                else:
-                    lines.append(f"• **판단 근거**: 기하학적 형태와 연결 단자 분석을 통해 정상적인 {node_cls} 심볼로 검출되었습니다.")
-                reply = "\n".join(lines)
+                lines.append(f"• **판단 근거**: 기하학적 형태와 연결 단자 분석을 통해 정상적인 {node_cls} 심볼로 검출되었습니다.")
+            reply = "\n".join(lines)
 
-            return {
+            res = {
                 "reply_ko": reply,
+                "decision": "HUMAN_CHECK" if selected_node.get("review_status") == "SUSPICIOUS" else "PROCEED",
+                "intent": "INSPECT_SELECTED_NODE",
+                "action_mode": "NONE",
+                "action_id": None,
+                "highlight_target": "canvas_node",
+                "focus_targets": [{"type": "OBJECT", "id": node_id, "reason": expl or "선택 객체", "severity": "INFO"}],
                 "agent_status": "LOCAL_NODE_INFO",
-                "target_id": "canvas_node",
-                "provider_mode": self.provider_name,
-                "display_mode": self.display_mode_name,
-                "context_summary": {"node_id": node_id, "class": node_cls},
             }
+            return sanitize_and_validate_agent_response(res, message, w_nodes, w_lines, cands, issues, stage)
 
-        # 2. Selected Line Inquiry
+        # Mutation check (without selected node or general mutation request)
+        if any(k in msg_norm for k in ["바꿔", "변경", "수정", "삭제", "지워", "바꿔줘", "추가해"]):
+            res = {
+                "reply_ko": "회로 설비 속성 변경이나 삭제는 계통 토폴로지에 직접적인 영향을 미치므로 사용자 확인(Confirm)이 필요합니다.",
+                "decision": "HUMAN_CHECK",
+                "intent": "MUTATE_CIRCUIT_REQUEST",
+                "action_mode": "CONFIRM_REQUIRED",
+                "action_id": None,
+                "agent_status": "LOCAL_DETERMINISTIC",
+            }
+            return sanitize_and_validate_agent_response(res, message, w_nodes, w_lines, cands, issues, stage)
+
+        # 3. Selected Line Inquiry
         if selected_line and any(k in msg for k in ["왜", "이유", "문제", "오류", "선로", "line", "why"]):
             line_id = str(selected_line.get("line_id", selected_line.get("id", "Unknown")))
             status = selected_line.get("review_status", "NORMAL")
@@ -407,18 +713,23 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                 lines.append(f"• **결선 이슈**: {', '.join(issue_msgs)}")
             else:
                 lines.append("• **결선 상태**: 모선 간 정상적인 연결이 확인되었습니다.")
-            return {
-                "reply_ko": "\n".join(lines),
-                "agent_status": "LOCAL_LINE_INFO",
-                "target_id": "canvas_line",
-                "provider_mode": self.provider_name,
-                "display_mode": self.display_mode_name,
-                "context_summary": {"line_id": line_id},
-            }
+            reply = "\n".join(lines)
 
-        # 3. Summary & Status Requests (검토 현황 요약)
+            res = {
+                "reply_ko": reply,
+                "decision": "HUMAN_CHECK" if status == "AMBIGUOUS" else "PROCEED",
+                "intent": "INSPECT_SELECTED_LINE",
+                "action_mode": "NONE",
+                "action_id": None,
+                "highlight_target": "canvas_line",
+                "focus_targets": [{"type": "LINE", "id": line_id, "reason": status, "severity": "INFO"}],
+                "agent_status": "LOCAL_LINE_INFO",
+            }
+            return sanitize_and_validate_agent_response(res, message, w_nodes, w_lines, cands, issues, stage)
+
+        # 4. Summary & Status Requests
         if any(k in msg for k in ["요약", "현황", "검토 필요", "상태", "summary", "status"]):
-            summary_res = self.generate_proactive_summary(
+            s_res = self.generate_proactive_summary(
                 document_id=document_id,
                 stage=stage,
                 working_nodes=w_nodes,
@@ -427,16 +738,54 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                 topology_issues=issues,
                 app_context=app_context,
             )
-            return {
-                "reply_ko": summary_res["summary_text"],
-                "agent_status": "LOCAL_SUMMARY",
-                "provider_mode": self.provider_name,
-                "display_mode": self.display_mode_name,
-                "context_summary": {"stage": stage},
-            }
+            s_res["reply_ko"] = s_res["summary_text"]
+            s_res["intent"] = "STAGE_PROACTIVE_SUMMARY"
+            return s_res
 
-        # 4. Stage-Based State Guidance (Pure State Fallback - Zero Keyword Guessing)
+        # 5. Missing Candidate Summary
+        if any(k in msg for k in ["누락", "후보", "변압기", "missing", "빠진"]):
+            open_cands = [c for c in cands if c.get("status") == "OPEN"]
+            if open_cands:
+                cand = open_cands[0]
+                reply = f"⚠️ 누락 의심 설비가 {len(open_cands)}건 있습니다: {cand.get('description_ko', '')}. 도면에 없는 기기라면 [문제 없음]을 선택하세요."
+                res = {
+                    "reply_ko": reply,
+                    "decision": "HUMAN_CHECK",
+                    "intent": "INSPECT_MISSING_CANDIDATES",
+                    "action_mode": "GUIDE",
+                    "action_id": None,
+                    "highlight_target": "missing_candidates",
+                    "focus_targets": [{"type": "CANDIDATE", "id": cand.get("id", ""), "reason": cand.get("description_ko", ""), "severity": "ALERT"}],
+                    "agent_status": "LOCAL_MISSING_CANDIDATE",
+                }
+            else:
+                res = {
+                    "reply_ko": "누락 의심 설비가 없습니다. 모든 설비가 정상 검출되었습니다.",
+                    "decision": "PROCEED",
+                    "intent": "INSPECT_MISSING_CANDIDATES",
+                    "action_mode": "NONE",
+                    "action_id": None,
+                    "highlight_target": None,
+                    "agent_status": "LOCAL_MISSING_CANDIDATE",
+                }
+            return sanitize_and_validate_agent_response(res, message, w_nodes, w_lines, cands, issues, stage)
+
+        # 6. Excel Guidance
+        if any(k in msg for k in ["엑셀", "excel", "제원", "임피던스", "파라미터"]):
+            res = {
+                "reply_ko": "조류계산에는 모선 제원 및 선로 임피던스가 필요합니다. 상단 [엑셀 가져오기] 버튼으로 PSS/E 포맷 엑셀 파일(.xlsx)을 연결하세요.",
+                "decision": "PROCEED",
+                "intent": "EXCEL_IMPORT_GUIDE",
+                "action_mode": "GUIDE",
+                "action_id": "OPEN_EXCEL_PICKER",
+                "highlight_target": "final_excel_upload" if "final" in stage.lower() else "cad_excel_import",
+                "agent_status": "LOCAL_EXCEL_GUIDE",
+            }
+            return sanitize_and_validate_agent_response(res, message, w_nodes, w_lines, cands, issues, stage)
+
+        # 7. Stage-Based State Guidance
         target = None
+        dec = "PROCEED"
         if stage_upper in ("HOME", "EMPTY_HOME"):
             target = "home_upload"
             reply = (
@@ -462,12 +811,14 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                     reply += "• 하단의 파란색 **[객체 검수 완료 (Gate 통과)]** 버튼을 눌러 **[다음: ② 모선 번호 매핑]** 단계로 진행하세요."
             elif suspicious_count == 0 and open_cand_count > 0:
                 target = "missing_candidates"
+                dec = "HUMAN_CHECK"
                 reply += f"⚠️ 의심 객체는 없으나, AI가 단선도 분석 중 누락 가능성이 있는 설비 후보가 **{open_cand_count}건**(예: 변압기 등) 감지되어 있습니다.\n"
                 reply += "• **도면에 원래 해당 설비가 없는 경우**: 화면 상단의 보라색 **[누락 후보]** 배지나 좌측 카드의 **[문제 없음]** 버튼을 누르시면 즉시 통과됩니다.\n"
                 reply += "• **실제 존재하는 경우**: **[수동 추가]**를 눌러 도면에서 직접 지정하세요.\n"
                 reply += "• 누락 후보 처리가 끝나면 하단 **[객체 검수 완료 (Gate 통과)]**를 눌러 **[다음: ② 모선 번호 매핑]** 단계로 진행하실 수 있습니다."
             else:
                 target = "object_approve"
+                dec = "HUMAN_CHECK"
                 reply += f"1. 우선 검토 객체 확인 (남은 의심 객체: **{suspicious_count}개**)\n"
                 reply += f"2. 누락 설비 후보 확인 (남은 미확인 후보: **{open_cand_count}개**)\n"
                 reply += "3. 화면 우측에서 의심 객체를 확인하고 **[승인하고 다음 (Enter)]** 또는 [제외]로 검수\n"
@@ -482,6 +833,7 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                 reply += "• 하단 **[모선 번호 승인 (Gate 2 통과)]** 버튼을 눌러 **[다음: ③ 선로 결선 검수]** 단계로 이동하세요."
             else:
                 target = "bus_input"
+                dec = "HUMAN_CHECK"
                 reply += f"1. 도면 OCR 및 공간 좌표 기반 모선 번호 부여 상태 점검 (미해결/불확실: **{uncertain_buses}개**)\n"
                 reply += "2. 우측 입력창에서 모선 번호 입력 후 **[승인하고 다음 모선으로 (Enter)]** 클릭\n"
                 reply += "3. 모든 모선 번호 입력 후 하단 **[모선 번호 승인]** 클릭 ➔ **[다음: ③ 선로 결선 검수]** 단계로 이동"
@@ -495,6 +847,7 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                 reply += "• 하단 **[결선 승인 완료 (Gate 3 통과)]** 버튼을 눌러 **[다음: ④ 최종 검증 및 회로 생성]** 단계로 이동하세요."
             else:
                 target = "connection_priority"
+                dec = "HUMAN_CHECK"
                 reply += f"1. 모호한 선로 연결 검토 (남은 모호 선로: **{ambiguous_count}개**)\n"
                 reply += f"2. 토폴로지 오류 항목 점검 (치명 오류: **{error_count}건**)\n"
                 reply += "3. 정상 결선은 **[선로 승인하고 다음 (Enter)]**, 잘못된 결선은 [연결 대상 재지정] 또는 [선로 제외]\n"
@@ -530,185 +883,18 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                 "2. CAD 캔버스 위 각 모선의 전압과 발전기 출력을 직접 비교해보세요."
             )
         else:
-            reply = f"현재 **{stage}** 단계입니다. 도면 검수나 계통 제원 연결을 진행해주세요."
+            reply = f"현재 {stage} 단계입니다. 궁금하신 내용을 질문해주세요."
 
-        return {
+        res = {
             "reply_ko": reply,
+            "decision": dec,
+            "intent": "STAGE_GUIDANCE",
+            "action_mode": "GUIDE" if target else "NONE",
+            "action_id": None,
             "highlight_target": target,
             "agent_status": "LOCAL_GUIDE",
-            "provider_mode": self.provider_name,
-            "display_mode": self.display_mode_name,
-            "context_summary": {"stage": stage},
         }
-
-        # 3. Excel & Parameter Explanation
-        if any(k in msg for k in ["엑셀", "excel", "제원", "임피던스", "파라미터", "r/x/b"]):
-            reply = (
-                "📊 **[계통 엑셀 제원 연결 안내]:**\n"
-                "• 뉴턴-랩슨 조류계산에는 모선별 유효/무효전력(P, Q), 발전기 설정 전압(V pu), 선로 및 변압기 임피던스(R, X, B)가 필수적입니다.\n"
-                "• 상단 **[엑셀 가져오기]** 버튼을 클릭하여 PSS/E 포맷 엑셀 파일(예: `case24_psse.xlsx`)을 불러오면 모선 번호 기준으로 자동 연결됩니다.\n"
-                "• 제원이 연결되면 미연결 경고가 사라지고 조류계산을 즉시 실행할 수 있습니다."
-            )
-            return {
-                "reply_ko": reply,
-                "agent_status": "LOCAL_EXCEL_GUIDE",
-                "provider_mode": self.provider_name,
-                "display_mode": self.display_mode_name,
-                "context_summary": {"stage": stage},
-            }
-
-        # 4. Power Flow & Simulation Guidance
-        if any(k in msg for k in ["조류계산", "powerflow", "해석", "뉴턴", "수치해석", "수렴"]):
-            reply = (
-                "⚡ **[조류계산 (Power Flow) 안내]:**\n"
-                "• 비선형 전력방정식을 뉴턴-랩슨(Newton-Raphson) 기법으로 풀어 계통 전압 크기와 위상각을 도출합니다.\n"
-                "• 필수 조건: 1개 이상의 슬랙(Slack) 모선, 유효한 모선 간 연결 선로, 선로 임피던스 값.\n"
-                "• 계산이 수렴하면 상단 **[수치 결과표]** 및 도면 상에서 모선 전압과 조류 분포를 즉시 확인할 수 있습니다."
-            )
-            return {
-                "reply_ko": reply,
-                "agent_status": "LOCAL_POWERFLOW_GUIDE",
-                "provider_mode": self.provider_name,
-                "display_mode": self.display_mode_name,
-                "context_summary": {"stage": stage},
-            }
-
-        # 5. Class Change Impact Analysis (클래스 변경 시 전기적 영향)
-        if selected_node and any(k in msg for k in ["바꾸", "변경", "영향", "change", "바꾸면"]):
-            disp_name = selected_node.get("display_label", selected_node.get("id", "선택 객체"))
-            curr_cls = str(selected_node.get("class", "")).lower()
-            reply = f"⚡ **[{disp_name}] 클래스 변경 시 계통 영향 분석:**\n"
-            if curr_cls == "bus":
-                reply += "• **모선(Bus) ➔ 발전기/부하로 변경 시:**\n"
-                reply += "  - 해당 노드에 연결된 여러 모선 간 간선이 단일 설비 인출선으로 재해석되어 다중 결선 위반이 발생할 수 있습니다.\n"
-                reply += "  - 발전기나 부하는 원칙적으로 단일 모선에 1개의 단자로만 연결되어야 합니다."
-            elif curr_cls in ("generator", "load"):
-                reply += f"• **{curr_cls.upper()} ➔ 모선(Bus)으로 변경 시:**\n"
-                reply += "  - 해당 위치가 계통의 전기적 분기 모선으로 승격되어, 인접 선로들이 이 모선으로 접속 가능해집니다.\n"
-                reply += "  - 모선은 최소 2개 이상의 단자 또는 선로가 연결되어야 유효한 모선으로 인정됩니다."
-            else:
-                reply += "• **변압기(Transformer) 변경 시:**\n"
-                reply += "  - 1차측과 2차측 2개 모선 간의 연계 선로 연결성이 변경됩니다."
-
-            reply += "\n💡 **추천 액션**: 실제 도면 심볼과 일치하도록 하단 [클래스 변경] 칩을 선택하세요."
-            return {
-                "reply_ko": reply,
-                "agent_status": "LOCAL_CLASS_IMPACT",
-                "provider_mode": self.provider_name,
-                "display_mode": self.display_mode_name,
-                "context_summary": {"node_label": disp_name},
-            }
-
-        # 6. Specific Object Evidence & Judgment (왜 의심/왜 이 클래스인지)
-        if selected_node and any(k in msg for k in ["객체", "이것", "왜", "의심", "판단", "근거", "bus", "모선", "발전기", "generator", "부하", "load", "변압기", "transformer"]):
-            disp_name = selected_node.get("display_label", selected_node.get("id", "선택 객체"))
-            node_id = selected_node.get("id", "")
-            cls = str(selected_node.get("class", "unknown")).upper()
-            conf = int(float(selected_node.get("confidence", 0.0)) * 100)
-            status = selected_node.get("review_status", "DETECTED")
-            reasons = selected_node.get("review_reasons", [])
-            source = selected_node.get("source", "yolo_detector")
-            evidence = selected_node.get("evidence", {})
-            geom = evidence.get("geometry_evidence", {})
-            aspect = geom.get("aspect_ratio", 0.0)
-
-            # Friendly user status
-            status_ko = "검토 필요" if status == "SUSPICIOUS" else ("확인 완료" if status == "CONFIRMED" else "인식됨")
-
-            reply = f"🔍 **[{disp_name}] 객체 분석 근거 (ID: `{node_id}`):**\n"
-            reply += f"• **판정 종류**: `{cls}` (AI 신뢰도: **{conf}%**)\n"
-            reply += f"• **현재 상태**: **{status_ko}**  |  **탐지 소스**: `{source}`\n"
-            if aspect > 0:
-                reply += f"• **심볼 종횡비**: `{aspect:.1f}`\n"
-
-            if reasons:
-                reply += f"• **검토 사유**: {', '.join(reasons)}\n"
-            else:
-                reply += "• **검토 사유**: 심볼 형상 및 신뢰도 기준을 충족하여 정상 판정되었습니다.\n"
-
-            if status == "SUSPICIOUS":
-                reply += "\n💡 **추천 액션**: 도면의 실제 심볼을 확인하고, 정상 심볼이면 [승인], 오탐이면 [클래스 변경] 또는 [제외]하세요."
-            else:
-                reply += "\n💡 **추천 액션**: 정상 심볼로 확인되었으므로 그대로 유지하거나 [승인]하세요."
-
-            return {
-                "reply_ko": reply,
-                "agent_status": "LOCAL_NODE_EVIDENCE",
-                "provider_mode": self.provider_name,
-                "display_mode": self.display_mode_name,
-                "context_summary": {"node_label": disp_name, "status": status},
-            }
-
-        # 7. Connection Line Evidence & Issues (왜 결선 문제인지)
-        if selected_line and any(k in msg for k in ["선", "선로", "결선", "연결", "line", "connect", "문제", "오류", "bus_"]):
-            disp_name = selected_line.get("display_name", selected_line.get("display_label", selected_line.get("line_id", "선택 선로")))
-            line_id = selected_line.get("line_id", selected_line.get("id", ""))
-            conn = selected_line.get("connected_to", [])
-            conn_str = selected_line.get("endpoints_display", " ➔ ".join(conn) if conn else "미연결 (Dangling)")
-            issues_line = selected_line.get("validation_issues", [])
-            trace_method = selected_line.get("trace_method", "electrical_graph")
-
-            reply = f"🔗 **[{disp_name}] 결선 진단 근거 (ID: `{line_id}`):**\n"
-            reply += f"• **연결 관계**: `{conn_str}`\n"
-            reply += f"• **추적 방식**: `{trace_method}`\n"
-
-            if issues_line:
-                issue_descs = [it.get("message", it.get("code", "형상 불일치")) for it in issues_line]
-                reply += f"• **감지된 결함**: {', '.join(issue_descs)}\n"
-                reply += "\n💡 **추천 액션**: 하단 [연결 대상 Bus 재지정]을 클릭하여 올바른 모선에 연결하거나 [선로 제외]를 선택하세요."
-            else:
-                reply += "• **검증 결과**: 토폴로지 유효성 검사를 통과한 정상 선로입니다.\n"
-                reply += "\n💡 **추천 액션**: 정상 연결이므로 [선로 승인] 또는 [정상 결선 일괄 승인]을 진행하세요."
-
-            return {
-                "reply_ko": reply,
-                "agent_status": "LOCAL_LINE_EVIDENCE",
-                "provider_mode": self.provider_name,
-                "display_mode": self.display_mode_name,
-                "context_summary": {"line_label": disp_name},
-            }
-
-        # 8. Missing Candidate Summary (누락 후보 질문)
-        if any(k in msg for k in ["누락", "후보", "변압기", "어디", "missing", "빠진"]):
-            open_cands = [c for c in cands if c.get("status") == "OPEN"]
-            if open_cands:
-                cand = open_cands[0]
-                reply = f"⚠️ **누락 의심 설비 안내:**\n"
-                reply += f"• **의심 설비**: `{cand.get('suspected_class', '').upper()}`\n"
-                reply += f"• **진단 근거**: {cand.get('description_ko', '')}\n"
-                reply += "\n💡 **추천 액션**: 상단 도면에서 해당 영역을 드래그하여 **[객체 수동 추가]**를 진행하거나, 도면에 없는 기기라면 **[문제 없음]**을 선택하세요."
-            else:
-                reply = "✓ **누락 설비 없음**: 전체 모선-설비 비율 검사 결과 누락 후보가 없습니다."
-
-            return {
-                "reply_ko": reply,
-                "agent_status": "LOCAL_MISSING_CANDIDATE",
-                "provider_mode": self.provider_name,
-                "display_mode": self.display_mode_name,
-                "context_summary": {"candidates_count": len(open_cands)},
-            }
-
-        # Default Generic Guidance
-        return {
-            "reply_ko": (
-                f"🤖 **PowerLens AI 어시스턴트:**\n\n"
-                f"현재 **{stage}** 단계입니다. "
-                "궁금하신 내용을 편하게 질문해주세요.\n\n"
-                "💡 **자주 묻는 질문:**\n"
-                "• *'다음에 뭐 해?'* ➔ 현재 단계의 다음 행동 안내\n"
-                "• *'현재 상태 요약'* ➔ 도면 및 계통 현황 요약\n"
-                "• *'엑셀 제원 연결 방법'* ➔ 엑셀 파일 연결 가이드\n"
-                "• *'조류계산 실행 조건'* ➔ 수치해석 준비 조건 안내"
-            ),
-            "agent_status": "LOCAL_DEFAULT",
-            "provider_mode": self.provider_name,
-            "display_mode": self.display_mode_name,
-            "context_summary": {"stage": stage},
-        }
-
-
-DEFAULT_GEMINI_PRIMARY_MODEL: str = "gemini-3.8-flash"
-DEFAULT_GEMINI_FALLBACK_MODEL: str = "gemini-3.5-flash-lite"
+        return sanitize_and_validate_agent_response(res, message, w_nodes, w_lines, cands, issues, stage)
 
 
 class GeminiReviewAssistantProvider(ReviewAssistantProvider):
@@ -727,16 +913,8 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
         fallback_model_name: Optional[str] = None,
     ):
         self.api_key = api_key
-        self.primary_model_name = (
-            model_name
-            or os.environ.get("GEMINI_MODEL", DEFAULT_GEMINI_PRIMARY_MODEL).strip()
-            or DEFAULT_GEMINI_PRIMARY_MODEL
-        )
-        self.fallback_model_name = (
-            fallback_model_name
-            or os.environ.get("GEMINI_FALLBACK_MODEL", DEFAULT_GEMINI_FALLBACK_MODEL).strip()
-            or DEFAULT_GEMINI_FALLBACK_MODEL
-        )
+        self.primary_model_name = (model_name.strip() if model_name else get_gemini_model_name())
+        self.fallback_model_name = (fallback_model_name.strip() if fallback_model_name else get_gemini_fallback_model_name())
         self.model_name = self.primary_model_name
 
     @property
@@ -746,6 +924,89 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
     @property
     def display_mode_name(self) -> str:
         return f"Gemini ({self.primary_model_name}) AI 모드"
+
+    def _call_gemini_with_fallback(
+        self,
+        system_instruction: str,
+        contents: List[Dict[str, Any]],
+        timeout_sec: float = 25.0,
+    ) -> Tuple[Optional[str], str, bool]:
+        import json
+        import urllib.error
+        import urllib.request
+
+        payload = {
+            "system_instruction": {"parts": [{"text": system_instruction}]},
+            "contents": contents,
+            "generationConfig": {
+                "temperature": 0.2,
+                "maxOutputTokens": 800,
+                "responseMimeType": "application/json",
+            },
+        }
+
+        transient_status_codes = {429, 500, 502, 503, 504}
+        data = None
+        active_model = self.primary_model_name
+        is_fallback_active = False
+
+        def _execute_model_call(m_name: str, t_sec: float) -> Optional[Dict[str, Any]]:
+            endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={self.api_key}"
+            req = urllib.request.Request(
+                endpoint,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=t_sec) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+
+        def _extract_reply_from_data(model_data: Optional[Dict[str, Any]]) -> Optional[str]:
+            if not model_data:
+                return None
+            cands = model_data.get("candidates", [])
+            if not cands:
+                return None
+            parts = cands[0].get("content", {}).get("parts", [])
+            if not isinstance(parts, list):
+                return None
+            text_parts = [p.get("text", "") for p in parts if isinstance(p, dict) and "text" in p]
+            combined = "".join(text_parts).strip()
+            return combined if combined else None
+
+        # 1. Primary Model Execution (with transient retry on 503/timeout/429)
+        for attempt in range(2):
+            try:
+                data = _execute_model_call(self.primary_model_name, t_sec=timeout_sec)
+                if data:
+                    break
+            except urllib.error.HTTPError as http_err:
+                if http_err.code in transient_status_codes and attempt == 0:
+                    time.sleep(0.8)
+                    continue
+                else:
+                    break
+            except Exception as exc:
+                if attempt == 0 and ("timeout" in str(exc).lower() or "timed out" in str(exc).lower()):
+                    time.sleep(0.8)
+                    continue
+                break
+
+        raw_reply = _extract_reply_from_data(data)
+
+        # 2. If primary produced no text, try Fallback model
+        if not raw_reply and self.fallback_model_name and self.fallback_model_name != self.primary_model_name:
+            try:
+                fb_data = _execute_model_call(self.fallback_model_name, t_sec=15.0)
+                fb_reply = _extract_reply_from_data(fb_data)
+                if fb_reply:
+                    raw_reply = fb_reply
+                    active_model = self.fallback_model_name
+                    is_fallback_active = True
+            except Exception:
+                pass
+
+        return raw_reply, active_model, is_fallback_active
 
     def generate_proactive_summary(
         self,
@@ -757,18 +1018,111 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
         topology_issues: Optional[List[Dict[str, Any]]] = None,
         app_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """Generate proactive review priorities using real Gemini Agent reasoning."""
+        w_nodes = working_nodes or []
+        w_lines = working_lines or []
+        cands = missing_candidates or []
+        issues = topology_issues or []
+
+        suspicious_nodes = [
+            {
+                "id": n.get("id"),
+                "class": n.get("class") or n.get("className"),
+                "display_label": n.get("display_label", n.get("id")),
+                "review_status": n.get("review_status") or n.get("status"),
+                "review_reasons": n.get("review_reasons", []),
+            }
+            for n in w_nodes if (n.get("review_status") or n.get("status")) == "SUSPICIOUS"
+        ]
+        open_cands = [
+            {
+                "id": c.get("id"),
+                "suspected_class": c.get("suspected_class"),
+                "description_ko": c.get("description_ko"),
+            }
+            for c in cands if c.get("status") == "OPEN"
+        ]
+        ambiguous_lines = [
+            {
+                "line_id": l.get("line_id", l.get("id")),
+                "review_status": l.get("review_status"),
+                "connected_to": l.get("connected_to", []),
+            }
+            for l in w_lines if (l.get("review_status") or l.get("status")) == "AMBIGUOUS"
+        ]
+
+        prompt_data = {
+            "current_stage": stage,
+            "total_nodes": len(w_nodes),
+            "suspicious_nodes_count": len(suspicious_nodes),
+            "suspicious_nodes": suspicious_nodes,
+            "missing_candidates_count": len(open_cands),
+            "missing_candidates": open_cands,
+            "total_lines": len(w_lines),
+            "ambiguous_lines_count": len(ambiguous_lines),
+            "ambiguous_lines": ambiguous_lines,
+            "topology_issues_count": len(issues),
+            "topology_issues": issues,
+            "app_context": app_context or {},
+        }
+
+        system_instruction = (
+            f"{POWERLENS_SYSTEM_KNOWLEDGE}\n\n"
+            "당신은 Lensy라는 이름의 PowerLens 동반자 에이전트입니다.\n"
+            "사용자가 새로운 검수/작업 단계(Stage)에 진입했습니다.\n"
+            "현재 단계와 실제 감지된 증거(Evidence) 상태를 면밀히 관찰하고,\n"
+            "사용자가 어디를 먼저 살펴봐야 하는지 직관적이고 친절하게 1~3문장으로 브리핑하세요.\n"
+            "반드시 Canonical Agent Response Contract JSON 형식으로만 응답해야 합니다.\n"
+            "- 의심 객체나 누락 후보, 결선 오류가 있다면 decision: 'HUMAN_CHECK'를 부여하고 focus_targets에 실제 evidence에 존재하는 ID들을 포함하세요.\n"
+            "- 아무 문제가 없다면 decision: 'PROCEED'를 부여하세요.\n"
+            "- action_mode: 'NONE'\n"
+            "- reply_ko: 1~3문장의 따뜻하고 명쾌한 한국어 안내\n"
+        )
+        user_prompt = (
+            f"[단계 진입 증거 데이터]\n"
+            f"{json.dumps(prompt_data, ensure_ascii=False, indent=2)}\n\n"
+            f"위 실제 증거를 바탕으로 새로운 단계({stage})에 진입한 사용자에게 친절한 브리핑을 제공해주세요."
+        )
+
+        contents = [{"role": "user", "parts": [{"text": user_prompt}]}]
+        raw_reply, active_model, is_fallback_active = self._call_gemini_with_fallback(
+            system_instruction=system_instruction,
+            contents=contents,
+            timeout_sec=self.TIMEOUT_SECONDS,
+        )
+
+        if raw_reply:
+            try:
+                cleaned = raw_reply
+                if cleaned.startswith("```json"):
+                    cleaned = cleaned[7:]
+                elif cleaned.startswith("```"):
+                    cleaned = cleaned[3:]
+                if cleaned.endswith("```"):
+                    cleaned = cleaned[:-3]
+                parsed = json.loads(cleaned.strip())
+                if isinstance(parsed, dict):
+                    parsed["agent_status"] = "GEMINI_PROACTIVE_FALLBACK" if is_fallback_active else "GEMINI_PROACTIVE"
+                    parsed["provider_mode"] = self.provider_name
+                    parsed["display_mode"] = f"Gemini ({active_model}) AI 모드"
+                    return sanitize_and_validate_agent_response(parsed, "", w_nodes, w_lines, cands, issues, stage)
+            except Exception:
+                pass
+
+        # Fallback to Local provider
         local_fallback = LocalReviewAssistantProvider()
         res = local_fallback.generate_proactive_summary(
             document_id=document_id,
             stage=stage,
-            working_nodes=working_nodes,
-            working_lines=working_lines,
-            missing_candidates=missing_candidates,
-            topology_issues=topology_issues,
+            working_nodes=w_nodes,
+            working_lines=w_lines,
+            missing_candidates=cands,
+            topology_issues=issues,
             app_context=app_context,
         )
         res["provider_mode"] = self.provider_name
         res["display_mode"] = self.display_mode_name
+        res["agent_status"] = "LOCAL_FALLBACK_PROACTIVE"
         return res
 
     def answer_chat(
@@ -785,27 +1139,15 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
         history: Optional[List[ChatMessagePayload]] = None,
         app_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        import json
-        import urllib.error
-        import urllib.request
-
         system_instruction = (
             f"{POWERLENS_SYSTEM_KNOWLEDGE}\n\n"
-            "당신은 Lensy라는 이름의 PowerLens 동반자입니다. 전력계통 단선도(SLD) 검수와 조류계산을 처음 쓰는 사람도 쉽게 이해할 수 있게 똑똑하고 친절하게 도와주세요.\n"
-            "현재 단계, 선택된 객체/선로, 실제 검출 목록, 토폴로지 이슈와 조류계산 준비 상태를 근거로 정확히 답하고, 엉뚱한 추측을 하지 마세요.\n\n"
-            "답변 지침:\n"
-            "1. 자연스럽고 명쾌한 한국어로 먼저 핵심 결론을 말하세요.\n"
-            "2. 사용자가 '다음에 뭐 해?', '지금 뭐 해야 돼?', '어디 눌러?', '어떻게 해?' 등 진행 방향이나 다음 작업을 물어보면:\n"
-            "   - 현재 화면/단계에서 가장 먼저 해야 할 일(의심 객체 확인, 모선 번호 입력, 결선 검수, 엑셀 업로드, 조류계산 실행 등)을 구체적으로 설명하세요.\n"
-            "   - [객체 검수 단계(OBJECT_REVIEW)]: 의심 객체(SUSPICIOUS)나 미해결 누락 후보가 0건이거나 모든 객체 인식이 다 잘 된 경우, '모든 객체가 정상으로 잘 감지되었으니 우측 패널의 [정상 객체 일괄 승인] (또는 [정상 객체 전체 승인]) 버튼을 누르면 됩니다.'라고 명확히 안내하세요. 일괄 승인으로 확정한 후 하단의 파란색 [객체 검수 완료] 버튼을 눌러 모선 번호 매핑(2단계)으로 진행하도록 안내하세요. 의심 객체가 있다면 해당 의심 객체만 집중 검토하고 나머지 정상 객체는 [정상 객체 일괄 승인]으로 한 번에 넘길 수 있음을 제안하세요.\n"
-            "   - [누락 후보 및 변압기]: 미해결 누락 후보(OPEN 상태인 missing_candidates, 예: 변압기 누락 의심 등)가 있거나 사용자가 누락 후보/변압기/문제없음에 대해 질문하면: 단선도에 원래 해당 부품이 없는 계통일 경우 상단 보라색 [누락 후보] 배지나 사이드바 카드의 [문제 없음] 버튼을 누르면 즉시 해결되어 [객체 검수 완료] 버튼이 활성화된다고 안내하세요. 실제로 존재하는 설비라면 [수동 추가] 버튼을 눌러 도면에서 직접 추가할 수 있음을 안내하세요.\n"
-            "   - 화면에서 눌러야 할 실제 버튼 명칭(예: [정상 객체 전체 승인], [승인하고 다음], [문제 없음], [객체 수동 추가], [객체 검수 완료], [승인하고 다음 모선으로], [모선 번호 승인], [선로 승인하고 다음], [결선 검수 완료], [엑셀 파일 선택], [캔버스로 이동], [조류계산 실행])을 정확히 명시하세요.\n"
-            "   - 사용자가 '전체 승인하려면 뭐 눌러?', '일괄 승인은 어디서 해?', '어떻게 해?' 등 특정 기능의 위치나 누르는 방법을 질문하면, 기능을 마음대로 자동 실행해버리지 말고 해당 버튼의 정확한 명칭([정상 객체 전체 승인] 등)과 위치(우측 사이드바 등)를 친절하고 명확하게 안내하세요.\n"
-            "3. [판단], [근거 요약], [추천 액션] 같은 보고서 제목이나 내부 필드명, JSON, Chain-of-Thought를 출력하지 마세요.\n"
-            "4. 객체나 선로는 사람이 보기 쉬운 Display Label(예: Bus 4, Load 2, T1, G1, Line 1-2)을 우선 지칭하세요.\n"
-            "5. 질문이 특정 객체/선로에 관한 것이라면 해당 요소의 현재 상태, 연결 모선, 의심 사유를 명확히 설명하세요.\n"
-            "6. 화면 조작 명령은 앱의 안전한 UI 브리지가 처리할 수 있으므로, 실제로 실행되지 않은 조작을 완료했다고 주장하지 마세요.\n"
-            "7. 답변은 1~3문장으로 간결하고 명확하게 한국어로 작성하세요."
+            "당신은 Lensy라는 이름의 PowerLens 동반자 에이전트입니다. 전력계통 단선도(SLD) 검수와 조류계산을 처음 쓰는 사람도 쉽게 이해할 수 있게 똑똑하고 친절하게 도와주세요.\n"
+            "현재 단계, 선택된 객체/선로, 실제 검출 목록, 토폴로지 이슈와 조류계산 준비 상태를 근거로 정확히 판단하고, 엉뚱한 추측을 하지 마세요.\n\n"
+            "반드시 Canonical Agent Response Contract JSON 형식으로만 응답해야 합니다.\n"
+            "1. 질문 의도가 위치/방법('어디야?', '어떻게 해?', '뭐 눌러?')이면 action_mode: 'GUIDE', highlight_target 설정.\n"
+            "2. 명시적 안전 실행 요청('계산해줘', '결과 보여줘', '홈으로 가줘')이면 action_mode: 'EXECUTE', action_id 설정.\n"
+            "3. 회로/데이터 변경 요청('Generator로 바꿔', '삭제해')이면 action_mode: 'CONFIRM_REQUIRED', action_id: null.\n"
+            "4. 답변(reply_ko)은 1~3문장으로 간결하고 명확하게 한국어로 작성하세요."
         )
 
         nodes_summary = []
@@ -837,20 +1179,13 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
             "lines_summary": lines_summary,
             "missing_candidates": missing_candidates or [],
             "topology_issues": topology_issues or [],
-            # Only pass the small, non-secret runtime state needed for a
-            # context-aware answer. Never forward environment variables or
-            # credentials from the frontend context.
             "runtime_app_context": {
                 "current_screen": (app_context or {}).get("current_screen"),
                 "workflow_stage": (app_context or {}).get("workflow_stage", stage),
                 "has_diagram": (app_context or {}).get("has_diagram"),
                 "excel_loaded": (app_context or {}).get("excel_loaded"),
-                "excel_mapping_status": (app_context or {}).get("excel_mapping_status"),
                 "powerflow_ready": (app_context or {}).get("powerflow_ready"),
-                "powerflow_running": (app_context or {}).get("powerflow_running"),
                 "powerflow_converged": (app_context or {}).get("powerflow_converged"),
-                "selected_element": (app_context or {}).get("selected_element"),
-                "current_blockers": (app_context or {}).get("current_blockers", []),
             },
         }
 
@@ -892,92 +1227,18 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
                             "data": b64_img,
                         }
                     })
-        except Exception as e:
-            print(f"[Gemini Image Attach Skip]: {e}")
+        except Exception:
+            pass
 
         contents.append({"role": "user", "parts": user_parts})
 
-        payload = {
-            "system_instruction": {
-                "parts": [{"text": system_instruction}]
-            },
-            "contents": contents,
-            "generationConfig": {
-                "temperature": 0.2,
-                "maxOutputTokens": 800,
-                "responseMimeType": "application/json",
-            }
-        }
-
-        transient_status_codes = {429, 500, 502, 503, 504}
-        data = None
-        active_model = self.primary_model_name
-        is_fallback_active = False
-
-        def _execute_model_call(m_name: str, timeout_sec: float) -> Optional[Dict[str, Any]]:
-            endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={self.api_key}"
-            req = urllib.request.Request(
-                endpoint,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-
-        # 1. Primary Model Execution (with transient retry on 503/timeout/429)
-        for attempt in range(2):
-            try:
-                data = _execute_model_call(self.primary_model_name, timeout_sec=self.TIMEOUT_SECONDS)
-                if data:
-                    break
-            except urllib.error.HTTPError as http_err:
-                if http_err.code in transient_status_codes and attempt == 0:
-                    print(f"[Gemini 3.8 Transient HTTP {http_err.code}]: Retrying in 0.8s...")
-                    time.sleep(0.8)
-                    continue
-                else:
-                    print(f"[Gemini 3.8 Primary Failed HTTP {http_err.code}]: {http_err.reason}")
-                    break
-            except Exception as exc:
-                if attempt == 0 and ("timeout" in str(exc).lower() or "timed out" in str(exc).lower()):
-                    print(f"[Gemini 3.8 Timeout]: Retrying in 0.8s...")
-                    time.sleep(0.8)
-                    continue
-                print(f"[Gemini 3.8 Primary Call Exception]: {exc}")
-                break
-
-        def _extract_reply_from_data(model_data: Optional[Dict[str, Any]]) -> Optional[str]:
-            if not model_data:
-                return None
-            cands = model_data.get("candidates", [])
-            if not cands:
-                return None
-            parts = cands[0].get("content", {}).get("parts", [])
-            if not isinstance(parts, list):
-                return None
-            text_parts = [p.get("text", "") for p in parts if isinstance(p, dict) and "text" in p]
-            combined = "".join(text_parts).strip()
-            return combined if combined else None
-
-        raw_reply = _extract_reply_from_data(data)
-
-        # 2. If primary produced no text (empty or truncated), try Fallback model
-        if not raw_reply and self.fallback_model_name and self.fallback_model_name != self.primary_model_name:
-            print(f"[Gemini Fallback]: Primary response empty or unavailable, falling back to {self.fallback_model_name}...")
-            try:
-                fb_data = _execute_model_call(self.fallback_model_name, timeout_sec=15.0)
-                fb_reply = _extract_reply_from_data(fb_data)
-                if fb_reply:
-                    raw_reply = fb_reply
-                    active_model = self.fallback_model_name
-                    is_fallback_active = True
-            except Exception as fb_err:
-                print(f"[Gemini Fallback Call Failed]: {fb_err}")
+        raw_reply, active_model, is_fallback_active = self._call_gemini_with_fallback(
+            system_instruction=system_instruction,
+            contents=contents,
+            timeout_sec=self.TIMEOUT_SECONDS,
+        )
 
         if raw_reply:
-            parsed_reply_ko = raw_reply
-            highlight_target = None
             try:
                 cleaned = raw_reply
                 if cleaned.startswith("```json"):
@@ -986,30 +1247,16 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
                     cleaned = cleaned[3:]
                 if cleaned.endswith("```"):
                     cleaned = cleaned[:-3]
-                cleaned = cleaned.strip()
-
-                parsed = json.loads(cleaned)
+                parsed = json.loads(cleaned.strip())
                 if isinstance(parsed, dict):
-                    parsed_reply_ko = str(parsed.get("reply_ko") or parsed.get("reply") or raw_reply).strip()
-                    target_val = parsed.get("highlight_target")
-                    if target_val and isinstance(target_val, str) and target_val.lower() not in ("null", "none"):
-                        highlight_target = target_val.strip()
-            except Exception as parse_err:
-                print(f"[Gemini JSON Parse Notice]: {parse_err}")
-                parsed_reply_ko = raw_reply
-
-            return {
-                "reply_ko": parsed_reply_ko,
-                "highlight_target": highlight_target,
-                "agent_status": "GEMINI_LLM_FALLBACK" if is_fallback_active else "GEMINI_LLM",
-                "provider_mode": self.provider_name,
-                "display_mode": f"Gemini ({active_model}) AI 모드",
-                "context_summary": {
-                    "stage": stage,
-                    "selected_node_id": selected_node.get("id") if selected_node else None,
-                    "selected_line_id": selected_line.get("line_id", selected_line.get("id")) if selected_line else None,
-                },
-            }
+                    parsed["agent_status"] = "GEMINI_LLM_FALLBACK" if is_fallback_active else "GEMINI_LLM"
+                    parsed["provider_mode"] = self.provider_name
+                    parsed["display_mode"] = f"Gemini ({active_model}) AI 모드"
+                    return sanitize_and_validate_agent_response(
+                        parsed, message, working_nodes, working_lines, missing_candidates, topology_issues, stage
+                    )
+            except Exception:
+                pass
 
         local_fallback = LocalReviewAssistantProvider()
         return local_fallback.answer_chat(
@@ -1135,8 +1382,12 @@ class OpenAIReviewAssistantProvider(ReviewAssistantProvider):
         )
 
         reply = response.choices[0].message.content or "답변을 생성할 수 없습니다."
-        return {
+        res = {
             "reply_ko": reply,
+            "decision": "UNKNOWN",
+            "intent": "OPENAI_CHAT",
+            "action_mode": "NONE",
+            "action_id": None,
             "agent_status": "OPENAI_LLM",
             "provider_mode": self.provider_name,
             "display_mode": self.display_mode_name,
@@ -1146,6 +1397,9 @@ class OpenAIReviewAssistantProvider(ReviewAssistantProvider):
                 "selected_line_id": selected_line.get("line_id", selected_line.get("id")) if selected_line else None,
             },
         }
+        return sanitize_and_validate_agent_response(
+            res, message, working_nodes, working_lines, missing_candidates, topology_issues, stage
+        )
 
 
 def get_assistant_provider() -> ReviewAssistantProvider:
@@ -1169,18 +1423,10 @@ def get_assistant_provider() -> ReviewAssistantProvider:
         return OpenAIReviewAssistantProvider(api_key=openai_key, model_name=model_name)
 
     if gemini_key:
-        primary_model = (
-            os.environ.get("GEMINI_MODEL", DEFAULT_GEMINI_PRIMARY_MODEL).strip()
-            or DEFAULT_GEMINI_PRIMARY_MODEL
-        )
-        fallback_model = (
-            os.environ.get("GEMINI_FALLBACK_MODEL", DEFAULT_GEMINI_FALLBACK_MODEL).strip()
-            or DEFAULT_GEMINI_FALLBACK_MODEL
-        )
         return GeminiReviewAssistantProvider(
             api_key=gemini_key,
-            model_name=primary_model,
-            fallback_model_name=fallback_model,
+            model_name=get_gemini_model_name(),
+            fallback_model_name=get_gemini_fallback_model_name(),
         )
 
     return LocalReviewAssistantProvider()

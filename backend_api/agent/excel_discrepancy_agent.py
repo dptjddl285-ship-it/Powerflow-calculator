@@ -60,8 +60,10 @@ class ExcelDiscrepancyAgent:
         if not api_key:
             return None
 
-        primary_model = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash"
-        fallback_model = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite").strip() or "gemini-3.5-flash-lite"
+        from core.model_config import get_gemini_model_name, get_gemini_fallback_model_name
+
+        primary_model = get_gemini_model_name()
+        fallback_model = get_gemini_fallback_model_name()
         models_to_try = [primary_model]
         if fallback_model and fallback_model != primary_model:
             models_to_try.append(fallback_model)

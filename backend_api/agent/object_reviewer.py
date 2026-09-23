@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 import numpy as np
@@ -81,12 +83,10 @@ class AgentObjectReviewer:
         evidence: ObjectEvidence,
         image: Optional[np.ndarray] = None,
     ) -> AgentReviewResult:
-        import json
-        import urllib.request
-        import urllib.error
+        from core.model_config import get_gemini_model_name, get_gemini_fallback_model_name
 
-        primary_model = os.environ.get("GEMINI_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash"
-        fallback_model = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-3.5-flash-lite").strip() or "gemini-3.5-flash-lite"
+        primary_model = get_gemini_model_name()
+        fallback_model = get_gemini_fallback_model_name()
         models_to_try = [primary_model]
         if fallback_model and fallback_model != primary_model:
             models_to_try.append(fallback_model)
