@@ -71,7 +71,7 @@ class ExcelDiscrepancyAgent:
             "- 도면 이미지 인식(OCR 미인식, 선로 끊김, 번호 오인식) 또는 엑셀 케이스 불일치 원인\n\n"
             "【해결 가이드】\n"
             "1. 캔버스에서 어떻게 수정해야 하는지 단계별 안내\n"
-            "2. '누락 요소 자동 추가' 버튼을 눌러 엑셀 사양대로 자동 보정할 수 있음을 안내\n"
+            "2. 발전기/부하 누락의 경우 상단 제안 카드의 [적용] 버튼을 눌러 안전하게 보완할 수 있음을 안내\n"
         )
 
         user_content = (
@@ -171,7 +171,7 @@ class ExcelDiscrepancyAgent:
         actions.append("1. 캔버스에서 모선 번호 라벨(예: 1, 2, 14 등)이 정확한지 확인하고 수정하세요.")
         if missing_branches:
             actions.append("2. 누락된 선로의 경우, 캔버스 선로 그리기 툴로 양쪽 모선 사이에 선을 다시 그어주세요.")
-        actions.append("3. 하단의 [누락 요소 자동 추가] 버튼을 클릭하시면 엑셀 데이터를 바탕으로 누락된 요소를 자동 복구할 수 있습니다.")
+        actions.append("3. 발전기나 부하 심볼이 누락된 경우 상단의 '교차검증 설비 제안'에서 [적용] 버튼을 눌러 선택적으로 보완할 수 있습니다.")
         actions.append("4. 현재 도면과 일치하는 올바른 엑셀 파일(예: IEEE 24-bus)이 맞는지 확인해 주세요.")
 
         sections.append("\n【해결 가이드】\n" + "\n".join(actions))
@@ -183,7 +183,7 @@ class ExcelDiscrepancyAgent:
             "advice_ko": "\n".join(sections),
             "suggested_actions": [
                 "모선 번호 및 선로 결선 수동 점검",
-                "누락 요소 자동 추가 실행",
+                "발전기/부하 교차검증 제안 검토 및 적용",
                 "계통 엑셀 파일 재확인",
             ],
         }

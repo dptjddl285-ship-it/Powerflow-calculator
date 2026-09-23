@@ -367,6 +367,73 @@ class PowerFlowSolver:
                 el_id = str(el.get("id", ""))
                 label = str(el.get("label", ""))
 
+                elec_branches = el.get("electrical_branches") or el.get("electricalBranches")
+                if elec_branches:
+                    for br_data in elec_branches:
+                        fb_b = br_data.get("from_bus")
+                        tb_b = br_data.get("to_bus")
+                        if fb_b is None or tb_b is None:
+                            continue
+                        try:
+                            fb_b = int(fb_b)
+                            tb_b = int(tb_b)
+                        except (ValueError, TypeError):
+                            continue
+
+                        if fb_b not in buses or tb_b not in buses or fb_b == tb_b:
+                            validation_errors.append(
+                                f"Transformer branch between Bus {fb_b} and Bus {tb_b} connects to non-existent bus."
+                            )
+                            continue
+
+                        r_pu = self._extract_float(br_data, "r_pu", "rPu")
+                        x_pu = self._extract_float(br_data, "x_pu", "xPu")
+                        b_pu = self._extract_float(br_data, "b_pu", "bPu")
+                        if b_pu is None:
+                            b_pu = 0.0
+                        tap = self._extract_float(br_data, "tap", "tapRatio", "tap_ratio")
+                        if tap is None:
+                            tap = 1.0
+
+                        if r_pu is None or x_pu is None:
+                            validation_errors.append(
+                                f"Missing electrical parameters (R/X) for transformer between Bus {fb_b} and Bus {tb_b} in Excel dataset."
+                            )
+                            continue
+
+                        if abs(r_pu) < 1e-9 and abs(x_pu) < 1e-9:
+                            validation_errors.append(
+                                f"Transformer between Bus {fb_b} and Bus {tb_b} has zero series impedance (R=0, X=0). Non-zero impedance required for power flow calculation."
+                            )
+                            continue
+
+                        if tap <= 0:
+                            validation_errors.append(
+                                f"Transformer between Bus {fb_b} and Bus {tb_b} has invalid tap ratio ({tap}). Tap must be positive."
+                            )
+                            continue
+
+                        tap_from = br_data.get("tapFromBus") or br_data.get("tap_from_bus")
+                        if tap_from is not None:
+                            try:
+                                tap_from = int(tap_from)
+                                if tap_from == tb_b:
+                                    fb_b, tb_b = tb_b, fb_b
+                            except (ValueError, TypeError):
+                                pass
+
+                        branches.append({
+                            "from_bus": fb_b,
+                            "to_bus": tb_b,
+                            "r_pu": r_pu,
+                            "x_pu": x_pu,
+                            "b_pu": b_pu,
+                            "tap": tap,
+                            "is_transformer": True,
+                            "label": br_data.get("label") or f"T {fb_b}-{tb_b} (Tap: {tap})",
+                        })
+                    continue
+
                 # Check explicit from_bus / to_bus / tapFromBus
                 fb = el.get("from_bus") or el.get("fromBus") or el.get("tapFromBus") or el.get("tap_from_bus")
                 tb = el.get("to_bus") or el.get("toBus") or el.get("tapToBus") or el.get("tap_to_bus")

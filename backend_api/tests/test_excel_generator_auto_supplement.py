@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import unittest
 import os
 import sys
@@ -10,23 +11,112 @@ from core.excel_case_importer import ExcelCaseImporter
 from core.power_flow_solver import PowerFlowSolver
 
 
-class TestExcelGeneratorAutoSupplement(unittest.TestCase):
+class TestExcelGeneratorAndLoadCrossCheckProposals(unittest.TestCase):
     def setUp(self):
         self.importer = ExcelCaseImporter()
         self.solver = PowerFlowSolver()
 
-    def test_1_bus123_excel_bus2_gen_missed(self):
+    def _simulate_apply_proposal(self, elements, proposal):
+        """Simulates the frontend's _applyEquipmentProposal logic."""
+        cat = proposal.get('category', '').lower()
+        b_num = proposal.get('bus_number')
+        ex_data = proposal.get('excel_data', {})
+
+        parent_bus = next((e for e in elements if e.get('type') == 'bus' and (e.get('bus_number') == b_num or e.get('busNumber') == b_num)), None)
+        if not parent_bus:
+            return elements
+
+        b_pos = parent_bus.get('position', {'dx': 100.0, 'dy': 200.0})
+        bx = float(b_pos.get('dx', 100.0))
+        by = float(b_pos.get('dy', 200.0))
+        target_bus_id = parent_bus.get('id')
+
+        if cat == 'generator':
+            g_pos = {'dx': bx + 20.0, 'dy': by - 60.0}
+            gen_id = f"gen_applied_{b_num}"
+            lead_id = f"lead_gen_applied_{b_num}"
+            gen_el = {
+                'id': gen_id,
+                'type': 'generator',
+                'parentBusId': target_bus_id,
+                'bus_number': b_num,
+                'position': g_pos,
+                'width': 44.0,
+                'height': 44.0,
+                'label': ex_data.get('label', f"G_{b_num}"),
+                'source': 'excel_review_applied',
+                'isSlack': ex_data.get('is_slack', False),
+                'isSynchronousCondenser': ex_data.get('is_synchronous_condenser', False),
+                'vPu': ex_data.get('v_pu', 1.0),
+                'pPu': ex_data.get('pg_pu', 0.0),
+                'qPu': ex_data.get('qg_pu', 0.0),
+                'isEquipmentLead': False,
+                'electricalBranch': True,
+            }
+            lead_el = {
+                'id': lead_id,
+                'type': 'line',
+                'position': g_pos,
+                'endPosition': {'dx': bx, 'dy': by},
+                'startElementId': gen_id,
+                'endElementId': target_bus_id,
+                'label': f"Lead G_{b_num} ↔ Bus_{b_num}",
+                'source': 'excel_review_applied',
+                'isEquipmentLead': True,
+                'isGenLead': True,
+                'electricalBranch': False,
+                'rPu': 0.0,
+                'xPu': 0.0,
+                'bPu': 0.0,
+                'tapRatio': 1.0,
+            }
+            return elements + [gen_el, lead_el]
+        elif cat == 'load':
+            l_pos = {'dx': bx + 20.0, 'dy': by + 60.0}
+            load_id = f"load_applied_{b_num}"
+            lead_id = f"lead_load_applied_{b_num}"
+            load_el = {
+                'id': load_id,
+                'type': 'load',
+                'parentBusId': target_bus_id,
+                'bus_number': b_num,
+                'position': l_pos,
+                'width': 36.0,
+                'height': 40.0,
+                'label': ex_data.get('label', f"Load_{b_num}"),
+                'source': 'excel_review_applied',
+                'pPu': ex_data.get('p_pu', 0.0),
+                'qPu': ex_data.get('q_pu', 0.0),
+                'isEquipmentLead': False,
+                'electricalBranch': True,
+            }
+            lead_el = {
+                'id': lead_id,
+                'type': 'line',
+                'position': l_pos,
+                'endPosition': {'dx': bx, 'dy': by},
+                'startElementId': load_id,
+                'endElementId': target_bus_id,
+                'label': f"Lead Load_{b_num} ↔ Bus_{b_num}",
+                'source': 'excel_review_applied',
+                'isEquipmentLead': True,
+                'isGenLead': False,
+                'electricalBranch': False,
+                'rPu': 0.0,
+                'xPu': 0.0,
+                'bPu': 0.0,
+                'tapRatio': 1.0,
+            }
+            return elements + [load_el, lead_el]
+        return elements
+
+    def test_1_bus_ok_excel_gen_exists_vision_gen_missing(self):
         """
         TEST 1
-        Canvas Bus: 1, 2, 3
-        Excel Bus: 1, 2, 3
-        Excel Bus 2 Generator exists, Vision Generator missed
-        결과:
-        - Bus 2 유지
-        - Generator 자동 생성 (gen_auto_2)
-        - Generator-Bus 2 lead 자동 생성 (lead_gen_auto_2)
-        - Excel P/Q/V 적용
-        - Solver에 Generator 포함
+        Bus 정상, Excel Generator 존재, Vision Generator 없음
+        -> proposal 생성
+        -> 실제 element 변화 없음 (zero auto mutation)
+        -> solver 변화 없음
         """
         excel_data = {
             'sbase_mva': 100.0,
@@ -53,53 +143,209 @@ class TestExcelGeneratorAutoSupplement(unittest.TestCase):
             {'id': 'gen_1', 'type': 'generator', 'parentBusId': 'bus_1', 'label': 'G_1', 'bus_number': 1},
             {'id': 'line_1_2', 'type': 'line', 'startElementId': 'bus_1', 'endElementId': 'bus_2', 'label': 'Line 1-2'},
             {'id': 'line_2_3', 'type': 'line', 'startElementId': 'bus_2', 'endElementId': 'bus_3', 'label': 'Line 2-3'},
-            # Bus 2 Generator missed by Vision
+            {'id': 'load_3', 'type': 'load', 'parentBusId': 'bus_3', 'bus_number': 3, 'label': 'Load_3'},
+            # Bus 2 Generator is missing in diagram
+        ]
+
+        count_before = len(diagram_elements)
+        solver_input_before = self.solver.parse_elements(diagram_elements)
+
+        updated_elements, summary = self.importer.apply_to_elements(diagram_elements, excel_data)
+
+        # 1. Element count must be unchanged (NO auto-mutation)
+        self.assertEqual(len(updated_elements), count_before)
+        self.assertFalse(any('gen_auto' in str(e.get('id', '')) for e in updated_elements))
+
+        # 2. Proposal generated for Bus 2 Generator
+        proposals = summary.get('repair_proposals', [])
+        self.assertEqual(len(proposals), 1)
+        prop = proposals[0]
+        self.assertEqual(prop['category'], 'generator')
+        self.assertEqual(prop['bus_number'], 2)
+        self.assertEqual(prop['action'], 'suggest_add')
+        self.assertEqual(prop['reason'], 'EXCEL_EXISTS_VISION_MISSING')
+        self.assertAlmostEqual(prop['excel_data']['pg_mw'], 80.0)
+        self.assertAlmostEqual(prop['excel_data']['pg_pu'], 0.8)
+
+        # 3. Solver parsed input unchanged
+        solver_input_after = self.solver.parse_elements(updated_elements)
+        self.assertEqual(len(solver_input_before['gens_by_bus']), len(solver_input_after['gens_by_bus']))
+        self.assertNotIn(2, solver_input_after['gens_by_bus'])
+
+    def test_2_apply_generator_proposal(self):
+        """
+        TEST 2
+        Generator proposal Apply
+        -> Generator + lead 생성
+        -> P/Q/V Excel 적용
+        -> solver에 Generator 포함
+        """
+        proposal = {
+            'category': 'generator',
+            'action': 'suggest_add',
+            'bus_number': 2,
+            'excel_data': {
+                'bus_number': 2,
+                'pg_mw': 80.0,
+                'pg_pu': 0.8,
+                'qg_mvar': 30.0,
+                'qg_pu': 0.3,
+                'v_pu': 1.02,
+                'is_slack': False,
+                'is_synchronous_condenser': False,
+                'label': 'G_2'
+            }
+        }
+        elements = [
+            {'id': 'bus_1', 'type': 'bus', 'label': '1', 'bus_number': 1, 'isSlack': True, 'position': {'dx': 100.0, 'dy': 200.0}},
+            {'id': 'bus_2', 'type': 'bus', 'label': '2', 'bus_number': 2, 'isSlack': False, 'position': {'dx': 300.0, 'dy': 250.0}},
+            {'id': 'line_1_2', 'type': 'line', 'startElementId': 'bus_1', 'endElementId': 'bus_2', 'rPu': 0.01, 'xPu': 0.05, 'bPu': 0.0},
+        ]
+
+        elements_applied = self._simulate_apply_proposal(elements, proposal)
+
+        # Generator & lead added
+        gen_el = next((e for e in elements_applied if e.get('type') == 'generator' and e.get('bus_number') == 2), None)
+        lead_el = next((e for e in elements_applied if e.get('isEquipmentLead') and e.get('isGenLead')), None)
+
+        self.assertIsNotNone(gen_el)
+        self.assertIsNotNone(lead_el)
+        self.assertEqual(gen_el['source'], 'excel_review_applied')
+        self.assertEqual(gen_el['position'], {'dx': 320.0, 'dy': 190.0}) # Canvas coordinates near Bus 2!
+        self.assertAlmostEqual(gen_el['pPu'], 0.8)
+        self.assertAlmostEqual(gen_el['qPu'], 0.3)
+        self.assertAlmostEqual(gen_el['vPu'], 1.02)
+
+        # Solver must now include Bus 2 Generator
+        parsed = self.solver.parse_elements(elements_applied)
+        self.assertIn(2, parsed['gens_by_bus'])
+        self.assertAlmostEqual(parsed['gens_by_bus'][2][0]['p_pu'], 0.8)
+
+        # Lead must NOT be parsed into transmission branches
+        lead_branches = [b for b in parsed['branches'] if 'lead' in str(b.get('label', '')).lower()]
+        self.assertEqual(len(lead_branches), 0)
+
+    def test_3_reject_proposal(self):
+        """
+        TEST 3
+        Proposal Reject
+        -> Canvas 변화 없음
+        -> solver 변화 없음
+        -> rejected 기록
+        """
+        elements = [
+            {'id': 'bus_1', 'type': 'bus', 'label': '1', 'bus_number': 1, 'isSlack': True, 'position': {'dx': 100.0, 'dy': 200.0}},
+            {'id': 'bus_2', 'type': 'bus', 'label': '2', 'bus_number': 2, 'isSlack': False, 'position': {'dx': 300.0, 'dy': 250.0}},
+        ]
+        count_before = len(elements)
+        parsed_before = self.solver.parse_elements(elements)
+
+        # User rejects proposal -> elements list is NOT modified
+        rejected_log = []
+        proposal = {'category': 'generator', 'bus_number': 2}
+        rejected_log.append(f"Rejected proposal for Bus {proposal['bus_number']} {proposal['category']}")
+
+        self.assertEqual(len(elements), count_before)
+        parsed_after = self.solver.parse_elements(elements)
+        self.assertEqual(len(parsed_before['gens_by_bus']), len(parsed_after['gens_by_bus']))
+        self.assertEqual(len(rejected_log), 1)
+
+    def test_4_excel_load_exists_vision_load_missing(self):
+        """
+        TEST 4
+        Excel Load 존재, Vision Load 없음
+        -> Load proposal 생성
+        """
+        excel_data = {
+            'sbase_mva': 100.0,
+            'slack_bus_number': 1,
+            'buses': {
+                '1': {'bus_number': 1, 'type': 'Swing', 'pload_pu': 0.0, 'qload_pu': 0.0},
+                '2': {'bus_number': 2, 'type': 'PQ', 'pload_mw': 50.0, 'qload_mvar': 20.0, 'pload_pu': 0.5, 'qload_pu': 0.2},
+            },
+            'generators': {
+                '1': {'bus_number': 1, 'is_slack': True, 'pg_mw': 50.0, 'pg_pu': 0.5, 'qg_pu': 0.2, 'voltage_setpoint': 1.0},
+            },
+            'branches': {
+                '1': {'from_bus': 1, 'to_bus': 2, 'r_pu': 0.01, 'x_pu': 0.05, 'b_pu': 0.0},
+            },
+            'transformers': {}
+        }
+        diagram_elements = [
+            {'id': 'bus_1', 'type': 'bus', 'label': '1', 'bus_number': 1, 'isSlack': True, 'position': {'dx': 100.0, 'dy': 200.0}},
+            {'id': 'bus_2', 'type': 'bus', 'label': '2', 'bus_number': 2, 'isSlack': False, 'position': {'dx': 250.0, 'dy': 200.0}},
+            {'id': 'gen_1', 'type': 'generator', 'parentBusId': 'bus_1', 'label': 'G_1', 'bus_number': 1},
+            {'id': 'line_1_2', 'type': 'line', 'startElementId': 'bus_1', 'endElementId': 'bus_2'},
+            # Bus 2 Load missing
         ]
 
         updated_elements, summary = self.importer.apply_to_elements(diagram_elements, excel_data)
 
-        # 1. Bus 2 유지 확인
-        bus2 = next((e for e in updated_elements if e['id'] == 'bus_2'), None)
-        self.assertIsNotNone(bus2)
-        self.assertEqual(bus2.get('bus_number'), 2)
+        # Element count unchanged
+        self.assertEqual(len(updated_elements), len(diagram_elements))
 
-        # 2. Generator 자동 생성 (gen_auto_2)
-        auto_gen = next((e for e in updated_elements if e['id'] == 'gen_auto_2'), None)
-        self.assertIsNotNone(auto_gen, "gen_auto_2 must be auto-created")
-        self.assertEqual(auto_gen['type'], 'generator')
-        self.assertEqual(auto_gen['parentBusId'], 'bus_2')
-        self.assertEqual(auto_gen['bus_number'], 2)
-        self.assertEqual(auto_gen['source'], 'excel_auto')
-        self.assertAlmostEqual(auto_gen['pPu'], 0.8)
-        self.assertAlmostEqual(auto_gen['qPu'], 0.3)
-        self.assertAlmostEqual(auto_gen['vPu'], 1.02)
+        # Load proposal generated
+        proposals = summary.get('repair_proposals', [])
+        load_props = [p for p in proposals if p['category'] == 'load']
+        self.assertEqual(len(load_props), 1)
+        self.assertEqual(load_props[0]['bus_number'], 2)
+        self.assertAlmostEqual(load_props[0]['excel_data']['p_mw'], 50.0)
+        self.assertAlmostEqual(load_props[0]['excel_data']['p_pu'], 0.5)
 
-        # 3. Generator lead 자동 생성 (lead_gen_auto_2)
-        auto_lead = next((e for e in updated_elements if e['id'] == 'lead_gen_auto_2'), None)
-        self.assertIsNotNone(auto_lead, "lead_gen_auto_2 must be auto-created")
-        self.assertEqual(auto_lead['type'], 'line')
-        self.assertEqual(auto_lead['startElementId'], 'gen_auto_2')
-        self.assertEqual(auto_lead['endElementId'], 'bus_2')
-        self.assertTrue(auto_lead.get('isEquipmentLead'))
-        self.assertTrue(auto_lead.get('isGenLead'))
-        self.assertFalse(auto_lead.get('electricalBranch'))
-        self.assertEqual(auto_lead['source'], 'excel_auto')
-
-        # 4. Solver에 Generator 정상 포함
-        parsed = self.solver.parse_elements(updated_elements)
-        self.assertIn(2, parsed['gens_by_bus'])
-        self.assertAlmostEqual(parsed['gens_by_bus'][2][0]['p_pu'], 0.8)
-
-    def test_2_bus_mismatch_canvas_12_excel_123_error(self):
+    def test_5_apply_load_proposal(self):
         """
-        TEST 2
-        Canvas Bus: 1, 2
-        Excel Bus: 1, 2, 3
-        결과:
-        - ERROR (bus_validation_passed == False, mismatch report is_matched == False)
-        - Bus 3 자동 생성 금지
-        - Generator 자동 생성도 실행하지 않음
-        - Solver 실행 차단
+        TEST 5
+        Load Apply
+        -> Load + non-electrical lead 생성
+        -> Solver에 Load 포함
+        """
+        proposal = {
+            'category': 'load',
+            'action': 'suggest_add',
+            'bus_number': 2,
+            'excel_data': {
+                'bus_number': 2,
+                'p_mw': 50.0,
+                'p_pu': 0.5,
+                'q_mvar': 20.0,
+                'q_pu': 0.2,
+                'label': 'Load_2',
+            }
+        }
+        elements = [
+            {'id': 'bus_1', 'type': 'bus', 'label': '1', 'bus_number': 1, 'isSlack': True, 'position': {'dx': 100.0, 'dy': 200.0}},
+            {'id': 'bus_2', 'type': 'bus', 'label': '2', 'bus_number': 2, 'isSlack': False, 'position': {'dx': 300.0, 'dy': 200.0}},
+            {'id': 'line_1_2', 'type': 'line', 'startElementId': 'bus_1', 'endElementId': 'bus_2', 'rPu': 0.01, 'xPu': 0.05, 'bPu': 0.0},
+        ]
+
+        elements_applied = self._simulate_apply_proposal(elements, proposal)
+
+        # Load & lead added
+        load_el = next((e for e in elements_applied if e.get('type') == 'load' and e.get('bus_number') == 2), None)
+        lead_el = next((e for e in elements_applied if e.get('isEquipmentLead') and not e.get('isGenLead')), None)
+
+        self.assertIsNotNone(load_el)
+        self.assertIsNotNone(lead_el)
+        self.assertEqual(load_el['source'], 'excel_review_applied')
+        self.assertEqual(load_el['position'], {'dx': 320.0, 'dy': 260.0}) # below bus
+        self.assertAlmostEqual(load_el['pPu'], 0.5)
+        self.assertAlmostEqual(load_el['qPu'], 0.2)
+
+        # Solver must include Load
+        parsed = self.solver.parse_elements(elements_applied)
+        self.assertIn(2, parsed['loads_by_bus'])
+        self.assertAlmostEqual(parsed['loads_by_bus'][2][0]['p_pu'], 0.5)
+
+        # Lead not in branches
+        self.assertEqual(len(parsed['branches']), 1)
+
+    def test_6_bus_mismatch_error_no_proposals_no_bus_creation(self):
+        """
+        TEST 6
+        Bus mismatch
+        -> ERROR
+        -> proposal 없음 (repair_proposals == [])
+        -> 자동 Bus 생성 없음
         """
         excel_data = {
             'sbase_mva': 100.0,
@@ -107,15 +353,16 @@ class TestExcelGeneratorAutoSupplement(unittest.TestCase):
             'buses': {
                 '1': {'bus_number': 1, 'type': 'Swing', 'pload_pu': 0.0, 'qload_pu': 0.0},
                 '2': {'bus_number': 2, 'type': 'PV', 'pload_pu': 0.0, 'qload_pu': 0.0},
-                '3': {'bus_number': 3, 'type': 'PV', 'pload_pu': 0.0, 'qload_pu': 0.0},
+                '3': {'bus_number': 3, 'type': 'PQ', 'pload_pu': 0.3, 'qload_pu': 0.1},
             },
             'generators': {
                 '1': {'bus_number': 1, 'is_slack': True, 'pg_mw': 0.0, 'pg_pu': 0.0, 'qg_pu': 0.0, 'voltage_setpoint': 1.0},
-                '3': {'bus_number': 3, 'is_slack': False, 'pg_mw': 50.0, 'pg_pu': 0.5, 'qg_pu': 0.2, 'voltage_setpoint': 1.0},
+                '2': {'bus_number': 2, 'is_slack': False, 'pg_mw': 50.0, 'pg_pu': 0.5, 'qg_pu': 0.2, 'voltage_setpoint': 1.0},
             },
             'branches': {},
             'transformers': {}
         }
+        # Canvas only has Bus 1, Bus 2 (Bus 3 missing)
         diagram_elements = [
             {'id': 'bus_1', 'type': 'bus', 'label': '1', 'bus_number': 1, 'isSlack': True},
             {'id': 'bus_2', 'type': 'bus', 'label': '2', 'bus_number': 2, 'isSlack': False},
@@ -123,377 +370,156 @@ class TestExcelGeneratorAutoSupplement(unittest.TestCase):
 
         updated_elements, summary = self.importer.apply_to_elements(diagram_elements, excel_data)
 
-        # Bus validation FAILED
+        # 1. Bus validation failed
         self.assertFalse(summary.get('bus_validation_passed', True))
         mismatch = summary.get('mismatch_report', {})
         self.assertFalse(mismatch.get('is_matched', True))
         self.assertIn(3, mismatch.get('details', {}).get('missing_buses', []))
 
-        # Bus 3 자동 생성 금지
-        self.assertFalse(any('bus_3' in str(e.get('id', '')) or e.get('bus_number') == 3 for e in updated_elements))
+        # 2. Strict policy: NO proposals generated when bus validation fails
+        self.assertEqual(len(summary.get('repair_proposals', [])), 0)
 
-        # Generator 자동 생성 금지
-        self.assertFalse(any(e.get('id') == 'gen_auto_3' for e in updated_elements))
-        self.assertEqual(len(summary.get('added_auto_generators', [])), 0)
+        # 3. NO bus created
+        self.assertEqual(len(updated_elements), 2)
+        self.assertFalse(any(e.get('bus_number') == 3 for e in updated_elements))
 
-        # Solver 실행 시 누락된 모선에 대한 검증 오류로 실행 차단
-        parsed = self.solver.parse_elements(updated_elements)
-        self.assertNotIn(3, parsed['buses'])
-
-    def test_3_bus_mismatch_canvas_1234_excel_123_error(self):
-        """
-        TEST 3
-        Canvas: Bus 1, Bus 2, Bus 3, Bus 4
-        Excel: Bus 1, Bus 2, Bus 3
-        결과:
-        - ERROR (bus_validation_passed == False)
-        - Bus 4 삭제/수정 금지 (Canvas 요소 보존)
-        - Excel Bus 4 생성 금지
-        - 자동보완 금지
-        """
-        excel_data = {
-            'sbase_mva': 100.0,
-            'slack_bus_number': 1,
-            'buses': {
-                '1': {'bus_number': 1, 'type': 'Swing', 'pload_pu': 0.0, 'qload_pu': 0.0},
-                '2': {'bus_number': 2, 'type': 'PQ', 'pload_pu': 0.1, 'qload_pu': 0.05},
-                '3': {'bus_number': 3, 'type': 'PQ', 'pload_pu': 0.2, 'qload_pu': 0.1},
-            },
-            'generators': {
-                '1': {'bus_number': 1, 'is_slack': True, 'pg_mw': 0.0, 'pg_pu': 0.0, 'qg_pu': 0.0, 'voltage_setpoint': 1.0},
-            },
-            'branches': {},
-            'transformers': {}
-        }
-        diagram_elements = [
-            {'id': 'bus_1', 'type': 'bus', 'label': '1', 'bus_number': 1, 'isSlack': True},
-            {'id': 'bus_2', 'type': 'bus', 'label': '2', 'bus_number': 2, 'isSlack': False},
-            {'id': 'bus_3', 'type': 'bus', 'label': '3', 'bus_number': 3, 'isSlack': False},
-            {'id': 'bus_4', 'type': 'bus', 'label': '4', 'bus_number': 4, 'isSlack': False},
-        ]
-
-        updated_elements, summary = self.importer.apply_to_elements(diagram_elements, excel_data)
-
-        # Bus validation FAILED
-        self.assertFalse(summary.get('bus_validation_passed', True))
-        mismatch = summary.get('mismatch_report', {})
-        self.assertFalse(mismatch.get('is_matched', True))
-        self.assertIn(4, mismatch.get('details', {}).get('surplus_buses', []))
-
-        # Bus 4 삭제/수정 금지
-        bus4 = next((e for e in updated_elements if e['id'] == 'bus_4'), None)
-        self.assertIsNotNone(bus4, "Bus 4 must not be deleted or modified")
-        self.assertEqual(bus4.get('bus_number'), 4)
-
-        # 자동보완 금지
-        self.assertEqual(len(summary.get('added_auto_generators', [])), 0)
-
-    def test_4_bus_mismatch_canvas_123_excel_124_error(self):
-        """
-        TEST 4
-        Canvas Bus 수와 Excel Bus 수는 같지만 (3개씩)
-        Canvas: 1, 2, 3
-        Excel: 1, 2, 4
-        결과:
-        - ERROR
-        - Bus 3 -> Bus 4 자동 rename 금지
-        - Bus 4 자동 생성 금지
-        - 자동보완 금지
-        """
-        excel_data = {
-            'sbase_mva': 100.0,
-            'slack_bus_number': 1,
-            'buses': {
-                '1': {'bus_number': 1, 'type': 'Swing', 'pload_pu': 0.0, 'qload_pu': 0.0},
-                '2': {'bus_number': 2, 'type': 'PV', 'pload_pu': 0.0, 'qload_pu': 0.0},
-                '4': {'bus_number': 4, 'type': 'PQ', 'pload_pu': 0.2, 'qload_pu': 0.1},
-            },
-            'generators': {
-                '1': {'bus_number': 1, 'is_slack': True, 'pg_mw': 0.0, 'pg_pu': 0.0, 'qg_pu': 0.0, 'voltage_setpoint': 1.0},
-                '2': {'bus_number': 2, 'is_slack': False, 'pg_mw': 50.0, 'pg_pu': 0.5, 'qg_pu': 0.2, 'voltage_setpoint': 1.0},
-            },
-            'branches': {},
-            'transformers': {}
-        }
-        diagram_elements = [
-            {'id': 'bus_1', 'type': 'bus', 'label': '1', 'bus_number': 1, 'isSlack': True},
-            {'id': 'bus_2', 'type': 'bus', 'label': '2', 'bus_number': 2, 'isSlack': False},
-            {'id': 'bus_3', 'type': 'bus', 'label': '3', 'bus_number': 3, 'isSlack': False},
-        ]
-
-        updated_elements, summary = self.importer.apply_to_elements(diagram_elements, excel_data)
-
-        # Bus validation FAILED
-        self.assertFalse(summary.get('bus_validation_passed', True))
-        mismatch = summary.get('mismatch_report', {})
-        self.assertFalse(mismatch.get('is_matched', True))
-        self.assertIn(4, mismatch.get('details', {}).get('missing_buses', []))
-        self.assertIn(3, mismatch.get('details', {}).get('surplus_buses', []))
-
-        # Bus 3 -> 4 자동 rename 금지
-        bus3 = next((e for e in updated_elements if e['id'] == 'bus_3'), None)
-        self.assertIsNotNone(bus3)
-        self.assertEqual(bus3.get('bus_number'), 3)
-        self.assertEqual(bus3.get('label'), '1' if bus3.get('id') == 'bus_1' else ('3' if bus3.get('id') == 'bus_3' else ''))
-
-        # Bus 4 자동 생성 금지
-        self.assertFalse(any(e.get('bus_number') == 4 or 'bus_4' in str(e.get('id', '')) for e in updated_elements))
-
-    def test_5_bus14_load_exists_gen_missed(self):
-        """
-        TEST 5
-        Bus 14에 Load 존재
-        Generator Vision 미검출
-        Excel Generator 존재
-        결과:
-        - Load 유지 (SC 오분류 금지)
-        - Generator 자동 추가
-        - Generator lead 추가
-        - 둘 다 같은 Bus에 존재
-        """
-        excel_data = {
-            'sbase_mva': 100.0,
-            'slack_bus_number': 1,
-            'buses': {
-                '1': {'bus_number': 1, 'type': 'Swing', 'pload_pu': 0.0, 'qload_pu': 0.0},
-                '14': {'bus_number': 14, 'type': 'PV', 'pload_pu': 0.78, 'qload_pu': 0.2},
-            },
-            'generators': {
-                '1': {'bus_number': 1, 'is_slack': True, 'pg_mw': 0.0, 'pg_pu': 0.0, 'qg_pu': 0.0, 'voltage_setpoint': 1.0},
-                '14': {'bus_number': 14, 'is_slack': False, 'pg_mw': 100.0, 'pg_pu': 1.0, 'qg_pu': 0.46, 'voltage_setpoint': 1.0},
-            },
-            'branches': {},
-            'transformers': {}
-        }
-        diagram_elements = [
-            {'id': 'bus_1', 'type': 'bus', 'label': '1', 'bus_number': 1, 'isSlack': True},
-            {'id': 'bus_14', 'type': 'bus', 'label': '14', 'bus_number': 14, 'isSlack': False, 'position': {'dx': 300.0, 'dy': 200.0}},
-            {'id': 'load_14', 'type': 'load', 'parentBusId': 'bus_14', 'label': 'Load_14', 'bus_number': 14},
-        ]
-
-        updated_elements, _ = self.importer.apply_to_elements(diagram_elements, excel_data)
-
-        # 1. Load_14 유지 확인
-        load14 = next(e for e in updated_elements if e['id'] == 'load_14')
-        self.assertFalse(load14.get('isSynchronousCondenser', False))
-        self.assertEqual(load14['label'], 'Load_14')
-        self.assertAlmostEqual(load14['pPu'], 0.78)
-
-        # 2. Generator 자동 추가 확인
-        gen14 = next((e for e in updated_elements if e['id'] == 'gen_auto_14'), None)
-        self.assertIsNotNone(gen14, "gen_auto_14 must be created")
-        self.assertEqual(gen14['bus_number'], 14)
-        self.assertEqual(gen14['parentBusId'], 'bus_14')
-        self.assertAlmostEqual(gen14['pPu'], 1.0)
-        self.assertEqual(gen14['source'], 'excel_auto')
-
-        # 3. Generator lead 추가 확인
-        lead14 = next((e for e in updated_elements if e['id'] == 'lead_gen_auto_14'), None)
-        self.assertIsNotNone(lead14, "lead_gen_auto_14 must be created")
-        self.assertEqual(lead14['startElementId'], 'gen_auto_14')
-        self.assertEqual(lead14['endElementId'], 'bus_14')
-
-        # 4. 둘 다 같은 Bus 14에 공존
-        parsed = self.solver.parse_elements(updated_elements)
-        self.assertIn(14, parsed['loads_by_bus'])
-        self.assertIn(14, parsed['gens_by_bus'])
-
-    def test_6_gen_already_detected_in_vision(self):
-        """
-        TEST 6
-        Generator 이미 Vision에서 검출됨
-        Excel에도 존재
-        결과:
-        - 기존 Generator에 Excel data 적용
-        - gen_auto 생성 금지
-        - lead 중복 생성 금지
-        """
-        excel_data = {
-            'sbase_mva': 100.0,
-            'slack_bus_number': 1,
-            'buses': {
-                '1': {'bus_number': 1, 'type': 'Swing', 'pload_pu': 0.0, 'qload_pu': 0.0},
-                '2': {'bus_number': 2, 'type': 'PV', 'pload_pu': 0.2, 'qload_pu': 0.1},
-            },
-            'generators': {
-                '1': {'bus_number': 1, 'is_slack': True, 'pg_mw': 0.0, 'pg_pu': 0.0, 'qg_pu': 0.0, 'voltage_setpoint': 1.05},
-                '2': {'bus_number': 2, 'is_slack': False, 'pg_mw': 60.0, 'pg_pu': 0.6, 'qg_pu': 0.25, 'voltage_setpoint': 1.02},
-            },
-            'branches': {},
-            'transformers': {}
-        }
-        diagram_elements = [
-            {'id': 'bus_1', 'type': 'bus', 'label': '1', 'bus_number': 1, 'isSlack': True},
-            {'id': 'bus_2', 'type': 'bus', 'label': '2', 'bus_number': 2, 'isSlack': False},
-            {'id': 'gen_1', 'type': 'generator', 'parentBusId': 'bus_1', 'label': 'G_1', 'bus_number': 1},
-            {'id': 'gen_2', 'type': 'generator', 'parentBusId': 'bus_2', 'label': 'G_2', 'bus_number': 2},
-        ]
-        init_len = len(diagram_elements)
-
-        updated_elements, summary = self.importer.apply_to_elements(diagram_elements, excel_data)
-
-        # 기존 발전기 update
-        gen2 = next(e for e in updated_elements if e['id'] == 'gen_2')
-        self.assertAlmostEqual(gen2['pPu'], 0.6)
-        self.assertAlmostEqual(gen2['qPu'], 0.25)
-        self.assertAlmostEqual(gen2['vPu'], 1.02)
-
-        # gen_auto 및 lead 생성 금지
-        self.assertFalse(any(e['id'] == 'gen_auto_2' for e in updated_elements))
-        self.assertFalse(any(e['id'] == 'lead_gen_auto_2' for e in updated_elements))
-        self.assertEqual(len(updated_elements), init_len)
-
-    def test_7_excel_apply_twice_no_duplicates(self):
+    def test_7_branch_mismatch_error_no_line_auto_creation(self):
         """
         TEST 7
-        Excel apply 두 번 실행
-        결과:
-        - Generator 중복 없음
-        - lead 중복 없음
+        Branch mismatch
+        -> ERROR / REVIEW
+        -> Line 자동 생성 없음
         """
         excel_data = {
             'sbase_mva': 100.0,
             'slack_bus_number': 1,
             'buses': {
                 '1': {'bus_number': 1, 'type': 'Swing', 'pload_pu': 0.0, 'qload_pu': 0.0},
-                '3': {'bus_number': 3, 'type': 'PV', 'pload_pu': 0.0, 'qload_pu': 0.0},
+                '2': {'bus_number': 2, 'type': 'PQ', 'pload_pu': 0.0, 'qload_pu': 0.0},
             },
             'generators': {
                 '1': {'bus_number': 1, 'is_slack': True, 'pg_mw': 0.0, 'pg_pu': 0.0, 'qg_pu': 0.0, 'voltage_setpoint': 1.0},
-                '3': {'bus_number': 3, 'is_slack': False, 'pg_mw': 60.0, 'pg_pu': 0.6, 'qg_pu': 0.2, 'voltage_setpoint': 1.0},
-            },
-            'branches': {},
-            'transformers': {}
-        }
-        diagram_elements = [
-            {'id': 'bus_1', 'type': 'bus', 'label': '1', 'bus_number': 1, 'isSlack': True},
-            {'id': 'bus_3', 'type': 'bus', 'label': '3', 'bus_number': 3, 'isSlack': False},
-        ]
-
-        # 1차 적용
-        first_pass_elements, _ = self.importer.apply_to_elements(diagram_elements, excel_data)
-        gens_pass1 = [e for e in first_pass_elements if e.get('type') == 'generator' and (e.get('bus_number') == 3 or '3' in str(e.get('id', '')))]
-        leads_pass1 = [e for e in first_pass_elements if e.get('type') == 'line' and '3' in str(e.get('id', ''))]
-        self.assertEqual(len(gens_pass1), 1)
-        self.assertEqual(len(leads_pass1), 1)
-
-        # 2차 적용 (1차 결과 재입력)
-        second_pass_elements, _ = self.importer.apply_to_elements(first_pass_elements, excel_data)
-        gens_pass2 = [e for e in second_pass_elements if e.get('type') == 'generator' and (e.get('bus_number') == 3 or '3' in str(e.get('id', '')))]
-        leads_pass2 = [e for e in second_pass_elements if e.get('type') == 'line' and '3' in str(e.get('id', ''))]
-        self.assertEqual(len(gens_pass2), 1, "Generator 중복 없음")
-        self.assertEqual(len(leads_pass2), 1, "Lead 중복 없음")
-
-    def test_8_arbitrary_bus37_auto_supplement(self):
-        """
-        TEST 8
-        임의 Bus 37
-        Vision Generator 미검출
-        Excel Generator 존재
-        Bus validation 정상
-        결과:
-        - 동일하게 Generator + lead 자동보완 (Bus 14 하드코딩 없음)
-        """
-        excel_data = {
-            'sbase_mva': 100.0,
-            'slack_bus_number': 1,
-            'buses': {
-                '1': {'bus_number': 1, 'type': 'Swing', 'pload_pu': 0.0, 'qload_pu': 0.0},
-                '37': {'bus_number': 37, 'type': 'PV', 'pload_pu': 0.1, 'qload_pu': 0.05},
-            },
-            'generators': {
-                '1': {'bus_number': 1, 'is_slack': True, 'pg_mw': 0.0, 'pg_pu': 0.0, 'qg_pu': 0.0, 'voltage_setpoint': 1.0},
-                '37': {'bus_number': 37, 'is_slack': False, 'pg_mw': 120.0, 'pg_pu': 1.2, 'qg_pu': 0.45, 'voltage_setpoint': 1.01},
-            },
-            'branches': {},
-            'transformers': {}
-        }
-        diagram_elements = [
-            {'id': 'bus_1', 'type': 'bus', 'label': '1', 'bus_number': 1, 'isSlack': True},
-            {'id': 'bus_37', 'type': 'bus', 'label': '37', 'bus_number': 37, 'isSlack': False},
-        ]
-
-        updated_elements, _ = self.importer.apply_to_elements(diagram_elements, excel_data)
-
-        # gen_auto_37 생성 확인
-        auto_gen = next((e for e in updated_elements if e['id'] == 'gen_auto_37'), None)
-        self.assertIsNotNone(auto_gen, "Bus 37 generator must be auto-supplemented")
-        self.assertAlmostEqual(auto_gen['pPu'], 1.2)
-        self.assertEqual(auto_gen['source'], 'excel_auto')
-
-        # lead_gen_auto_37 생성 확인
-        auto_lead = next((e for e in updated_elements if e['id'] == 'lead_gen_auto_37'), None)
-        self.assertIsNotNone(auto_lead, "Bus 37 lead must be auto-supplemented")
-        self.assertEqual(auto_lead['startElementId'], 'gen_auto_37')
-        self.assertEqual(auto_lead['endElementId'], 'bus_37')
-
-        # Solver 전달 확인
-        parsed = self.solver.parse_elements(updated_elements)
-        self.assertIn(37, parsed['gens_by_bus'])
-        self.assertAlmostEqual(parsed['gens_by_bus'][37][0]['p_pu'], 1.2)
-
-    def test_9_lead_not_in_ybus_or_branches(self):
-        """
-        TEST 9
-        자동생성 lead가 PowerFlow branch/Ybus에 들어가지 않는지 검증.
-        lead 생성 전후로 electrical branch count가 변하지 않아야 한다.
-        """
-        excel_data = {
-            'sbase_mva': 100.0,
-            'slack_bus_number': 1,
-            'buses': {
-                '1': {'bus_number': 1, 'type': 'Swing', 'pload_pu': 0.0, 'qload_pu': 0.0},
-                '2': {'bus_number': 2, 'type': 'PV', 'pload_pu': 0.0, 'qload_pu': 0.0},
-            },
-            'generators': {
-                '1': {'bus_number': 1, 'is_slack': True, 'pg_mw': 0.0, 'pg_pu': 0.0, 'qg_pu': 0.0, 'voltage_setpoint': 1.0},
-                '2': {'bus_number': 2, 'is_slack': False, 'pg_mw': 50.0, 'pg_pu': 0.5, 'qg_pu': 0.2, 'voltage_setpoint': 1.0},
             },
             'branches': {
-                '1': {'from_bus': 1, 'to_bus': 2, 'r_pu': 0.02, 'x_pu': 0.08, 'b_pu': 0.0},
+                '1': {'from_bus': 1, 'to_bus': 2, 'r_pu': 0.01, 'x_pu': 0.05, 'b_pu': 0.0},
             },
             'transformers': {}
         }
-        diagram_elements_before = [
+        # Canvas has Bus 1 and Bus 2, but NO line connecting them
+        diagram_elements = [
             {'id': 'bus_1', 'type': 'bus', 'label': '1', 'bus_number': 1, 'isSlack': True},
             {'id': 'bus_2', 'type': 'bus', 'label': '2', 'bus_number': 2, 'isSlack': False},
-            {'id': 'line_1_2', 'type': 'line', 'startElementId': 'bus_1', 'endElementId': 'bus_2', 'label': 'Line 1-2', 'rPu': 0.02, 'xPu': 0.08},
+            {'id': 'gen_1', 'type': 'generator', 'parentBusId': 'bus_1', 'bus_number': 1},
         ]
 
-        # Lead 생성 전 브랜치 파싱
-        parsed_before = self.solver.parse_elements(diagram_elements_before)
-        branch_count_before = len(parsed_before['branches'])
-        self.assertEqual(branch_count_before, 1)
+        updated_elements, summary = self.importer.apply_to_elements(diagram_elements, excel_data)
 
-        # apply_to_elements 실행 (Bus 2 generator 및 lead_gen_auto_2 생성됨)
-        updated_elements, _ = self.importer.apply_to_elements(diagram_elements_before, excel_data)
+        # Line is NOT auto-created
+        self.assertEqual(len(updated_elements), len(diagram_elements))
+        self.assertFalse(any(e.get('type') == 'line' for e in updated_elements))
 
-        # lead_gen_auto_2 가 추가되었는지 확인
-        lead_el = next((e for e in updated_elements if e['id'] == 'lead_gen_auto_2'), None)
-        self.assertIsNotNone(lead_el)
+        # Reported as missing branch discrepancy
+        mismatch = summary.get('mismatch_report', {})
+        self.assertFalse(mismatch.get('is_matched', True))
+        self.assertIn([1, 2], mismatch.get('details', {}).get('missing_branches', []))
 
-        # Lead 생성 후 브랜치 파싱
+    def test_8_existing_generator_and_load_parameter_update_no_proposals(self):
+        """
+        TEST 8
+        Generator/Load 기존 존재
+        -> proposal 없음
+        -> 기존 객체 parameter update
+        """
+        excel_data = {
+            'sbase_mva': 100.0,
+            'slack_bus_number': 1,
+            'buses': {
+                '1': {'bus_number': 1, 'type': 'Swing', 'pload_pu': 0.0, 'qload_pu': 0.0},
+                '2': {'bus_number': 2, 'type': 'PQ', 'pload_mw': 45.0, 'qload_mvar': 15.0, 'pload_pu': 0.45, 'qload_pu': 0.15},
+            },
+            'generators': {
+                '1': {'bus_number': 1, 'is_slack': True, 'pg_mw': 50.0, 'pg_pu': 0.5, 'qg_pu': 0.2, 'voltage_setpoint': 1.05},
+                '2': {'bus_number': 2, 'is_slack': False, 'pg_mw': 40.0, 'pg_pu': 0.4, 'qg_pu': 0.1, 'voltage_setpoint': 1.01},
+            },
+            'branches': {
+                '1': {'from_bus': 1, 'to_bus': 2, 'r_pu': 0.01, 'x_pu': 0.05, 'b_pu': 0.0},
+            },
+            'transformers': {}
+        }
+        diagram_elements = [
+            {'id': 'bus_1', 'type': 'bus', 'label': '1', 'bus_number': 1, 'isSlack': True},
+            {'id': 'bus_2', 'type': 'bus', 'label': '2', 'bus_number': 2, 'isSlack': False},
+            {'id': 'gen_1', 'type': 'generator', 'parentBusId': 'bus_1', 'bus_number': 1},
+            {'id': 'gen_2', 'type': 'generator', 'parentBusId': 'bus_2', 'bus_number': 2},
+            {'id': 'load_2', 'type': 'load', 'parentBusId': 'bus_2', 'bus_number': 2},
+            {'id': 'line_1_2', 'type': 'line', 'startElementId': 'bus_1', 'endElementId': 'bus_2'},
+        ]
+
+        updated_elements, summary = self.importer.apply_to_elements(diagram_elements, excel_data)
+
+        # Zero proposals because all equipment already exists
+        self.assertEqual(len(summary.get('repair_proposals', [])), 0)
+
+        # Existing elements parameters updated
+        gen2 = next(e for e in updated_elements if e['id'] == 'gen_2')
+        load2 = next(e for e in updated_elements if e['id'] == 'load_2')
+        self.assertAlmostEqual(gen2['pPu'], 0.4)
+        self.assertAlmostEqual(gen2['vPu'], 1.01)
+        self.assertAlmostEqual(load2['pPu'], 0.45)
+        self.assertAlmostEqual(load2['qPu'], 0.15)
+
+    def test_9_proposal_generation_alone_leaves_solver_input_identical(self):
+        """
+        TEST 9
+        proposal generation만 수행
+        -> before/after Solver parsed input 완전히 동일
+        """
+        excel_data = {
+            'sbase_mva': 100.0,
+            'slack_bus_number': 1,
+            'buses': {
+                '1': {'bus_number': 1, 'type': 'Swing', 'pload_pu': 0.0, 'qload_pu': 0.0},
+                '2': {'bus_number': 2, 'type': 'PQ', 'pload_pu': 0.2, 'qload_pu': 0.05},
+            },
+            'generators': {
+                '1': {'bus_number': 1, 'is_slack': True, 'pg_mw': 0.0, 'pg_pu': 0.0, 'qg_pu': 0.0, 'voltage_setpoint': 1.0},
+                '2': {'bus_number': 2, 'is_slack': False, 'pg_mw': 70.0, 'pg_pu': 0.7, 'qg_pu': 0.2, 'voltage_setpoint': 1.0},
+            },
+            'branches': {
+                '1': {'from_bus': 1, 'to_bus': 2, 'r_pu': 0.01, 'x_pu': 0.05, 'b_pu': 0.0},
+            },
+            'transformers': {}
+        }
+        diagram_elements = [
+            {'id': 'bus_1', 'type': 'bus', 'label': '1', 'bus_number': 1, 'isSlack': True},
+            {'id': 'bus_2', 'type': 'bus', 'label': '2', 'bus_number': 2, 'isSlack': False, 'pPu': 0.2, 'qPu': 0.05},
+            {'id': 'gen_1', 'type': 'generator', 'parentBusId': 'bus_1', 'bus_number': 1},
+            {'id': 'line_1_2', 'type': 'line', 'startElementId': 'bus_1', 'endElementId': 'bus_2', 'rPu': 0.01, 'xPu': 0.05, 'bPu': 0.0},
+        ]
+
+        # Solver parse before proposal generation
+        parsed_before = self.solver.parse_elements(diagram_elements)
+
+        # Call apply_to_elements (generates proposal for Bus 2 Gen)
+        updated_elements, summary = self.importer.apply_to_elements(diagram_elements, excel_data)
+
+        # Solver parse after proposal generation
         parsed_after = self.solver.parse_elements(updated_elements)
-        branch_count_after = len(parsed_after['branches'])
 
-        # 선로 수 불변성 검증: electrical branch count가 변하지 않아야 함
-        self.assertEqual(branch_count_before, branch_count_after, "인입선 추가 전후 전기적 브랜치 개수는 동일해야 함")
+        self.assertEqual(len(parsed_before['buses']), len(parsed_after['buses']))
+        self.assertEqual(len(parsed_before['gens_by_bus']), len(parsed_after['gens_by_bus']))
+        self.assertEqual(len(parsed_before['loads_by_bus']), len(parsed_after['loads_by_bus']))
+        self.assertEqual(len(parsed_before['branches']), len(parsed_after['branches']))
+        self.assertNotIn(2, parsed_after['gens_by_bus'])
 
-    def test_10_case24_psse_regression(self):
+    def test_10_case24_psse_regression_proposal_flow(self):
         """
         TEST 10
-        case24_psse.xlsx regression.
-        (단, Slack 값을 529로 하드코딩하지 않음)
-        검증 항목:
-        - Bus 수/번호 validation 통과 여부
-        - Bus 14가 실제 Canvas Bus로 존재하는지
-        - Excel Generator record가 Bus 14에 매칭되는지
-        - Generator 미검출 시 Generator 자동보완
-        - Generator lead 자동 생성
-        - Load가 삭제되지 않음
-        - Generator P/Q가 Solver까지 전달
-        - lead는 Ybus/branches에 미포함
-        - 전력 수지 일치 및 조류계산 수렴
+        case24_psse.xlsx
+        -> Bus 14 Generator missing proposal 표시 확인
+        -> Apply 전 solver에는 추가되지 않는지 확인
+        -> Apply 후 Bus 14 Generator가 실제 Canvas의 Bus 14 위치 근처에 표시되는지 확인
+        -> lead가 Ybus branch에 포함되지 않는지 확인
         """
         excel_path = os.path.join(backend_dir, 'sample_cases', 'case24_psse.xlsx')
         if not os.path.exists(excel_path):
@@ -575,58 +601,51 @@ class TestExcelGeneratorAutoSupplement(unittest.TestCase):
                 'xPu': tr.get('x_pu', 0.02),
             })
 
+        count_before = len(elements)
+
         # 1. apply_to_elements 실행
         updated_elements, summary = self.importer.apply_to_elements(elements, excel_data)
 
-        # 2. Bus 수/번호 validation 통과 여부 검증
-        self.assertTrue(summary.get('bus_validation_passed', False), "Bus validation must pass")
+        # 2. Bus validation passed
+        self.assertTrue(summary.get('bus_validation_passed', False))
 
-        # 3. Bus 14가 실제 Canvas Bus로 존재하는지 확인
-        bus14 = next((e for e in updated_elements if e['id'] == 'bus_14'), None)
-        self.assertIsNotNone(bus14)
-        self.assertEqual(bus14.get('bus_number'), 14)
+        # 3. Canvas elements count must NOT change (No auto mutation)
+        self.assertEqual(len(updated_elements), count_before)
+        self.assertFalse(any('gen_auto' in str(e.get('id', '')) for e in updated_elements))
 
-        # 4. Bus 14 Load 유지 확인
-        load14 = next((e for e in updated_elements if e['id'] == 'load_14'), None)
-        self.assertIsNotNone(load14)
-        self.assertAlmostEqual(load14['pPu'], 0.78)
-        self.assertAlmostEqual(load14['qPu'], 0.20)
+        # 4. Bus 14 Generator missing proposal must be present
+        proposals = summary.get('repair_proposals', [])
+        gen14_prop = next((p for p in proposals if p['category'] == 'generator' and p['bus_number'] == 14), None)
+        self.assertIsNotNone(gen14_prop, "Bus 14 generator proposal must be present")
+        self.assertAlmostEqual(gen14_prop['excel_data']['pg_mw'], 100.0)
 
-        # 5. Bus 14 Generator 자동 보완 확인
-        auto_gen_14 = next((e for e in updated_elements if e['id'] == 'gen_auto_14'), None)
-        self.assertIsNotNone(auto_gen_14, "Bus 14 generator must be auto-supplemented")
-        self.assertAlmostEqual(auto_gen_14['pPu'], 1.0)
-        self.assertEqual(auto_gen_14['source'], 'excel_auto')
+        # 5. BEFORE Apply: solver input does NOT contain Bus 14 Generator
+        parsed_before_apply = self.solver.parse_elements(updated_elements)
+        self.assertNotIn(14, parsed_before_apply['gens_by_bus'])
 
-        # 6. Generator lead 자동 생성 확인
-        auto_lead_14 = next((e for e in updated_elements if e['id'] == 'lead_gen_auto_14'), None)
-        self.assertIsNotNone(auto_lead_14, "Bus 14 lead must be auto-created")
-        self.assertEqual(auto_lead_14['startElementId'], 'gen_auto_14')
-        self.assertEqual(auto_lead_14['endElementId'], 'bus_14')
+        # 6. User clicks Apply -> simulate apply on Canvas
+        elements_after_apply = self._simulate_apply_proposal(updated_elements, gen14_prop)
 
-        # 7. Solver 파싱 확인 (Gen P/Q 전달, lead는 Ybus/branch 미포함)
-        parsed = self.solver.parse_elements(updated_elements)
-        self.assertIn(14, parsed['gens_by_bus'])
-        self.assertAlmostEqual(parsed['gens_by_bus'][14][0]['p_pu'], 1.0)
-        self.assertIn(14, parsed['loads_by_bus'])
+        # 7. AFTER Apply: Bus 14 Generator created near Bus 14 Canvas position
+        bus14 = next(e for e in elements_after_apply if e['id'] == 'bus_14')
+        bus14_pos = bus14['position']
+        gen14 = next(e for e in elements_after_apply if e.get('type') == 'generator' and e.get('bus_number') == 14)
+        lead14 = next(e for e in elements_after_apply if e.get('isEquipmentLead') and e.get('endElementId') == 'bus_14')
 
-        # lead가 electrical branches에 포함되지 않음을 확인
-        lead_branches = [b for b in parsed['branches'] if 'lead' in str(b.get('line_id', '')).lower()]
-        self.assertEqual(len(lead_branches), 0, "Lead line must not be parsed into electrical branches")
+        self.assertIsNotNone(gen14)
+        self.assertIsNotNone(lead14)
+        self.assertEqual(gen14['position']['dx'], bus14_pos['dx'] + 20.0)
+        self.assertEqual(gen14['position']['dy'], bus14_pos['dy'] - 60.0)
 
-        # 8. 조류계산 수렴 및 전력 수지 검증
-        result = self.solver.solve(updated_elements)
-        self.assertTrue(result['converged'], f"Solver must converge: {result.get('error')}")
+        # 8. Solver includes Bus 14 Generator and lead is NOT in branches
+        parsed_after_apply = self.solver.parse_elements(elements_after_apply)
+        self.assertIn(14, parsed_after_apply['gens_by_bus'])
+        self.assertAlmostEqual(parsed_after_apply['gens_by_bus'][14][0]['p_pu'], 1.0)
+        self.assertEqual(len(parsed_before_apply['branches']), len(parsed_after_apply['branches']))
 
-        tot_gen = result['summary']['total_gen_p_mw']
-        tot_load = result['summary']['total_load_p_mw']
-        tot_loss = result['summary']['total_loss_p_mw']
-        self.assertAlmostEqual(tot_gen, tot_load + tot_loss, delta=0.5)
-
-        # Slack 모선 발전량 유효성 확인 (특정 숫자 하드코딩 없이 물리 법칙 검증)
-        bus1_res = next(b for b in result['bus_results'] if b['bus'] == slack_bus)
-        bus1_pgen = bus1_res.get('pgen', bus1_res.get('pgen_pu', 0.0) * 100.0)
-        self.assertGreater(bus1_pgen, 0.0, "Slack generator must output positive active power")
+        # 9. Power flow calculation converges
+        res = self.solver.solve(elements_after_apply)
+        self.assertTrue(res['converged'], f"Solver must converge: {res.get('error')}")
 
 
 if __name__ == '__main__':

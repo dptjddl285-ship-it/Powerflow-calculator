@@ -2897,100 +2897,28 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         final res = jsonDecode(response.body);
         if (res['status'] == 'success' && res['elements'] is List) {
           final updatedList = res['elements'] as List;
-          final List<DrawingElement> newlyAddedGens = [];
           setState(() {
-            final existingIds = elements.map((e) => e.id).toSet();
             for (var updated in updatedList) {
               if (updated is! Map<String, dynamic>) continue;
               final id = updated['id']?.toString();
               if (id == null) continue;
-              if (existingIds.contains(id)) {
-                for (var e in elements) {
-                  if (e.id == id) {
-                    e.updateFromJson(updated);
-                    break;
-                  }
-                }
-              } else {
-                // New element from backend (e.g. gen_auto_...)
-                final typeStr = updated['type']?.toString().toLowerCase() ?? '';
-                if (typeStr == 'generator' || typeStr == 'tool.generator') {
-                  final parentBusId = updated['parentBusId']?.toString();
-                  DrawingElement? parentBus;
-                  if (parentBusId != null) {
-                    for (var e in elements) {
-                      if (e.id == parentBusId && e.type == Tool.bus) {
-                        parentBus = e;
-                        break;
-                      }
-                    }
-                  }
-                  final bPos = parentBus?.position ?? Offset.zero;
-                  final gPos = parentBus != null ? Offset(bPos.dx, bPos.dy - 60) : Offset.zero;
-                  final newGenData = Map<String, dynamic>.from(updated);
-                  if (newGenData['position'] == null) {
-                    newGenData['position'] = {'dx': gPos.dx, 'dy': gPos.dy};
-                  }
-                  if (newGenData['width'] == null) {
-                    newGenData['width'] = 44.0;
-                  }
-                  if (newGenData['height'] == null) {
-                    newGenData['height'] = 44.0;
-                  }
-                  final newEl = DrawingElement.fromJson(newGenData);
-                  elements.add(newEl);
-                  existingIds.add(id);
-                  newlyAddedGens.add(newEl);
-                } else if (typeStr == 'line' || typeStr == 'tool.line') {
-                  final newLineData = Map<String, dynamic>.from(updated);
-                  final sId = newLineData['startElementId']?.toString();
-                  final eId = newLineData['endElementId']?.toString();
-                  DrawingElement? startEl;
-                  DrawingElement? endEl;
-                  if (sId != null) {
-                    startEl = elements.where((e) => e.id == sId).firstOrNull;
-                  }
-                  if (eId != null) {
-                    endEl = elements.where((e) => e.id == eId).firstOrNull;
-                  }
-                  if (newLineData['position'] == null && startEl != null) {
-                    newLineData['position'] = {'dx': startEl.position.dx, 'dy': startEl.position.dy};
-                  }
-                  if (newLineData['endPosition'] == null && endEl != null) {
-                    newLineData['endPosition'] = {'dx': endEl.position.dx, 'dy': endEl.position.dy};
-                  }
-                  final newLeadEl = DrawingElement.fromJson(newLineData);
-                  elements.add(newLeadEl);
-                  existingIds.add(id);
+              for (var e in elements) {
+                if (e.id == id) {
+                  e.updateFromJson(updated);
+                  break;
                 }
               }
             }
           });
           final summary = res['summary'] as Map<String, dynamic>? ?? {};
           final mismatchReport = (res['mismatch_report'] ?? summary['mismatch_report']) as Map<String, dynamic>?;
+          final List<dynamic> rawProps = (res['repair_proposals'] ?? summary['repair_proposals']) as List? ?? [];
+          final List<Map<String, dynamic>> repairProposals = rawProps.map((p) => Map<String, dynamic>.from(p as Map)).toList();
 
           if (mounted) {
-            if (newlyAddedGens.isNotEmpty) {
-              String msg;
-              if (newlyAddedGens.length == 1) {
-                final g = newlyAddedGens.first;
-                final bNum = _getBusNum(g.label.isNotEmpty ? g.label : (g.parentBusId ?? g.id));
-                final mw = (g.pPu * 100.0).toStringAsFixed(1).replaceAll(RegExp(r'\.0$'), '');
-                msg = "Excel 교차검증으로 도면에서 미검출된 발전기 1개를 자동 보완했습니다.\nBus $bNum: $mw MW";
-              } else {
-                msg = "도면에서 미검출된 발전기 ${newlyAddedGens.length}개를 Excel 데이터 기준으로 자동 보완했습니다.";
-              }
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text(msg),
-                  backgroundColor: Colors.blue.shade700,
-                  duration: const Duration(seconds: 4),
-                ),
-              );
-            }
-            if (mismatchReport != null && mismatchReport['is_matched'] == false) {
-              _showMismatchDialog(mismatchReport, excelData);
-            } else if (newlyAddedGens.isEmpty) {
+            if (mismatchReport != null && (mismatchReport['is_matched'] == false || repairProposals.isNotEmpty)) {
+              _showMismatchDialog(mismatchReport, excelData, repairProposals);
+            } else {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
                   content: Text(
@@ -3012,7 +2940,11 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
     }
   }
 
-  void _showMismatchDialog(Map<String, dynamic> mismatchReport, Map<String, dynamic> excelData) {
+  void _showMismatchDialog(
+    Map<String, dynamic> mismatchReport,
+    Map<String, dynamic> excelData,
+    List<Map<String, dynamic>> repairProposals,
+  ) {
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -3020,115 +2952,175 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         mismatchReport: mismatchReport,
         excelData: excelData,
         elements: elements,
-        onAutoRecover: () {
-          Navigator.of(ctx).pop();
-          _autoRecoverMissingElements(mismatchReport, excelData);
+        repairProposals: repairProposals,
+        onApplyProposal: (proposal) {
+          _applyEquipmentProposal(proposal);
         },
+        onRejectProposal: (proposal) {
+          _rejectEquipmentProposal(proposal);
+        },
+        onCancel: () {},
       ),
     );
   }
 
-  void _autoRecoverMissingElements(Map<String, dynamic> mismatchReport, Map<String, dynamic> excelData) {
+  void _applyEquipmentProposal(Map<String, dynamic> proposal) {
     _saveState();
-    final details = (mismatchReport['details'] as Map<String, dynamic>?) ?? {};
-    final missingBuses = (details['missing_buses'] as List?)?.map((e) => (e as num).toInt()).toList() ?? [];
-    final missingBranches = (details['missing_branches'] as List?) ?? [];
-    final missingGens = (details['missing_generators'] as List?)?.map((e) => (e as num).toInt()).toList() ?? [];
-    final missingLoads = (details['missing_loads'] as List?)?.map((e) => (e as num).toInt()).toList() ?? [];
+    final category = proposal['category']?.toString().toLowerCase() ?? '';
+    final busNum = (proposal['bus_number'] as num?)?.toInt();
+    final excelData = (proposal['excel_data'] as Map<String, dynamic>?) ?? {};
+
+    if (busNum == null) return;
 
     setState(() {
-      double avgX = CANVAS_CENTER;
-      double avgY = CANVAS_CENTER;
-      int busCount = 0;
+      DrawingElement? parentBus;
       for (var el in elements) {
         if (el.type == Tool.bus) {
-          avgX += el.position.dx;
-          avgY += el.position.dy;
-          busCount++;
-        }
-      }
-      if (busCount > 0) {
-        avgX /= (busCount + 1);
-        avgY /= (busCount + 1);
-      }
-
-      int offsetIdx = 0;
-      for (var bNum in missingBuses) {
-        final newBus = DrawingElement(
-          id: "bus_$bNum",
-          type: Tool.bus,
-          position: Offset(avgX + (offsetIdx * 140) - 200, avgY + 180),
-          width: 120,
-          height: 10,
-          label: "$bNum",
-        );
-        elements.add(newBus);
-        offsetIdx++;
-      }
-
-      Map<int, DrawingElement> busMap = {};
-      for (var el in elements) {
-        if (el.type == Tool.bus) {
-          final bNum = int.tryParse(RegExp(r'\d+').firstMatch(el.label)?.group(0) ?? '') ??
-                       int.tryParse(RegExp(r'\d+').firstMatch(el.id)?.group(0) ?? '');
-          if (bNum != null) busMap[bNum] = el;
-        }
-      }
-
-      for (var bNum in missingGens) {
-        final bus = busMap[bNum];
-        if (bus != null) {
-          final genEl = DrawingElement(
-            id: "gen_$bNum",
-            type: Tool.generator,
-            position: Offset(bus.position.dx + 20, bus.position.dy - 60),
-            width: 44,
-            height: 44,
-            parentBusId: bus.id,
-            label: "G_$bNum",
-          );
-          elements.add(genEl);
-        }
-      }
-
-      for (var bNum in missingLoads) {
-        final bus = busMap[bNum];
-        if (bus != null) {
-          final loadEl = DrawingElement(
-            id: "load_$bNum",
-            type: Tool.load,
-            position: Offset(bus.position.dx + 20, bus.position.dy + 60),
-            width: 44,
-            height: 44,
-            parentBusId: bus.id,
-            label: "Load_$bNum",
-          );
-          elements.add(loadEl);
-        }
-      }
-
-      for (var br in missingBranches) {
-        if (br is List && br.length >= 2) {
-          final fb = (br[0] as num).toInt();
-          final tb = (br[1] as num).toInt();
-          final b1 = busMap[fb];
-          final b2 = busMap[tb];
-          if (b1 != null && b2 != null) {
-            final lineEl = DrawingElement(
-              id: "line_${fb}_$tb",
-              type: Tool.line,
-              position: Offset((b1.position.dx + b2.position.dx) / 2, (b1.position.dy + b2.position.dy) / 2),
-              startElementId: b1.id,
-              endElementId: b2.id,
-              label: "Line $fb-$tb",
-            );
-            elements.add(lineEl);
+          if (el.busNumber == busNum) {
+            parentBus = el;
+            break;
+          }
+          final matchNum = _getBusNum(el.label.isNotEmpty ? el.label : el.id);
+          if (matchNum == busNum) {
+            parentBus = el;
+            break;
           }
         }
       }
-    });
 
-    _applyExcelDataToCanvas(excelData);
+      if (parentBus == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Bus $busNum 모선 요소를 Canvas에서 찾을 수 없어 설비를 추가할 수 없습니다."),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+        return;
+      }
+
+      final bPos = parentBus.position;
+      final targetBusId = parentBus.id;
+
+      if (category == 'generator') {
+        final gPos = Offset(bPos.dx + 20, bPos.dy - 60);
+        final isSC = excelData['is_synchronous_condenser'] == true;
+        final isSlack = excelData['is_slack'] == true;
+        final genId = "gen_applied_${busNum}_${DateTime.now().millisecondsSinceEpoch}";
+        final leadId = "lead_gen_applied_${busNum}_${DateTime.now().millisecondsSinceEpoch}";
+
+        final genEl = DrawingElement(
+          id: genId,
+          type: Tool.generator,
+          position: gPos,
+          width: 44,
+          height: 44,
+          parentBusId: targetBusId,
+          busNumber: busNum,
+          label: excelData['label']?.toString() ?? (isSC ? "SC_$busNum (동기조상기)" : "G_$busNum"),
+          source: "excel_review_applied",
+          isEquipmentLead: false,
+          isGenLead: false,
+          electricalBranch: true,
+        )
+          ..isSlack = isSlack
+          ..isSynchronousCondenser = isSC
+          ..vPu = (excelData['v_pu'] as num?)?.toDouble() ?? 1.0
+          ..pPu = (excelData['pg_pu'] as num?)?.toDouble() ?? 0.0
+          ..qPu = (excelData['qg_pu'] as num?)?.toDouble() ?? 0.0;
+
+        final leadEl = DrawingElement(
+          id: leadId,
+          type: Tool.line,
+          position: gPos,
+          endPosition: bPos,
+          startElementId: genId,
+          endElementId: targetBusId,
+          label: "Lead G_$busNum ↔ Bus_$busNum",
+          source: "excel_review_applied",
+          isEquipmentLead: true,
+          isGenLead: true,
+          electricalBranch: false,
+        )
+          ..rPu = 0.0
+          ..xPu = 0.0
+          ..bPu = 0.0
+          ..tapRatio = 1.0;
+
+        elements.add(genEl);
+        elements.add(leadEl);
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("✅ Bus $busNum 발전기 및 인입선이 Canvas에 추가되었습니다."),
+            backgroundColor: Colors.teal.shade700,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      } else if (category == 'load') {
+        final lPos = Offset(bPos.dx + 20, bPos.dy + 60);
+        final loadId = "load_applied_${busNum}_${DateTime.now().millisecondsSinceEpoch}";
+        final leadId = "lead_load_applied_${busNum}_${DateTime.now().millisecondsSinceEpoch}";
+
+        final loadEl = DrawingElement(
+          id: loadId,
+          type: Tool.load,
+          position: lPos,
+          width: 36,
+          height: 40,
+          parentBusId: targetBusId,
+          busNumber: busNum,
+          label: excelData['label']?.toString() ?? "Load_$busNum",
+          source: "excel_review_applied",
+          isEquipmentLead: false,
+          isGenLead: false,
+          electricalBranch: true,
+        )
+          ..pPu = (excelData['p_pu'] as num?)?.toDouble() ?? 0.0
+          ..qPu = (excelData['q_pu'] as num?)?.toDouble() ?? 0.0;
+
+        final leadEl = DrawingElement(
+          id: leadId,
+          type: Tool.line,
+          position: lPos,
+          endPosition: bPos,
+          startElementId: loadId,
+          endElementId: targetBusId,
+          label: "Lead Load_$busNum ↔ Bus_$busNum",
+          source: "excel_review_applied",
+          isEquipmentLead: true,
+          isGenLead: false,
+          electricalBranch: false,
+        )
+          ..rPu = 0.0
+          ..xPu = 0.0
+          ..bPu = 0.0
+          ..tapRatio = 1.0;
+
+        elements.add(loadEl);
+        elements.add(leadEl);
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("✅ Bus $busNum 부하 및 인입선이 Canvas에 추가되었습니다."),
+            backgroundColor: Colors.teal.shade700,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    });
+  }
+
+  void _rejectEquipmentProposal(Map<String, dynamic> proposal) {
+    final cat = proposal['category']?.toString() ?? '설비';
+    final bNum = proposal['bus_number'] ?? '';
+    debugPrint("[설비 교차검증 거부] Bus $bNum $cat 추가 제안이 사용자에 의해 거부되었습니다. (Canvas/Solver 변경 없음)");
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text("Bus $bNum $cat 추가 제안을 거부했습니다. (도면 및 계산 변경 없음)"),
+        backgroundColor: Colors.blueGrey,
+        duration: const Duration(seconds: 2),
+      ),
+    );
   }
 
   void _applyAiDataToCanvas(Map<String, dynamic> aiData) {

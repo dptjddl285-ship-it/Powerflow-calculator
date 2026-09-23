@@ -37,10 +37,12 @@ class DrawingElement {
   int? busNumber;
   bool isEquipmentLead = false;
   bool isGenLead = false;
+  bool isTransformerLead = false;
   bool electricalBranch = true;
+  List<Map<String, dynamic>>? electricalBranches;
 
   bool get isAutoAddedFromExcel =>
-      source == 'excel_auto' || id.startsWith('gen_auto_');
+      source == 'excel_auto' || source == 'excel_review_applied' || id.startsWith('gen_auto_');
 
   bool get isDoubleCircuit =>
       (circuitCount != null && circuitCount! > 1) ||
@@ -89,7 +91,9 @@ class DrawingElement {
     this.busNumber,
     this.isEquipmentLead = false,
     this.isGenLead = false,
+    this.isTransformerLead = false,
     this.electricalBranch = true,
+    this.electricalBranches,
   }) {
     if (type == Tool.generator && isSynchronousCondenserExplicit == null) {
       if (label.startsWith("SC_") || label.startsWith("SC ") || label == "SC" || label.contains("동기조상기") || id.startsWith("sc_") || id.startsWith("SC_")) {
@@ -125,7 +129,13 @@ class DrawingElement {
       busNumber: busNumber,
       isEquipmentLead: isEquipmentLead,
       isGenLead: isGenLead,
+      isTransformerLead: isTransformerLead,
       electricalBranch: electricalBranch,
+      electricalBranches: electricalBranches != null
+          ? List<Map<String, dynamic>>.from(
+              electricalBranches!.map((e) => Map<String, dynamic>.from(e)),
+            )
+          : null,
     )
       ..showInfo = showInfo
       ..isSlack = isSlack
@@ -146,7 +156,14 @@ class DrawingElement {
       'id': id,
       'label': label,
       'type': type.name,
+      'position': {'dx': position.dx, 'dy': position.dy},
+      if (midPosition != null) 'midPosition': {'dx': midPosition!.dx, 'dy': midPosition!.dy},
+      if (endPosition != null) 'endPosition': {'dx': endPosition!.dx, 'dy': endPosition!.dy},
+      'width': width,
+      'height': height,
+      'angle': angle,
       'bus_number': busNumber,
+      'busNumber': busNumber,
       'parentBusId': parentBusId,
       'startElementId': startElementId,
       'endElementId': endElementId,
@@ -165,7 +182,10 @@ class DrawingElement {
       'source': source,
       'isEquipmentLead': isEquipmentLead,
       'isGenLead': isGenLead,
+      'isTransformerLead': isTransformerLead,
       'electricalBranch': electricalBranch,
+      if (electricalBranches != null) 'electricalBranches': electricalBranches,
+      if (electricalBranches != null) 'electrical_branches': electricalBranches,
     };
   }
 
@@ -256,8 +276,22 @@ class DrawingElement {
     if (json.containsKey('isGenLead') && json['isGenLead'] != null) {
       isGenLead = json['isGenLead'] == true;
     }
+    if (json.containsKey('isTransformerLead') && json['isTransformerLead'] != null) {
+      isTransformerLead = json['isTransformerLead'] == true;
+    } else if (json.containsKey('is_transformer_lead') && json['is_transformer_lead'] != null) {
+      isTransformerLead = json['is_transformer_lead'] == true;
+    }
     if (json.containsKey('electricalBranch') && json['electricalBranch'] != null) {
       electricalBranch = json['electricalBranch'] == true;
+    }
+    if (json.containsKey('electricalBranches') && json['electricalBranches'] != null) {
+      electricalBranches = List<Map<String, dynamic>>.from(
+        (json['electricalBranches'] as List).map((e) => Map<String, dynamic>.from(e as Map)),
+      );
+    } else if (json.containsKey('electrical_branches') && json['electrical_branches'] != null) {
+      electricalBranches = List<Map<String, dynamic>>.from(
+        (json['electrical_branches'] as List).map((e) => Map<String, dynamic>.from(e as Map)),
+      );
     }
   }
 
@@ -299,6 +333,7 @@ class DrawingElement {
       busNumber: (json['bus_number'] as num?)?.toInt() ?? (json['busNumber'] as num?)?.toInt(),
       isEquipmentLead: json['isEquipmentLead'] == true,
       isGenLead: json['isGenLead'] == true,
+      isTransformerLead: json['isTransformerLead'] == true || json['is_transformer_lead'] == true,
       electricalBranch: json['electricalBranch'] != false,
     );
     el.updateFromJson(json);

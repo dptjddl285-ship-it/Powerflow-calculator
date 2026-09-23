@@ -171,6 +171,7 @@ async def apply_excel_to_elements(request: Request):
             "elements": updated_elements,
             "summary": summary,
             "mismatch_report": summary.get("mismatch_report"),
+            "repair_proposals": summary.get("repair_proposals", []),
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
