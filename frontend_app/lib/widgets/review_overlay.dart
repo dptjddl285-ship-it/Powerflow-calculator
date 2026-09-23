@@ -41,6 +41,11 @@ class ReviewOverlayView extends StatefulWidget {
   // Topology Violation Nodes for Warning Visual Cues
   final Set<String> violationNodeIds;
 
+  // Guide Box & Missing Candidate Additions (Object Review V2)
+  final Set<String> guideNodeIds;
+  final List<MissingCandidateItem> openMissingCandidates;
+  final Function(MissingCandidateItem)? onSelectCandidate;
+
   const ReviewOverlayView({
     super.key,
     required this.imageBytes,
@@ -68,6 +73,9 @@ class ReviewOverlayView extends StatefulWidget {
     this.manualLineStartNode,
     this.onManualAddLineComplete,
     this.violationNodeIds = const {},
+    this.guideNodeIds = const {},
+    this.openMissingCandidates = const [],
+    this.onSelectCandidate,
   });
 
   @override
@@ -413,6 +421,89 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                           );
                         }),
 
+                      // 4.5. Broad Candidate Guide Regions (for OPEN missing candidates with approximateRegion)
+                      if (widget.openMissingCandidates.isNotEmpty)
+                        ...widget.openMissingCandidates
+                            .where((c) =>
+                                c.status == 'OPEN' &&
+                                c.approximateRegion != null &&
+                                c.approximateRegion!.length >= 4)
+                            .map((cand) {
+                          final region = cand.approximateRegion!;
+                          final double cx = region[0];
+                          final double cy = region[1];
+                          final double w = region[2];
+                          final double h = region[3];
+
+                          final double renderLeft = (cx - w / 2.0) * scaleX;
+                          final double renderTop = (cy - h / 2.0) * scaleY;
+                          final double renderW = math.max(20.0, w * scaleX);
+                          final double renderH = math.max(20.0, h * scaleY);
+
+                          final double padX = math.max(8.0, renderW * 0.15);
+                          final double padY = math.max(8.0, renderH * 0.15);
+
+                          return Positioned(
+                            left: renderLeft - padX,
+                            top: renderTop - padY,
+                            width: renderW + 2 * padX,
+                            height: renderH + 2 * padY,
+                            child: GestureDetector(
+                              onTap: () => widget.onSelectCandidate?.call(cand),
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.purpleAccent.withValues(
+                                    alpha: 0.08 + 0.05 * pulseVal,
+                                  ),
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(
+                                    color: Colors.purpleAccent.withValues(
+                                      alpha: 0.85,
+                                    ),
+                                    width: 1.5,
+                                  ),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.purpleAccent.withValues(
+                                        alpha: 0.3 * pulseVal,
+                                      ),
+                                      blurRadius: 8.0,
+                                      spreadRadius: 2.0,
+                                    ),
+                                  ],
+                                ),
+                                child: Align(
+                                  alignment: Alignment.topLeft,
+                                  child: Container(
+                                    margin: const EdgeInsets.only(
+                                      top: 1,
+                                      left: 2,
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 4,
+                                      vertical: 1,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: Colors.purple.shade900.withValues(
+                                        alpha: 0.9,
+                                      ),
+                                      borderRadius: BorderRadius.circular(2),
+                                    ),
+                                    child: Text(
+                                      '누락 의심: ${cand.suspectedClass.toUpperCase()}',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 7.5,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          );
+                        }),
+
                       // 5. Bounding Box & Draggable Label for each node
                       ...widget.nodes.map((node) {
                         final bbox = node.bbox;
@@ -434,6 +525,16 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                             lineEndpointNodeIds.contains(node.id);
                         final bool isViolation = widget.violationNodeIds
                             .contains(node.id);
+                        final bool isGuide =
+                            widget.guideNodeIds.contains(node.id) ||
+                            node.reviewStatus == 'SUSPICIOUS';
+
+                        final double padX = math.max(6.0, renderW * 0.15);
+                        final double padY = math.max(6.0, renderH * 0.15);
+                        final double guideLeft = renderLeft - padX;
+                        final double guideTop = renderTop - padY;
+                        final double guideW = renderW + 2 * padX;
+                        final double guideH = renderH + 2 * padY;
 
                         final bool isBus =
                             node.className.toLowerCase() == 'bus';
@@ -471,6 +572,77 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                         return Stack(
                           clipBehavior: Clip.none,
                           children: [
+                            // AI Guide Box (Padded soft glowing highlight for suspicious / focus targets)
+                            if (isGuide)
+                              Positioned(
+                                left: guideLeft,
+                                top: guideTop,
+                                width: guideW,
+                                height: guideH,
+                                child: GestureDetector(
+                                  onTap: () => widget.onSelectNode(node),
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(4),
+                                      border: Border.all(
+                                        color: isSelected
+                                            ? Colors.amberAccent
+                                            : Colors.amberAccent.withValues(
+                                                alpha: 0.75 + 0.25 * pulseVal,
+                                              ),
+                                        width: 1.6,
+                                      ),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.amberAccent.withValues(
+                                            alpha: 0.35 + 0.25 * pulseVal,
+                                          ),
+                                          blurRadius: 6.0 + 4.0 * pulseVal,
+                                          spreadRadius: 1.5,
+                                        ),
+                                      ],
+                                    ),
+                                    child: Align(
+                                      alignment: Alignment.topRight,
+                                      child: Container(
+                                        margin: const EdgeInsets.only(
+                                          top: 1,
+                                          right: 2,
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 3,
+                                          vertical: 0.5,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFD97706)
+                                              .withValues(alpha: 0.95),
+                                          borderRadius: BorderRadius.circular(2),
+                                        ),
+                                        child: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: const [
+                                            Icon(
+                                              Icons.help_outline,
+                                              size: 7.5,
+                                              color: Colors.white,
+                                            ),
+                                            SizedBox(width: 1.5),
+                                            Text(
+                                              '확인 필요',
+                                              style: TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 6.8,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+
                             // Bounding Box Rect
                             Positioned(
                               key: isSelected ? widget.focusTargetKey : null,

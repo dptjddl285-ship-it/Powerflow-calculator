@@ -213,6 +213,10 @@ def sanitize_and_validate_agent_response(
     else:
         res["highlight_target"] = None
 
+    # In OBJECT_REVIEW stage, suppress legacy object_approve highlight target
+    if (stage or "").upper() == "OBJECT_REVIEW" and res.get("highlight_target") == "object_approve":
+        res["highlight_target"] = None
+
     if res.get("action_id") == "RUN_POWER_FLOW" and not res.get("highlight_target"):
         res["highlight_target"] = "final_powerflow"
 
@@ -356,6 +360,7 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
         focus_targets: List[Dict[str, Any]] = []
         target: Optional[str] = None
         decision = "PROCEED"
+        action_mode = "NONE"
         reply_ko = ""
         summary_text = ""
 
@@ -417,18 +422,20 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
 
             if priority_items:
                 decision = "HUMAN_CHECK"
-                target = "object_approve" if suspicious else "missing_candidates"
+                action_mode = "GUIDE"
+                target = None
                 total_susp = len(suspicious) + len(open_cands)
-                reply_ko = f"객체 분석이 끝났어요. 제가 한 번 더 확인했으면 하는 곳이 {total_susp}군데 있어요."
+                reply_ko = f"총 {total_nodes}개 객체를 확인했어요. 제가 한 번 더 확인했으면 하는 곳이 {total_susp}군데 있어요. 표시해둘게요."
                 lines.append("\n🔍 **먼저 확인해야 할 항목:**")
                 for idx, p in enumerate(priority_items[:4]):
                     lines.append(f"  {idx + 1}) **{p['display_label']}** - {p['reason']}")
-                lines.append("\n💡 정상 객체는 `[정상 객체 일괄 승인]`으로 한 번에 통과시키고, 위 의심 항목만 검토하세요.")
+                lines.append("\n💡 도면 위에 표시된 의심 객체를 클릭하여 AI 판단을 확인하고 [맞음] 또는 [수정]을 진행하세요.")
             else:
                 decision = "PROCEED"
-                target = "object_gate"
-                reply_ko = "모든 객체가 정상으로 잘 감지되었습니다. 하단 [객체 검수 완료] 버튼을 눌러 다음 단계로 진행할 수 있습니다."
-                lines.append("\n✓ 모든 객체가 명확한 정상 심볼로 판정되었습니다. 하단 `[객체 검수 완료 (다음: 모선 매핑)]` 버튼을 눌러 진행할 수 있습니다.")
+                action_mode = "NONE"
+                target = None
+                reply_ko = "제가 따로 의심하는 객체는 없어요. 마지막으로 전체 도면을 한번 확인한 뒤 객체 검수 완료를 눌러주세요."
+                lines.append("\n✓ 모든 객체가 명확한 정상 심볼로 판정되었습니다. 전체 도면을 확인하신 후 `[객체 검수 완료]`를 눌러주세요.")
 
             summary_text = "\n".join(lines)
 
@@ -573,7 +580,7 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
             "reply_ko": reply_ko or summary_text,
             "decision": decision,
             "intent": "STAGE_PROACTIVE_SUMMARY",
-            "action_mode": "NONE",
+            "action_mode": action_mode,
             "action_id": None,
             "action_params": {},
             "highlight_target": target,
@@ -1135,10 +1142,9 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
             "현재 단계와 실제 감지된 증거(Evidence) 상태를 면밀히 관찰하고,\n"
             "사용자가 어디를 먼저 살펴봐야 하는지 직관적이고 친절하게 1~3문장으로 브리핑하세요.\n"
             "반드시 Canonical Agent Response Contract JSON 형식으로만 응답해야 합니다.\n"
-            "- 의심 객체(suspicious_nodes), 누락 후보(missing_candidates), 치명적 결선 오류(topology_errors)가 있다면 decision: 'HUMAN_CHECK'를 부여하고 focus_targets에 실제 ID들을 포함하세요.\n"
+            "- 의심 객체(suspicious_nodes), 누락 후보(missing_candidates), 치명적 결선 오류(topology_errors)가 있다면 decision: 'HUMAN_CHECK', action_mode: 'GUIDE'를 부여하고 focus_targets에 실제 ID들을 포함하세요. OBJECT_REVIEW 단계에서는 옛 승인 버튼을 가리키지 마시고 highlight_target은 null로 두세요.\n"
             "- warning이나 info 수준의 경고(topology_warnings)만 존재하는 경우는 치명 결선 오류가 아니므로, 다른 의심 항목이 없다면 치명적 오류가 있다고 표현하지 마세요.\n"
-            "- 아무 미결 이슈가 없다면 decision: 'PROCEED'를 부여하세요.\n"
-            "- action_mode: 'NONE'\n"
+            "- 아무 미결 이슈가 없다면 decision: 'PROCEED', action_mode: 'NONE', highlight_target: null로 설정하세요.\n"
             "- reply_ko: 1~3문장의 따뜻하고 명쾌한 한국어 안내\n"
         )
         user_prompt = (

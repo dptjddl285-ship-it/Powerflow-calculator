@@ -424,7 +424,7 @@ void main() {
         return workingLines.where((l) => l.reviewStatus != 'REJECTED').toList();
       }
 
-      ReviewLineItem? selectedLine = line1;
+      ReviewLineItem selectedLine = line1;
 
       // 1. Initially, line1 is AMBIGUOUS, so filtered lines has 1 item
       var currentFiltered = getFilteredLines();
@@ -443,29 +443,27 @@ void main() {
       expect(currentFiltered.length, 3);
 
       // 4. Moving next from L1 safely advances to L2
-      int currentIdx = selectedLine != null
-          ? currentFiltered.indexWhere((l) => l.lineId == selectedLine!.lineId)
-          : -1;
+      int currentIdx = currentFiltered.indexWhere((l) => l.lineId == selectedLine.lineId);
       expect(currentIdx, 0);
       int nextIdx = (currentIdx + 1) % currentFiltered.length;
       selectedLine = currentFiltered[nextIdx];
       expect(selectedLine.lineId, 'L2');
 
       // 5. Moving next from L2 safely advances to L3
-      currentIdx = currentFiltered.indexWhere((l) => l.lineId == selectedLine!.lineId);
+      currentIdx = currentFiltered.indexWhere((l) => l.lineId == selectedLine.lineId);
       nextIdx = (currentIdx + 1) % currentFiltered.length;
       selectedLine = currentFiltered[nextIdx];
       expect(selectedLine.lineId, 'L3');
 
       // 6. Moving previous from L3 goes back to L2
-      currentIdx = currentFiltered.indexWhere((l) => l.lineId == selectedLine!.lineId);
+      currentIdx = currentFiltered.indexWhere((l) => l.lineId == selectedLine.lineId);
       int prevIdx = (currentIdx - 1 + currentFiltered.length) % currentFiltered.length;
       selectedLine = currentFiltered[prevIdx];
       expect(selectedLine.lineId, 'L2');
 
       // 7. Moving previous from L1 wraps around to L3
       selectedLine = line1;
-      currentIdx = currentFiltered.indexWhere((l) => l.lineId == selectedLine!.lineId);
+      currentIdx = currentFiltered.indexWhere((l) => l.lineId == selectedLine.lineId);
       prevIdx = (currentIdx - 1 + currentFiltered.length) % currentFiltered.length;
       selectedLine = currentFiltered[prevIdx];
       expect(selectedLine.lineId, 'L3');
@@ -562,7 +560,7 @@ void main() {
       expect(service.activeHighlightTarget.value, isNull);
     });
 
-    test('AI companion provides explicit batch approve guidance when objects are clean', () async {
+    test('AI companion provides explicit object completion guidance when objects are clean', () async {
       const cleanCtx = PowerLensAssistantContext(
         currentScreen: 'REVIEW_PAGE',
         workflowStage: 'OBJECT_REVIEW',
@@ -576,12 +574,13 @@ void main() {
 
       await service.sendMessage('다 잘됐을경우 뭐 눌러?', cleanCtx);
       final lastMsg = service.messages.last.text;
-      expect(lastMsg, contains('정상 객체 일괄 승인'));
-      expect(lastMsg, contains('누르면 됩니다'));
+      expect(lastMsg, contains('객체 검수 완료'));
+      expect(lastMsg.contains('정상 객체 일괄 승인'), isFalse);
 
-      // Also verify quick actions suggest batch approval when nodes are unconfirmed
+      // In Object Review V2, quick actions suggest object completion instead of batch approval
       final quickActions = service.messages.last.suggestedActions;
-      expect(quickActions, contains('정상 객체 일괄 승인'));
+      expect(quickActions, contains('객체 검수 완료하기'));
+      expect(quickActions.contains('정상 객체 일괄 승인'), isFalse);
     });
   });
 }

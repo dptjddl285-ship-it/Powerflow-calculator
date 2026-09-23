@@ -723,9 +723,11 @@ class PowerLensAIService extends ChangeNotifier {
               '단계를 검토하고 있습니다.',
         );
 
-        // Online highlight policy: only highlight if backend explicitly provided a target
+        final actionMode = result['action_mode']?.toString().toUpperCase() ?? 'NONE';
+        // Online highlight policy: only trigger visual highlight when action_mode is GUIDE
         final backendHighlight = result['highlight_target']?.toString();
-        if (backendHighlight != null &&
+        if (actionMode == 'GUIDE' &&
+            backendHighlight != null &&
             backendHighlight.isNotEmpty &&
             backendHighlight.toLowerCase() != 'null') {
           triggerHighlight(backendHighlight);
@@ -1129,18 +1131,13 @@ class PowerLensAIService extends ChangeNotifier {
     if (stage == 'OBJECT_REVIEW') {
       final susp = context.suspiciousObjects;
       final missing = context.unresolvedMissingCandidates;
-      final unreviewed = context.workingNodes
-          .where((n) => n['status'] != 'CONFIRMED' && n['status'] != 'REJECTED')
-          .length;
 
       if (susp > 0) {
-        return '검토가 필요한 의심 객체 $susp건을 목록에 모아 표시했어요. 위에서부터 하나씩 확인 후 [승인하고 다음] 또는 [제외]를 눌러주세요.';
+        return '확인이 필요한 의심 객체 $susp건을 표시했어요. 도면에서 해당 객체를 클릭하여 AI 판단 근거를 확인하고 [맞음] 또는 [수정]을 진행해주세요.';
       } else if (missing > 0) {
         return '누락 후보 $missing건이 남아 있어요. 목록에서 확인 후 복구하거나 문제없음 처리해주세요.';
-      } else if (unreviewed > 0) {
-        return '검토가 필요한 의심 객체는 없습니다. 아직 승인 대기 중인 객체가 $unreviewed건 있으니 확인 후 [승인하고 다음]을 진행하거나 [객체 검수 완료]를 눌러주세요.';
       } else {
-        return '현재 검토가 필요한 항목이 전혀 없습니다! 모든 객체가 정상 승인되었으므로 아래의 [객체 검수 완료]를 눌러 다음 단계(모선 매핑)로 진행하시면 됩니다.';
+        return '현재 검토가 필요한 항목이 없습니다! 도면을 마지막으로 확인하신 후 아래의 [객체 검수 완료]를 눌러 다음 단계(모선 번호 매핑)로 진행하시면 됩니다.';
       }
     } else if (stage == 'BUS_MAPPING') {
       final uncertain = context.unresolvedBusNumbers;
@@ -1403,26 +1400,19 @@ class PowerLensAIService extends ChangeNotifier {
           return s != 'CONFIRMED' && s != 'REJECTED';
         });
         if (!hasSuspicious) {
-          if (hasUnconfirmed || ctx.workingNodes.isEmpty) {
-            return "💡 **다음 할 일 (정상 객체 일괄 승인):**\n"
-                "• 모든 객체가 정상 기호로 탐지되었습니다 (검토 필요 0건)!\n"
-                "• 모든 객체 인식이 다 잘 되었을 경우 우측 패널의 **[정상 객체 일괄 승인]**(또는 [정상 객체 전체 승인]) 버튼을 누르면 됩니다.\n"
-                "• 한 번에 승인 확정 후 하단의 파란색 **[객체 검수 완료]** 버튼을 눌러 바로 **모선 번호 매핑(2단계)**으로 넘어가시면 됩니다!";
-          } else {
-            return "💡 **다음 할 일 (객체 검수 완료):**\n"
-                "• 모든 객체의 승인이 완료되었습니다!\n"
-                "• 화면 하단의 파란색 **[객체 검수 완료]** 버튼을 눌러 바로 **모선 번호 매핑(2단계)**으로 넘어가시면 됩니다.";
-          }
+          return "💡 **다음 할 일 (객체 검수 완료):**\n"
+              "• AI가 확인한 의심 객체가 없습니다 (정상 통과)!\n"
+              "• 도면을 전체적으로 한 번 눈으로 대조 확인하신 후, 화면 하단의 파란색 **[객체 검수 완료]** 버튼을 눌러 바로 **모선 번호 매핑(2단계)**으로 넘어가시면 됩니다.";
         }
         if (selected != null && selected.isNotEmpty) {
-          return "💡 **다음 할 일 (객체 검수):**\n"
-              "• 현재 검토가 필요한 항목이 ${ctx.suspiciousObjects}건 있습니다.\n"
-              "• 지금 선택된 **$selected** 기호를 확인 후 **[승인하고 다음]** 또는 [제외]를 선택하세요.\n"
-              "• 나머지 정상 객체들은 우측 **[정상 객체 일괄 승인]**으로 한 번에 통과시킬 수도 있습니다.";
+          return "💡 **다음 할 일 (의심 객체 확인):**\n"
+              "• 현재 확인이 필요한 항목이 ${ctx.suspiciousObjects}건 있습니다.\n"
+              "• 지금 선택된 **$selected** 기호를 확인 후 **[맞음]**(AI 확정) 또는 **[수정]**(종류 변경/제외)을 선택하세요.\n"
+              "• 의심 항목을 모두 해결하면 하단의 **[객체 검수 완료]** 버튼으로 다음 단계로 진행할 수 있습니다.";
         }
-        return "💡 **다음 할 일 (객체 검수):**\n"
-            "• **검토 필요 항목**: ${ctx.suspiciousObjects}건\n"
-            "• 기호를 하나씩 확인하고 [승인] 또는 [제외]를 선택하세요. 정상 객체는 [정상 객체 일괄 승인]으로 한 번에 승인할 수 있습니다.";
+        return "💡 **다음 할 일 (의심 객체 확인):**\n"
+            "• **확인 필요 항목**: ${ctx.suspiciousObjects}건\n"
+            "• 도면에 주황색으로 표시된 의심 객체를 클릭하여 AI 모델 신뢰도와 판단 근거를 확인하고 **[맞음]** 또는 **[수정]**을 선택하세요.";
       case 'BUS_MAPPING':
         if (selected != null && selected.isNotEmpty) {
           return "💡 **다음 할 일 (모선 번호 확인):**\n"
@@ -1513,8 +1503,8 @@ class PowerLensAIService extends ChangeNotifier {
               "도면 내 모든 객체 인식이 정상적으로 완료되었어요! 검토가 필요한 항목이 없으니 **[객체 검수 완료]**를 눌러 모선 매핑으로 넘어가시면 됩니다.";
         }
         return "🔍 **객체 검수 단계입니다.**\n"
-            "객체를 확인해봤어요. 대부분 괜찮고, 제가 다시 봤으면 하는 것부터 보여드릴게요. "
-            "선택된 객체의 이유를 확인한 뒤 **[승인하고 다음]** 또는 **[제외]**를 선택해주세요.";
+            "객체를 확인해봤어요. 제가 다시 봤으면 하는 의심 객체를 도면 위에 표시해둘게요. "
+            "표시된 객체를 클릭하여 AI 판단을 확인하고 **[맞음]** 또는 **[수정]**을 선택해주세요.";
       case 'BUS_MAPPING':
         final hasBusIssues = (ctx?.unresolvedBusNumbers ?? 0) > 0 ||
             (ctx?.duplicateBusNumbers ?? 0) > 0;
@@ -1552,8 +1542,8 @@ class PowerLensAIService extends ChangeNotifier {
         final hasIssues = ctx.suspiciousObjects > 0 ||
             ctx.unresolvedMissingCandidates > 0;
         return hasIssues
-            ? "객체를 확인해봤어요. 대부분 괜찮고, 제가 다시 봤으면 하는 것부터 보여드릴게요."
-            : "모든 객체가 정상 상태예요! [객체 검수 완료]를 눌러 다음 단계로 진행해보세요.";
+            ? "객체를 확인해봤어요. 다시 확인이 필요한 곳을 도면 위에 표시해둘게요."
+            : "제가 따로 의심하는 객체는 없어요. 도면을 확인한 뒤 [객체 검수 완료]를 눌러주세요.";
       case 'BUS_MAPPING':
         final hasBusIssues = ctx.unresolvedBusNumbers > 0 ||
             ctx.duplicateBusNumbers > 0;
@@ -1583,15 +1573,8 @@ class PowerLensAIService extends ChangeNotifier {
       case 'OBJECT_REVIEW':
         final hasIssues = (ctx?.suspiciousObjects ?? 0) > 0 ||
             (ctx?.unresolvedMissingCandidates ?? 0) > 0;
-        final unconfirmed = (ctx?.workingNodes ?? []).where((n) {
-          final s = n['status'] ?? n['review_status'];
-          return s != 'CONFIRMED' && s != 'REJECTED';
-        }).length;
         if (hasIssues) {
           return ['검토 필요 항목 보기', '다음에 뭐 해?', '누락 후보 확인'];
-        }
-        if (unconfirmed > 0) {
-          return ['정상 객체 일괄 승인', '다음에 뭐 해?', '다음 단계로 이동'];
         }
         return ['객체 검수 완료하기', '다음 단계로 이동', '다음에 뭐 해?'];
       case 'BUS_MAPPING':

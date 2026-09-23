@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:typed_data';
 import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
@@ -95,9 +94,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   String? _loadingMessage;
   bool _showCanvasLabels = true;
 
-  // Object Manual Add
+  // Object Manual Add & Edit
   bool _isManualAddMode = false;
   String _manualAddClass = 'bus';
+  bool _isObjectEditExpanded = false;
 
   // Line Manual Add
   bool _isManualAddLineMode = false;
@@ -133,19 +133,31 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   int get _unresolvedCandidatesCount =>
       _missingCandidates.where((c) => c.status == 'OPEN').length;
 
-  int get _unconfirmedNodesCount => _workingNodes
-      .where((n) =>
-          n.reviewStatus != 'CONFIRMED' && n.reviewStatus != 'REJECTED')
-      .length;
+
+  Set<String> get _guideNodeIds {
+    final ids = <String>{};
+    for (final node in _workingNodes) {
+      if (node.reviewStatus == 'SUSPICIOUS') {
+        ids.add(node.id);
+      }
+    }
+    final validNodeIds = _workingNodes.map((n) => n.id).toSet();
+    for (final target in PowerLensAIService.instance.lastFocusTargets) {
+      final type = target['type']?.toString().toUpperCase();
+      final id = target['id']?.toString();
+      if (type == 'OBJECT' && id != null && validNodeIds.contains(id)) {
+        ids.add(id);
+      }
+    }
+    return ids;
+  }
 
   bool get _isCleanAuto =>
       _objSuspiciousCount == 0 &&
       _unresolvedCandidatesCount == 0 &&
-      _unconfirmedNodesCount == 0 &&
       _workingNodes.where((n) => n.reviewStatus != 'REJECTED').isNotEmpty;
 
   bool get _canVerifyObjectGate =>
-      _unconfirmedNodesCount == 0 &&
       _objSuspiciousCount == 0 &&
       _unresolvedCandidatesCount == 0 &&
       _workingNodes.where((n) => n.reviewStatus != 'REJECTED').isNotEmpty;
@@ -153,13 +165,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   List<String> get _objectGateBlockers {
     final blockers = <String>[];
     if (_objSuspiciousCount > 0) {
-      blockers.add('검토 필요 객체 $_objSuspiciousCount개 승인 또는 제외');
+      blockers.add('검토 필요 객체 $_objSuspiciousCount개 확인 필요');
     }
     if (_unresolvedCandidatesCount > 0) {
       blockers.add('누락 후보 $_unresolvedCandidatesCount개 복구 또는 문제없음 처리');
-    }
-    if (_unconfirmedNodesCount > 0) {
-      blockers.add('대기 중인 정상 객체 $_unconfirmedNodesCount개 승인 (우측 [정상 객체 일괄 승인] 클릭)');
     }
     if (_workingNodes.where((n) => n.reviewStatus != 'REJECTED').isEmpty) {
       blockers.add('사용 가능한 객체가 없음');
@@ -454,7 +463,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       case ReviewPhase.objectReview:
         return _objSuspiciousCount > 0 && _selectedNode != null
             ? 'object_bbox'
-            : 'object_approve';
+            : 'object_gate';
       case ReviewPhase.busMappingReview:
         return 'bus_input';
       case ReviewPhase.connectionReview:
@@ -757,7 +766,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
     switch (_currentPhase) {
       case ReviewPhase.objectReview:
-        await _verifyObjectGate();
+        await _completeObjectReview();
         return _currentPhase == ReviewPhase.busMappingReview;
       case ReviewPhase.busMappingReview:
         await _proceedToConnectionReview();
@@ -1109,32 +1118,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     });
   }
 
-  void _batchConfirmCleanDetectedNodes() {
-    _confirmAllCleanNodes();
-  }
-
-  void _batchConfirmVisibleNodes() {
-    final visibleIds = _filteredAndSortedWorkingNodes
-        .where((node) => node.reviewStatus != 'REJECTED')
-        .map((node) => node.id)
-        .toSet();
-    if (visibleIds.isEmpty) return;
-    setState(() {
-      for (final node in _workingNodes) {
-        if (!visibleIds.contains(node.id)) continue;
-        node.reviewStatus = 'CONFIRMED';
-        if (!node.source.contains('human')) {
-          node.source = '${node.source}_human_batch_confirmed';
-        }
-      }
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('현재 목록의 객체 ${visibleIds.length}개를 승인했습니다.'),
-        backgroundColor: Colors.green,
-      ),
-    );
-  }
 
   // Navigation Logic
   void _selectNextSuspiciousNode() {
@@ -1179,33 +1162,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     }
   }
 
-  void _selectPreviousNode() {
-    var list = _filteredAndSortedWorkingNodes;
-    if (list.isEmpty || (_selectedNode != null && !list.any((n) => n.id == _selectedNode!.id))) {
-      _objFilterStatus = 'ALL';
-      _objFilterClass = 'ALL';
-      list = _filteredAndSortedWorkingNodes;
-      if (list.isEmpty) {
-        list = _workingNodes.where((n) => n.reviewStatus != 'REJECTED').toList();
-      }
-    }
-    if (list.isEmpty) list = _workingNodes;
-    if (list.isEmpty) return;
-
-    int currentIdx = _selectedNode != null
-        ? list.indexWhere((n) => n.id == _selectedNode!.id)
-        : 0;
-    if (currentIdx < 0) currentIdx = 0;
-    int prevIdx = (currentIdx - 1 + list.length) % list.length;
-    setState(() {
-      _selectedNode = list[prevIdx];
-      _nodePage = prevIdx ~/ _nodePageSize;
-    });
-    if (_selectedNode!.agentExplanation == null &&
-        _selectedNode!.reviewStatus == 'SUSPICIOUS') {
-      _triggerAgentReviewNode(_selectedNode!);
-    }
-  }
 
   void _selectNextNode() {
     var list = _filteredAndSortedWorkingNodes;
@@ -1638,10 +1594,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     // Arrow Right or Down: Navigate to Next
     if (event.logicalKey == LogicalKeyboardKey.arrowRight ||
         event.logicalKey == LogicalKeyboardKey.arrowDown) {
-      if (_currentPhase == ReviewPhase.objectReview) {
-        _selectNextNode();
-        return true;
-      } else if (_currentPhase == ReviewPhase.busMappingReview) {
+      if (_currentPhase == ReviewPhase.busMappingReview) {
         _selectNextBus();
         return true;
       } else if (_currentPhase == ReviewPhase.connectionReview) {
@@ -1653,10 +1606,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     // Arrow Left or Up: Navigate to Previous
     if (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
         event.logicalKey == LogicalKeyboardKey.arrowUp) {
-      if (_currentPhase == ReviewPhase.objectReview) {
-        _selectPreviousNode();
-        return true;
-      } else if (_currentPhase == ReviewPhase.busMappingReview) {
+      if (_currentPhase == ReviewPhase.busMappingReview) {
         _selectPreviousBus();
         return true;
       } else if (_currentPhase == ReviewPhase.connectionReview) {
@@ -1668,10 +1618,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     // Enter: Confirm and Next
     if (event.logicalKey == LogicalKeyboardKey.enter ||
         event.logicalKey == LogicalKeyboardKey.numpadEnter) {
-      if (_currentPhase == ReviewPhase.objectReview && _selectedNode != null) {
-        _confirmNodeAndNext(_selectedNode!);
-        return true;
-      } else if (_currentPhase == ReviewPhase.busMappingReview &&
+      if (_currentPhase == ReviewPhase.busMappingReview &&
           _selectedNode != null) {
         _approveAndNextBus(_selectedNode!);
         return true;
@@ -1830,7 +1777,26 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     return true;
   }
 
-  // --- Step 3: Object Gate Verification ---
+  // --- Step 3: Object Gate Verification & Unified Completion ---
+
+  Future<void> _completeObjectReview() async {
+    if (_document == null || _isLoading) return;
+
+    if (!_canVerifyObjectGate) {
+      final blockers = _objectGateBlockers;
+      final blockerCount = _objSuspiciousCount + _unresolvedCandidatesCount;
+      setState(() {
+        _stageGateMessage = blockerCount > 0
+            ? "아직 확인이 필요한 객체가 $blockerCount개 있어요. 표시해드릴게요."
+            : (blockers.isNotEmpty ? blockers.first : "확인이 필요한 항목이 남아있습니다.");
+      });
+      _focusNextReviewTask();
+      return;
+    }
+
+    _humanCompletenessConfirmed = true;
+    await _verifyObjectGate();
+  }
 
   Future<void> _verifyObjectGate() async {
     if (_document == null) return;
@@ -3253,57 +3219,29 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                             ),
                             const SizedBox(width: 12),
                             if (!isConnectionPhase) ...[
-                              // Quick navigation & batch confirm
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.arrow_back,
-                                  size: 15,
-                                  color: Color(0xFF64748B),
+                              if (_objSuspiciousCount > 0) ...[
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.history_toggle_off,
+                                    size: 15,
+                                    color: Color(0xFFD97706),
+                                  ),
+                                  tooltip: "이전 의심 객체",
+                                  visualDensity: VisualDensity.compact,
+                                  onPressed: _selectPreviousSuspiciousNode,
                                 ),
-                                tooltip: "이전 객체",
-                                visualDensity: VisualDensity.compact,
-                                onPressed: _workingNodes.isEmpty
-                                    ? null
-                                    : _selectPreviousNode,
-                              ),
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.arrow_forward,
-                                  size: 15,
-                                  color: Color(0xFF64748B),
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.warning_amber_rounded,
+                                    size: 15,
+                                    color: Color(0xFFD97706),
+                                  ),
+                                  tooltip: "다음 의심 객체",
+                                  visualDensity: VisualDensity.compact,
+                                  onPressed: _selectNextSuspiciousNode,
                                 ),
-                                tooltip: "다음 객체",
-                                visualDensity: VisualDensity.compact,
-                                onPressed: _workingNodes.isEmpty
-                                    ? null
-                                    : _selectNextNode,
-                              ),
-                              const SizedBox(width: 2),
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.history_toggle_off,
-                                  size: 15,
-                                  color: Color(0xFFD97706),
-                                ),
-                                tooltip: "이전 의심 객체",
-                                visualDensity: VisualDensity.compact,
-                                onPressed: _objSuspiciousCount == 0
-                                    ? null
-                                    : _selectPreviousSuspiciousNode,
-                              ),
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.warning_amber_rounded,
-                                  size: 15,
-                                  color: Color(0xFFD97706),
-                                ),
-                                tooltip: "다음 의심 객체",
-                                visualDensity: VisualDensity.compact,
-                                onPressed: _objSuspiciousCount == 0
-                                    ? null
-                                    : _selectNextSuspiciousNode,
-                              ),
-                              const SizedBox(width: 6),
+                                const SizedBox(width: 6),
+                              ],
                               ChoiceChip(
                                 label: Text(
                                   _isManualAddMode
@@ -3443,9 +3381,21 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                     ? _filteredAndSortedWorkingNodes
                                     : _workingNodes,
                                 selectedNode: _selectedNode,
+                                guideNodeIds:
+                                    (_currentPhase == ReviewPhase.objectReview)
+                                    ? _guideNodeIds
+                                    : const {},
+                                openMissingCandidates:
+                                    (_currentPhase == ReviewPhase.objectReview)
+                                    ? _missingCandidates.where((c) => c.status == 'OPEN').toList()
+                                    : const [],
+                                onSelectCandidate: (cand) {
+                                  _focusReviewIssueForAgent();
+                                },
                                 onSelectNode: (node) {
                                   setState(() {
                                     _selectedNode = node;
+                                    _isObjectEditExpanded = false;
                                     if (_isManualAddLineMode &&
                                         _manualLineStartNode == null) {
                                       _manualLineStartNode = node;
@@ -3917,8 +3867,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 _buildObjectClassFilter("전체", 'ALL'),
                 _buildObjectClassFilter("Bus", 'bus'),
                 _buildObjectClassFilter("Load", 'load'),
-                _buildObjectClassFilter("Gen", 'generator'),
-                _buildObjectClassFilter("Trans", 'transformer'),
+                _buildObjectClassFilter("Generator", 'generator'),
+                _buildObjectClassFilter("Transformer", 'transformer'),
               ],
             ),
           ),
@@ -3928,7 +3878,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             childrenPadding: EdgeInsets.zero,
             initiallyExpanded: false,
             title: const Text(
-              "고급: 필터·정렬·일괄 작업",
+              "고급: 필터 및 정렬",
               style: TextStyle(
                 color: Color(0xFF64748B),
                 fontSize: 10.5,
@@ -4034,40 +3984,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   ],
                 ),
               ),
-              const SizedBox(height: 8),
-              GlowingTargetWrapper(
-                targetId: 'object_batch_approve',
-                borderRadius: BorderRadius.circular(8),
-                guideLabel: "✨ 정상 객체 일괄 승인",
-                child: SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: _unconfirmedNodesCount > 0
-                        ? _confirmAllCleanNodes
-                        : null,
-                    icon: const Icon(Icons.done_all, size: 16),
-                    label: Text(
-                      _unconfirmedNodesCount > 0
-                          ? (_objSuspiciousCount > 0
-                              ? "정상 객체 일괄 승인 (의심 제외 $_unconfirmedNodesCount건)"
-                              : "정상 객체 일괄 승인 ($_unconfirmedNodesCount건 한 번에 확정)")
-                          : "모든 정상 객체 승인 완료됨 ✓",
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF0D9488),
-                      foregroundColor: Colors.white,
-                      disabledBackgroundColor: const Color(0xFFF1F5F9),
-                      disabledForegroundColor: const Color(0xFF94A3B8),
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                      elevation: _unconfirmedNodesCount > 0 ? 1 : 0,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
+              const SizedBox(height: 6),
             ],
           ),
         ],
@@ -4539,55 +4456,80 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   Widget _buildSelectedNodePanel() {
     final node = _selectedNode!;
     final isSuspicious = node.reviewStatus == 'SUSPICIOUS';
+    final isHumanModified = node.source.contains('human');
     final classColor = _getClassColor(node.className);
+
+    // Determine status badge text and color
+    final String statusLabel;
+    final Color statusColor;
+    if (isSuspicious) {
+      statusLabel = "확인 필요";
+      statusColor = const Color(0xFFD97706);
+    } else if (isHumanModified) {
+      statusLabel = "사람 수정됨";
+      statusColor = const Color(0xFF059669);
+    } else {
+      statusLabel = "AI 확인";
+      statusColor = const Color(0xFF2563EB);
+    }
+
+    // Determine evidence text
+    final List<String> reasons =
+        node.reviewReasons.where((r) => r.trim().isNotEmpty).toList();
+    final String? explanation =
+        (node.agentExplanation != null && node.agentExplanation!.trim().isNotEmpty)
+            ? node.agentExplanation
+            : null;
+    final bool hasEvidence = reasons.isNotEmpty || explanation != null;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Header with Display Label and Edit Action
+        // Header with Display Label, Class Icon, Edit Label Icon, and Status Badge
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Row(
-              children: [
-                Icon(
-                  _getClassIcon(node.className),
-                  color: classColor,
-                  size: 20,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  node.effectiveDisplayLabel,
-                  style: const TextStyle(
-                    color: Color(0xFF0F172A),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
+            Expanded(
+              child: Row(
+                children: [
+                  Icon(
+                    _getClassIcon(node.className),
+                    color: classColor,
+                    size: 20,
                   ),
-                ),
-                const SizedBox(width: 6),
-                IconButton(
-                  icon: const Icon(
-                    Icons.edit,
-                    size: 14,
-                    color: Color(0xFF2563EB),
+                  const SizedBox(width: 6),
+                  Flexible(
+                    child: Text(
+                      node.effectiveDisplayLabel,
+                      style: const TextStyle(
+                        color: Color(0xFF0F172A),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                  tooltip: "표시명 / 번호 수정",
-                  onPressed: () => _editNodeDisplayLabel(node),
-                ),
-              ],
+                  const SizedBox(width: 4),
+                  IconButton(
+                    icon: const Icon(
+                      Icons.edit,
+                      size: 14,
+                      color: Color(0xFF2563EB),
+                    ),
+                    tooltip: "표시명 / 번호 수정",
+                    onPressed: () => _editNodeDisplayLabel(node),
+                  ),
+                ],
+              ),
             ),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
-                color: isSuspicious
-                    ? const Color(0xFFD97706)
-                    : (node.reviewStatus == 'CONFIRMED'
-                          ? const Color(0xFF16A34A)
-                          : const Color(0xFF2563EB)),
+                color: statusColor,
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
-                node.reviewStatus,
+                statusLabel,
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 11,
@@ -4597,14 +4539,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             ),
           ],
         ),
+        const SizedBox(height: 4),
         Text(
-          "객체 종류: ${_classNameKo(node.className)}  ·  신뢰도: ${(node.confidence * 100).toInt()}%",
+          "객체 종류: ${_classNameKo(node.className)}  ·  AI 모델 인식 신뢰도: ${(node.confidence * 100).toInt()}%",
           style: const TextStyle(color: Color(0xFF64748B), fontSize: 11),
         ),
         const SizedBox(height: 12),
 
-        if (node.reviewReasons.isNotEmpty) ...[
+        // Evidence section
+        if (reasons.isNotEmpty) ...[
           Container(
+            width: double.infinity,
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
               color: const Color(0xFFFFFBEB),
@@ -4633,7 +4578,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   ],
                 ),
                 const SizedBox(height: 4),
-                ...node.reviewReasons.map(
+                ...reasons.map(
                   (r) => Padding(
                     padding: const EdgeInsets.only(bottom: 2),
                     child: Text(
@@ -4648,11 +4593,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               ],
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
         ],
 
-        // Agent Card
+        // AI Agent Explanation or fallback
         Container(
+          width: double.infinity,
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: const Color(0xFFF8FAFC),
@@ -4671,7 +4617,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   ),
                   SizedBox(width: 6),
                   Text(
-                    "AI 검수 의견",
+                    "AI 판단 근거",
                     style: TextStyle(
                       color: Color(0xFF1D4ED8),
                       fontWeight: FontWeight.bold,
@@ -4682,12 +4628,16 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               ),
               const SizedBox(height: 8),
               Text(
-                node.agentExplanation ??
-                    (isSuspicious ? "의심 사유를 분석하고 있습니다..." : "정상 심볼로 인식되었습니다."),
-                style: const TextStyle(
-                  color: Color(0xFF1E293B),
+                explanation ??
+                    (hasEvidence ? "" : "추가 판정 근거가 기록되지 않았습니다."),
+                style: TextStyle(
+                  color: explanation != null
+                      ? const Color(0xFF1E293B)
+                      : const Color(0xFF94A3B8),
                   fontSize: 12,
                   height: 1.4,
+                  fontStyle:
+                      explanation != null ? FontStyle.normal : FontStyle.italic,
                 ),
               ),
               if (node.recommendedAction != null) ...[
@@ -4704,172 +4654,228 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             ],
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 14),
 
-        // Action Buttons
-        const Text(
-          "사용자 검수 액션",
-          style: TextStyle(
-            color: Color(0xFF475569),
-            fontSize: 12,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 8),
-        GlowingTargetWrapper(
-          targetId: 'object_approve',
-          borderRadius: BorderRadius.circular(8),
-          guideLabel: "✨ 승인하고 다음 (Enter)",
-          child: ElevatedButton.icon(
-            key: _objectPrimaryActionKey,
-            onPressed: () => _confirmNodeAndNext(node),
-            icon: const Icon(Icons.check_circle_outline, size: 18),
-            label: const Text(
-              "승인하고 다음 (Enter ➔)",
-              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
-            ),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF16A34A),
-              foregroundColor: Colors.white,
-              minimumSize: const Size(double.infinity, 40),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
+        // Inspector Actions V2
+        if (isSuspicious) ...[
+          // Suspicious object: Primary [맞음] and [수정]
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      node.reviewStatus = 'CONFIRMED';
+                      node.source = '${node.source}_human_confirmed';
+                    });
+                    if (_objSuspiciousCount == 0 &&
+                        _unresolvedCandidatesCount == 0) {
+                      setState(() {
+                        _stageGateMessage =
+                            "제가 의심하는 객체는 이제 없어요. 마지막으로 전체 도면을 한번만 확인해주세요.";
+                      });
+                    }
+                  },
+                  icon: const Icon(Icons.check, size: 16),
+                  label: const Text(
+                    "맞음",
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF16A34A),
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(0, 40),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                ),
               ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 8),
-        GlowingTargetWrapper(
-          targetId: 'object_batch_approve',
-          borderRadius: BorderRadius.circular(8),
-          guideLabel: "✨ 정상 객체 일괄 승인",
-          child: OutlinedButton.icon(
-            onPressed: _unconfirmedNodesCount > 0 ? _confirmAllCleanNodes : null,
-            icon: const Icon(Icons.done_all, size: 16),
-            label: Text(
-              _unconfirmedNodesCount > 0
-                  ? (_objSuspiciousCount > 0
-                      ? "정상 객체 일괄 승인 (의심 제외)"
-                      : "정상 객체 전체 승인 (한 번에 확인)")
-                  : "모든 정상 객체 승인 완료됨 ✓",
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-            ),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: const Color(0xFF0D9488),
-              side: const BorderSide(color: Color(0xFF14B8A6), width: 1.2),
-              backgroundColor: const Color(0xFFF0FDFA),
-              disabledForegroundColor: const Color(0xFF94A3B8),
-              minimumSize: const Size(double.infinity, 38),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 8),
-
-        Row(
-          children: [
-            Expanded(
-              child: GlowingTargetWrapper(
-                targetId: 'node_prev',
-                borderRadius: BorderRadius.circular(4),
-                guideLabel: "✨ 이전 객체 (◀)",
+              const SizedBox(width: 8),
+              Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: _selectPreviousNode,
-                  icon: const Icon(Icons.arrow_back, size: 13),
-                  label: const Text("이전 (◀)", style: TextStyle(fontSize: 11)),
+                  onPressed: () {
+                    setState(() {
+                      _isObjectEditExpanded = !_isObjectEditExpanded;
+                    });
+                  },
+                  icon: Icon(
+                    _isObjectEditExpanded ? Icons.close : Icons.tune,
+                    size: 16,
+                  ),
+                  label: Text(
+                    _isObjectEditExpanded ? "닫기" : "수정",
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                  ),
                   style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    side: const BorderSide(color: Color(0xFFCBD5E1)),
+                    foregroundColor: const Color(0xFF2563EB),
+                    side: const BorderSide(color: Color(0xFF3B82F6), width: 1.2),
+                    minimumSize: const Size(0, 40),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
                   ),
                 ),
               ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: GlowingTargetWrapper(
-                targetId: 'node_reject',
-                borderRadius: BorderRadius.circular(4),
-                guideLabel: "✨ 객체 제외/삭제",
-                child: OutlinedButton(
-                  onPressed: () => _rejectNode(node),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    side: const BorderSide(color: Color(0xFFFCA5A5)),
-                  ),
-                  child: const Text(
-                    "제외/삭제",
-                    style: TextStyle(fontSize: 11, color: Color(0xFFDC2626)),
-                  ),
-                ),
+            ],
+          ),
+          if (_isObjectEditExpanded) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF1F5F9),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFCBD5E1)),
               ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: GlowingTargetWrapper(
-                targetId: 'node_next',
-                borderRadius: BorderRadius.circular(4),
-                guideLabel: "✨ 다음 객체 (▶)",
-                child: OutlinedButton.icon(
-                  onPressed: _selectNextNode,
-                  icon: const Icon(Icons.arrow_forward, size: 13),
-                  label: const Text("다음 (▶)", style: TextStyle(fontSize: 11)),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    side: const BorderSide(color: Color(0xFFCBD5E1)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    "올바른 객체 종류를 선택하세요:",
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF334155),
+                    ),
                   ),
-                ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: ['bus', 'generator', 'load', 'transformer'].map((cls) {
+                      final isCurrent = node.className.toLowerCase() == cls;
+                      return ChoiceChip(
+                        label: Text(
+                          cls.toUpperCase(),
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                        selected: isCurrent,
+                        onSelected: (selected) {
+                          if (selected) {
+                            _changeNodeClass(node, cls);
+                            setState(() {
+                              _isObjectEditExpanded = false;
+                            });
+                          }
+                        },
+                        selectedColor: _getClassColor(cls).withValues(alpha: 0.25),
+                        backgroundColor: Colors.white,
+                        side: BorderSide(
+                          color: isCurrent
+                              ? _getClassColor(cls)
+                              : const Color(0xFFCBD5E1),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: () => _rejectNode(node),
+                      icon: const Icon(
+                        Icons.delete_outline,
+                        size: 14,
+                        color: Color(0xFFDC2626),
+                      ),
+                      label: const Text(
+                        "객체 제외/삭제",
+                        style: TextStyle(fontSize: 11, color: Color(0xFFDC2626)),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
-        ),
-        const SizedBox(height: 6),
-
-        // Class changes remain available for Human-in-the-Loop corrections,
-        // but are intentionally kept out of the beginner default view.
-        GlowingTargetWrapper(
-          targetId: 'node_class_tile',
-          borderRadius: BorderRadius.circular(4),
-          guideLabel: "✨ 객체 종류 수정",
-          child: ExpansionTile(
+        ] else ...[
+          // Clean normal object: Information only, no approval required
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF0FDF4),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFBBF7D0)),
+            ),
+            child: const Row(
+              children: [
+                Icon(
+                  Icons.check_circle_outline,
+                  color: Color(0xFF16A34A),
+                  size: 18,
+                ),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    "AI가 확인한 정상 객체입니다. (승인 불필요)",
+                    style: TextStyle(
+                      color: Color(0xFF15803D),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 6),
+          // Optional manual edit expansion tile if user wants to change anyway
+          ExpansionTile(
             tilePadding: EdgeInsets.zero,
             childrenPadding: EdgeInsets.zero,
             initiallyExpanded: false,
             title: const Text(
-              "고급: 객체 종류 수정",
+              "고급: 객체 종류 수정 / 제외",
               style: TextStyle(color: Color(0xFF64748B), fontSize: 10.5),
             ),
-          children: [
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: ['bus', 'generator', 'load', 'transformer'].map((cls) {
-                final isCurrent = node.className.toLowerCase() == cls;
-                return ChoiceChip(
-                  label: Text(
-                    cls.toUpperCase(),
-                    style: const TextStyle(fontSize: 11),
+            children: [
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: ['bus', 'generator', 'load', 'transformer'].map((cls) {
+                  final isCurrent = node.className.toLowerCase() == cls;
+                  return ChoiceChip(
+                    label: Text(
+                      cls.toUpperCase(),
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                    selected: isCurrent,
+                    onSelected: (selected) {
+                      if (selected) _changeNodeClass(node, cls);
+                    },
+                    selectedColor: _getClassColor(cls).withValues(alpha: 0.25),
+                    backgroundColor: const Color(0xFFF1F5F9),
+                    side: BorderSide(
+                      color: isCurrent
+                          ? _getClassColor(cls)
+                          : const Color(0xFFCBD5E1),
+                    ),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 6),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: () => _rejectNode(node),
+                  icon: const Icon(
+                    Icons.delete_outline,
+                    size: 14,
+                    color: Color(0xFFDC2626),
                   ),
-                  selected: isCurrent,
-                  onSelected: (selected) {
-                    if (selected) _changeNodeClass(node, cls);
-                  },
-                  selectedColor: _getClassColor(cls).withValues(alpha: 0.25),
-                  backgroundColor: const Color(0xFFF1F5F9),
-                  side: BorderSide(
-                    color: isCurrent
-                        ? _getClassColor(cls)
-                        : const Color(0xFFCBD5E1),
+                  label: const Text(
+                    "객체 제외/삭제",
+                    style: TextStyle(fontSize: 11, color: Color(0xFFDC2626)),
                   ),
-                );
-              }).toList(),
-            ),
-          ],
-        ),
-      ),
-    ],
-  );
+                ),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
   }
 
   // --- Connection Queue Header & Panel ---
@@ -7991,7 +7997,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   Widget _buildBottomGateFooter() {
     if (_currentPhase == ReviewPhase.objectReview) {
-      // Step 1: Object Review
+      // Step 1: Object Review V2
+      final blockerCount = _objSuspiciousCount + _unresolvedCandidatesCount;
       return Container(
         padding: const EdgeInsets.all(12),
         decoration: const BoxDecoration(
@@ -8000,28 +8007,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         ),
         child: Column(
           children: [
-            CheckboxListTile(
-              value: _canVerifyObjectGate,
-              onChanged: null,
-              title: Text(
-                _canVerifyObjectGate
-                    ? "✓ 전체 도면 대조 및 모든 객체 승인 완료 (Gate 통과 가능)"
-                    : (_unconfirmedNodesCount > 0
-                        ? "대기 중인 정상 객체 ${_unconfirmedNodesCount}개 승인 필요 (우측 일괄 승인)"
-                        : "원본 회로도 대조 확인 대기 중"),
-                style: TextStyle(
-                  color: _canVerifyObjectGate
-                      ? const Color(0xFF16A34A)
-                      : const Color(0xFF0F172A),
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              controlAffinity: ListTileControlAffinity.leading,
-              contentPadding: EdgeInsets.zero,
-              activeColor: const Color(0xFF2563EB),
-            ),
-            if (_objSuspiciousCount > 0)
+            if (blockerCount > 0)
               Container(
                 width: double.infinity,
                 margin: const EdgeInsets.only(bottom: 8),
@@ -8044,7 +8030,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        "검토가 필요한 객체 $_objSuspiciousCount개가 남아 있습니다.",
+                        "검토가 필요한 객체 $blockerCount개가 남아 있습니다.",
                         style: const TextStyle(
                           color: Color(0xFF991B1B),
                           fontSize: 11.5,
@@ -8053,15 +8039,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                       ),
                     ),
                     TextButton(
-                      onPressed: () {
-                        setState(() {
-                          _objFilterStatus = 'SUSPICIOUS';
-                          _selectedNode = _workingNodes.firstWhere(
-                            (n) => n.reviewStatus == 'SUSPICIOUS',
-                            orElse: () => _workingNodes.first,
-                          );
-                        });
-                      },
+                      onPressed: _focusNextReviewTask,
                       style: TextButton.styleFrom(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 8,
@@ -8081,8 +8059,42 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     ),
                   ],
                 ),
+              )
+            else
+              Container(
+                width: double.infinity,
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF0FDF4),
+                  border: Border.all(color: const Color(0xFFBBF7D0)),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(
+                      Icons.check_circle_outline,
+                      color: Color(0xFF16A34A),
+                      size: 14,
+                    ),
+                    SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        "의심 객체가 없습니다. 도면을 마지막으로 확인한 후 [객체 검수 완료]를 누르세요.",
+                        style: TextStyle(
+                          color: Color(0xFF15803D),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-            if (_objectGateBlockers.isNotEmpty && _objSuspiciousCount == 0)
+            if (_objectGateBlockers.isNotEmpty && blockerCount == 0)
               Container(
                 width: double.infinity,
                 margin: const EdgeInsets.only(bottom: 8),
@@ -8101,77 +8113,35 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   ),
                 ),
               ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 4),
             Row(
               children: [
-                if (_objSuspiciousCount > 0)
-                  Expanded(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFFFF7ED),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: const Color(0xFFFED7AA)),
-                      ),
-                      child: const Text(
-                        'Lensy가 검토 필요 객체를 먼저 보여드리고 있어요.\n'
-                        '모든 항목을 승인하거나 제외하면 다음 단계 버튼이 나타납니다.',
+                Expanded(
+                  child: GlowingTargetWrapper(
+                    targetId: 'object_gate',
+                    borderRadius: BorderRadius.circular(8),
+                    guideLabel: "✨ 객체 검수 완료",
+                    child: ElevatedButton.icon(
+                      key: _objectPrimaryActionKey,
+                      onPressed: _completeObjectReview,
+                      icon: const Icon(Icons.check_circle_outline, size: 16),
+                      label: const Text(
+                        "객체 검수 완료",
                         style: TextStyle(
-                          color: Color(0xFF9A3412),
-                          fontSize: 11,
-                          height: 1.3,
-                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
-                    ),
-                  )
-                else
-                  Expanded(
-                    child: GlowingTargetWrapper(
-                      targetId: 'object_gate',
-                      borderRadius: BorderRadius.circular(8),
-                      guideLabel: "✨ 객체 검수 완료",
-                      child: ElevatedButton.icon(
-                        onPressed: _canVerifyObjectGate
-                            ? _verifyObjectGate
-                            : () {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  SnackBar(
-                                    content: Text(
-                                      '아직 완료할 항목: ${_objectGateBlockers.join(', ')}',
-                                    ),
-                                    backgroundColor: Colors.orange,
-                                  ),
-                                );
-                              },
-                        icon: const Icon(Icons.check_circle_outline, size: 16),
-                        label: const Text("객체 검수 완료"),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: _canVerifyObjectGate
-                              ? const Color(0xFF2563EB)
-                              : const Color(0xFF94A3B8),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                        ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _canVerifyObjectGate
+                            ? const Color(0xFF2563EB)
+                            : const Color(0xFF94A3B8),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
                     ),
                   ),
-                if (_isObjectVerified) ...[
-                  const SizedBox(width: 8),
-                  ElevatedButton.icon(
-                    onPressed: _proceedToBusMappingReview,
-                    icon: const Icon(Icons.arrow_forward, size: 16),
-                    label: const Text("다음: 모선 번호 매핑 ➔"),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF16A34A),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
-                  ),
-                ],
+                ),
               ],
             ),
           ],
@@ -8785,24 +8755,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     );
   }
 
-  Widget _buildStatBadge(String label, int count, Color color) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF1F5F9),
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: color.withValues(alpha: 0.5), width: 1.0),
-      ),
-      child: Text(
-        "$label: $count",
-        style: TextStyle(
-          color: color,
-          fontSize: 10,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-    );
-  }
 
   Widget _buildMissingCandidateBadge(String label, int count, Color color) {
     final hasCandidates = count > 0;

@@ -513,6 +513,66 @@ class AgentCoreV2Test(unittest.TestCase):
         self.assertIn('"topology_errors"', full_prompt)
         self.assertIn('"topology_warnings"', full_prompt)
 
+    def test_22_object_review_proactive_with_suspicious_nodes(self):
+        """TEST 22: OBJECT_REVIEW proactive with suspicious nodes returns HUMAN_CHECK, GUIDE, focus_targets, and suppresses legacy object_approve."""
+        nodes = [
+            {"id": "gen_1", "class": "generator", "review_status": "NORMAL"},
+            {"id": "gen_susp", "class": "generator", "review_status": "SUSPICIOUS", "review_reasons": ["신뢰도 0.65로 낮음"]},
+        ]
+        res = self.local_prov.generate_proactive_summary(
+            document_id="doc_obj_test",
+            stage="OBJECT_REVIEW",
+            working_nodes=nodes,
+            working_lines=[],
+            missing_candidates=[],
+            topology_issues=[],
+        )
+        self.assertEqual(res["decision"], "HUMAN_CHECK")
+        self.assertEqual(res["action_mode"], "GUIDE")
+        self.assertIsNone(res["highlight_target"])  # legacy object_approve highlight is NOT used
+        self.assertNotEqual(res["highlight_target"], "object_approve")
+        focus_ids = [f["id"] for f in res["focus_targets"]]
+        self.assertIn("gen_susp", focus_ids)
+        self.assertNotIn("gen_1", focus_ids)
+
+        # Also verify sanitize_and_validate_agent_response suppresses object_approve in OBJECT_REVIEW
+        raw_llm = {
+            "reply_ko": "검토하세요",
+            "decision": "HUMAN_CHECK",
+            "action_mode": "GUIDE",
+            "highlight_target": "object_approve",
+            "focus_targets": [{"type": "OBJECT", "id": "gen_susp"}],
+        }
+        sanitized = sanitize_and_validate_agent_response(
+            raw_llm,
+            user_message="",
+            working_nodes=nodes,
+            working_lines=[],
+            missing_candidates=[],
+            topology_issues=[],
+            stage="OBJECT_REVIEW",
+        )
+        self.assertIsNone(sanitized["highlight_target"])
+
+    def test_23_object_review_proactive_clean_nodes(self):
+        """TEST 23: OBJECT_REVIEW proactive with clean nodes returns PROCEED, NONE, and no fabricated targets."""
+        nodes = [
+            {"id": "gen_1", "class": "generator", "review_status": "NORMAL"},
+            {"id": "bus_1", "class": "bus", "review_status": "CONFIRMED"},
+        ]
+        res = self.local_prov.generate_proactive_summary(
+            document_id="doc_obj_clean",
+            stage="OBJECT_REVIEW",
+            working_nodes=nodes,
+            working_lines=[],
+            missing_candidates=[],
+            topology_issues=[],
+        )
+        self.assertEqual(res["decision"], "PROCEED")
+        self.assertEqual(res["action_mode"], "NONE")
+        self.assertEqual(len(res["focus_targets"]), 0)
+        self.assertIsNone(res["highlight_target"])
+
 
 if __name__ == "__main__":
     unittest.main()
