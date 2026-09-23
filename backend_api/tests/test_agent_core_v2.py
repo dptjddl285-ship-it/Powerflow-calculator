@@ -717,6 +717,92 @@ class AgentCoreV2Test(unittest.TestCase):
         self.assertNotIn("bus_confidence = 0.99", src)
         self.assertNotIn("0.99", src)
 
+    def test_32_rejected_bus_is_excluded_from_proactive_and_gate(self):
+        """TEST X: rejected + uncertain Bus is excluded from active Bus state."""
+        import asyncio
+        from review.schemas import VerifyBusGateRequest
+        from review.staged_api import review_verify_bus_gate
+
+        nodes = [
+            {"id": "bus_active", "class": "bus", "bus_number": 5, "bus_number_status": "VERIFIED"},
+            {"id": "bus_rejected", "class": "bus", "bus_number": None, "bus_number_status": "UNCERTAIN", "review_status": "REJECTED"},
+        ]
+        proactive = self.local_prov.generate_proactive_summary(
+            document_id="doc_rejected_bus",
+            stage="BUS_MAPPING",
+            working_nodes=nodes,
+        )
+        gate = asyncio.run(
+            review_verify_bus_gate(
+                VerifyBusGateRequest(document_id="doc_rejected_bus", working_nodes=nodes)
+            )
+        )
+
+        self.assertEqual(proactive["bus_summary"]["total_buses"], 1)
+        self.assertEqual(proactive["bus_summary"]["issue_buses"], 0)
+        self.assertEqual(proactive["focus_targets"], [])
+        self.assertEqual(gate["gate_status"], "BUS_VERIFIED")
+        self.assertEqual(gate["bus_summary"]["total_buses"], 1)
+
+    def test_33_active_duplicate_reason_is_consistent_across_paths(self):
+        """TEST Y: active DUPLICATE_BUS_NUMBER_* blocks proactive, chat, and Gate."""
+        import asyncio
+        from review.schemas import VerifyBusGateRequest
+        from review.staged_api import review_verify_bus_gate
+
+        nodes = [
+            {"id": "bus_unique", "class": "bus", "bus_number": 1, "bus_number_status": "VERIFIED"},
+            {
+                "id": "bus_reason",
+                "class": "bus",
+                "bus_number": 5,
+                "bus_number_status": "VERIFIED",
+                "bus_number_reasons": ["DUPLICATE_BUS_NUMBER_5"],
+            },
+        ]
+        proactive = self.local_prov.generate_proactive_summary(
+            document_id="doc_active_reason",
+            stage="BUS_MAPPING",
+            working_nodes=nodes,
+        )
+        chat = self.local_prov.answer_chat(
+            message="다음에 뭐 해?",
+            document_id="doc_active_reason",
+            stage="BUS_MAPPING",
+            working_nodes=nodes,
+        )
+        gate = asyncio.run(
+            review_verify_bus_gate(
+                VerifyBusGateRequest(document_id="doc_active_reason", working_nodes=nodes)
+            )
+        )
+
+        self.assertEqual(proactive["decision"], "HUMAN_CHECK")
+        self.assertEqual(proactive["bus_summary"]["issue_buses"], 1)
+        self.assertEqual(proactive["focus_targets"][0]["id"], "bus_reason")
+        self.assertEqual(chat["decision"], "HUMAN_CHECK")
+        self.assertNotIn("모든 모선 번호가 확인되었습니다", chat["reply_ko"])
+        self.assertEqual(gate["gate_status"], "BLOCKED")
+        self.assertIn("bus_reason", gate["focus_node_ids"])
+
+    def test_34_non_contiguous_clean_buses_remain_clean_in_proactive(self):
+        """TEST backend contract: 1, 5, 20 are valid when unique."""
+        nodes = [
+            {"id": "bus_1", "class": "bus", "bus_number": 1, "bus_number_status": "VERIFIED"},
+            {"id": "bus_5", "class": "bus", "bus_number": 5, "bus_number_status": "VERIFIED"},
+            {"id": "bus_20", "class": "bus", "bus_number": 20, "bus_number_status": "VERIFIED"},
+        ]
+        proactive = self.local_prov.generate_proactive_summary(
+            document_id="doc_non_contiguous_proactive",
+            stage="BUS_MAPPING",
+            working_nodes=nodes,
+        )
+
+        self.assertEqual(proactive["decision"], "PROCEED")
+        self.assertEqual(proactive["bus_summary"]["total_buses"], 3)
+        self.assertEqual(proactive["bus_summary"]["issue_buses"], 0)
+        self.assertEqual(proactive["focus_targets"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

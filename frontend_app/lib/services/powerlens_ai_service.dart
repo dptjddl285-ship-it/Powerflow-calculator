@@ -163,6 +163,7 @@ class PowerLensAIService extends ChangeNotifier {
           }
           return 'object_gate';
         case 'bus_mapping':
+        case 'bus_mapping_review':
           final busNodes = context.workingNodes
               .where(
                 (n) =>
@@ -387,6 +388,7 @@ class PowerLensAIService extends ChangeNotifier {
     final stage = context?.workflowStage.toUpperCase();
     return stage == 'OBJECT_REVIEW' ||
         stage == 'BUS_MAPPING' ||
+        stage == 'BUS_MAPPING_REVIEW' ||
         stage == 'CONNECTION_REVIEW' ||
         stage == 'LINE_REVIEW' ||
         context?.currentScreen.toUpperCase() == 'REVIEW_PAGE';
@@ -642,7 +644,9 @@ class PowerLensAIService extends ChangeNotifier {
     ]);
     final stageStr = context?.workflowStage.toLowerCase() ?? '';
     final isObjectOrBusReview =
-        stageStr == 'object_review' || stageStr == 'bus_mapping';
+        stageStr == 'object_review' ||
+        stageStr == 'bus_mapping' ||
+        stageStr == 'bus_mapping_review';
     if (_isReviewStage(context) && isBatchApprove) {
       if (isObjectOrBusReview) {
         return const [];
@@ -1332,6 +1336,7 @@ class PowerLensAIService extends ChangeNotifier {
         }
         break;
       case 'BUS_MAPPING':
+      case 'BUS_MAPPING_REVIEW':
         if (ctx.unresolvedBusNumbers > 0 || ctx.duplicateBusNumbers > 0) {
           return "⚠️ 아직 확정하지 않은 모선 번호가 **${ctx.unresolvedBusNumbers}개**"
               "${ctx.duplicateBusNumbers > 0 ? '이고 중복 번호도 ${ctx.duplicateBusNumbers}개' : ''} 있어요. "
@@ -1377,7 +1382,12 @@ class PowerLensAIService extends ChangeNotifier {
       '다승인',
       '일괄',
     ])) {
-      if (stage == 'OBJECT_REVIEW') {
+      if (stage == 'BUS_MAPPING' || stage == 'BUS_MAPPING_REVIEW') {
+        reply =
+            "✨ **모선 번호 검수 안내:**\n"
+            "• 정상 모선은 개별 또는 일괄 승인할 필요가 없습니다.\n"
+            "• 확인 필요로 표시된 모선만 번호를 확인하거나 수정한 뒤 [모선 검수 완료]를 눌러주세요.";
+      } else if (stage == 'OBJECT_REVIEW') {
         reply =
             "✨ **객체 검수 안내:**\n"
             "• 정상 객체는 일괄 승인할 필요가 없습니다. 도면에 확인 필요로 표시된 의심 객체나 누락 후보만 확인하시면 됩니다.\n"
@@ -1482,6 +1492,7 @@ class PowerLensAIService extends ChangeNotifier {
       case 'OBJECT_REVIEW':
         return "🔍 **객체 검수 단계 (1단계):**\nAI가 감지한 심볼 중 확인이 필요한 의심 객체나 누락 후보를 점검하고 [객체 검수 완료]를 눌러 다음 단계로 진행하는 단계입니다.";
       case 'BUS_MAPPING':
+      case 'BUS_MAPPING_REVIEW':
         return "🔢 **모선 번호 확인 단계 (2단계):**\n도면의 모선 바(Bus Bar)들에 올바른 번호(1~24)를 부여하고 발전기/부하의 연결 모선을 확정하는 단계입니다.";
       case 'CONNECTION_REVIEW':
         return "⚡ **결선 검수 단계 (3단계):**\n모선 간 송전선로 및 변압기 결선이 물리적/전기적으로 올바른지 선로별로 확인하는 단계입니다.";
@@ -1500,8 +1511,8 @@ class PowerLensAIService extends ChangeNotifier {
           : "✅ 모든 객체가 정상 검수 완료되었습니다! 하단 [객체 검수 완료]를 눌러 모선 번호 확인으로 넘어가세요.";
     } else if (ctx.workflowStage == 'BUS_MAPPING') {
       return ctx.unresolvedBusNumbers > 0
-          ? "⚠️ 아직 번호가 미지정된 모선이 **${ctx.unresolvedBusNumbers}개** 있습니다. [승인하고 다음]으로 빠르게 번호를 매겨주세요."
-          : "✅ 모든 모선 번호가 확정되었습니다! 결선 검수로 진행할 수 있습니다.";
+          ? "⚠️ 아직 확인이 필요한 모선이 **${ctx.unresolvedBusNumbers}개** 있습니다. 번호를 확인하거나 수정한 뒤 [모선 검수 완료]를 눌러주세요."
+          : "✅ 모든 모선 번호 확인이 완료되었습니다. [모선 검수 완료]를 눌러주세요.";
     } else if (ctx.workflowStage == 'CONNECTION_REVIEW') {
       return ctx.topologyIssueCount > 0
           ? "⚠️ 연결 구조 오류가 **${ctx.topologyIssueCount}건** 발견되었습니다. 선로를 확인하고 승인해 주세요."
@@ -1548,6 +1559,7 @@ class PowerLensAIService extends ChangeNotifier {
             "• **확인 필요 항목**: ${ctx.suspiciousObjects}건\n"
             "• 도면에 주황색으로 표시된 의심 객체를 클릭하여 AI 모델 신뢰도와 판단 근거를 확인하고 **[맞음]** 또는 **[수정]**을 선택하세요.";
       case 'BUS_MAPPING':
+      case 'BUS_MAPPING_REVIEW':
         if (selected != null && selected.isNotEmpty) {
           return "💡 **다음 할 일 (모선 번호 확인):**\n"
               "• 현재 **$selected**를 확인 중입니다.\n"
@@ -1561,7 +1573,7 @@ class PowerLensAIService extends ChangeNotifier {
         } else {
           return "💡 **다음 할 일 (모선 번호 확인 완료):**\n"
               "• 모든 모선 번호 확인이 끝났습니다!\n"
-              "• 하단 **[모선 검수 완료]** 버튼을 눌러 선로 검수를 시작하세요.";
+              "• 하단 **[모선 검수 완료]** 버튼을 눌러주세요.";
         }
       case 'CONNECTION_REVIEW':
         if (selected != null && selected.isNotEmpty) {
@@ -1641,6 +1653,7 @@ class PowerLensAIService extends ChangeNotifier {
             "객체를 확인해봤어요. 제가 다시 봤으면 하는 의심 객체를 도면 위에 표시해둘게요. "
             "표시된 객체를 클릭하여 AI 판단을 확인하고 **[맞음]** 또는 **[수정]**을 선택해주세요.";
       case 'BUS_MAPPING':
+      case 'BUS_MAPPING_REVIEW':
         final hasBusIssues =
             (ctx?.unresolvedBusNumbers ?? 0) > 0 ||
             (ctx?.duplicateBusNumbers ?? 0) > 0;
@@ -1684,6 +1697,7 @@ class PowerLensAIService extends ChangeNotifier {
             ? "객체를 확인해봤어요. 다시 확인이 필요한 곳을 도면 위에 표시해둘게요."
             : "제가 따로 의심하는 객체는 없어요. 도면을 확인한 뒤 [객체 검수 완료]를 눌러주세요.";
       case 'BUS_MAPPING':
+      case 'BUS_MAPPING_REVIEW':
         final hasBusIssues =
             ctx.unresolvedBusNumbers > 0 || ctx.duplicateBusNumbers > 0;
         final count = ctx.unresolvedBusNumbers + ctx.duplicateBusNumbers;
@@ -1723,6 +1737,7 @@ class PowerLensAIService extends ChangeNotifier {
         }
         return ['객체 검수 완료하기', '다음 단계로 이동', '다음에 뭐 해?'];
       case 'BUS_MAPPING':
+      case 'BUS_MAPPING_REVIEW':
         final hasBusIssues =
             (ctx?.unresolvedBusNumbers ?? 0) > 0 ||
             (ctx?.duplicateBusNumbers ?? 0) > 0;
@@ -1755,6 +1770,7 @@ class PowerLensAIService extends ChangeNotifier {
       case 'OBJECT_REVIEW':
         return '객체 확인 (1단계)';
       case 'BUS_MAPPING':
+      case 'BUS_MAPPING_REVIEW':
         return '모선 번호 확인 (2단계)';
       case 'CONNECTION_REVIEW':
         return '결선 확인 (3단계)';

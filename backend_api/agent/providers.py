@@ -48,6 +48,11 @@ from .system_knowledge import (
     VALID_FOCUS_TARGET_TYPES,
     VALID_HIGHLIGHT_TARGETS,
 )
+from core.bus_review_contract import evaluate_bus_mapping
+
+
+def _is_bus_mapping_stage(stage: str) -> bool:
+    return (stage or "").upper() in ("BUS_MAPPING", "BUS_MAPPING_REVIEW")
 
 
 def is_circuit_mutation_request(user_message: str) -> bool:
@@ -136,7 +141,14 @@ def sanitize_and_validate_agent_response(
     # topology_error_count only aggregates issues with severity == 'error'
     err_cnt = len([i for i in issues if str(i.get("severity", "")).lower() == "error"])
 
-    has_issues = (susp_cnt > 0 or miss_cnt > 0 or amb_cnt > 0 or err_cnt > 0)
+    bus_state = evaluate_bus_mapping(w_nodes) if _is_bus_mapping_stage(stage) else None
+    has_issues = (
+        susp_cnt > 0
+        or miss_cnt > 0
+        or amb_cnt > 0
+        or err_cnt > 0
+        or bool(bus_state and bus_state["issue_count"] > 0)
+    )
 
     res["evidence_summary"] = {
         "suspicious_count": susp_cnt,
@@ -144,6 +156,14 @@ def sanitize_and_validate_agent_response(
         "ambiguous_count": amb_cnt,
         "topology_error_count": err_cnt,
     }
+    if bus_state is not None:
+        res["evidence_summary"].update(
+            {
+                "bus_total_count": bus_state["total"],
+                "bus_verified_count": bus_state["verified_count"],
+                "bus_issue_count": bus_state["issue_count"],
+            }
+        )
 
     # 3. Decision validation & normalization
     dec = str(res.get("decision", "")).strip().upper()
@@ -359,6 +379,7 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
         action_mode = "NONE"
         reply_ko = ""
         summary_text = ""
+        bus_summary: Optional[Dict[str, Any]] = None
 
         if stage_upper in ("HOME", "EMPTY_HOME"):
             target = "home_upload"
@@ -436,26 +457,17 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
             summary_text = "\n".join(lines)
 
         elif stage_upper in ("BUS_MAPPING", "BUS_MAPPING_REVIEW"):
-            all_buses = [n for n in w_nodes if (n.get("class") or n.get("className") or "").lower() == "bus"]
-            total_buses = len(all_buses)
-            num_counts = {}
-            for b in all_buses:
-                num = b.get("bus_number")
-                if num is not None and isinstance(num, int) and num > 0:
-                    num_counts[num] = num_counts.get(num, 0) + 1
-            duplicates = {num for num, cnt in num_counts.items() if cnt > 1}
-
-            issue_buses = []
-            for b in all_buses:
-                num = b.get("bus_number")
-                status = str(b.get("bus_number_status", "")).upper()
-                reasons = b.get("bus_number_reasons") or []
-                has_active_dup_reason = any(str(r).startswith("DUPLICATE_BUS_NUMBER_") for r in reasons)
-                if num is None or not (isinstance(num, int) and num > 0) or num in duplicates or status == "UNCERTAIN" or has_active_dup_reason:
-                    issue_buses.append(b)
-
-            issue_count = len(issue_buses)
-            clean_count = total_buses - issue_count
+            bus_state = evaluate_bus_mapping(w_nodes)
+            issue_buses = bus_state["issues"]
+            total_buses = bus_state["total"]
+            issue_count = bus_state["issue_count"]
+            clean_count = bus_state["verified_count"]
+            bus_summary = {
+                "total_buses": total_buses,
+                "verified_buses": clean_count,
+                "issue_buses": issue_count,
+                "duplicates": sorted(bus_state["duplicates"]),
+            }
 
             if issue_buses:
                 decision = "HUMAN_CHECK"
@@ -465,7 +477,15 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                 for b in issue_buses:
                     num = b.get("bus_number")
                     b_id = str(b.get("id", ""))
-                    reason = "모선 번호 미할당" if num is None else ("중복 모선 번호" if num in duplicates else "모선 번호 확인 필요")
+                    reasons = bus_state["issue_reasons"].get(b_id, [])
+                    if any(reason in ("DUPLICATE_BUS_NUMBER", "ACTIVE_DUPLICATE_REASON") for reason in reasons):
+                        reason = "중복 모선 번호"
+                    elif "MISSING_BUS_NUMBER" in reasons:
+                        reason = "모선 번호 미할당"
+                    elif "INVALID_BUS_NUMBER" in reasons:
+                        reason = "유효하지 않은 모선 번호"
+                    else:
+                        reason = "모선 번호 확인 필요"
                     focus_targets.append({
                         "type": "OBJECT",
                         "id": b_id,
@@ -614,10 +634,11 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                 "topology_error_count": len(error_issues),
             },
             "summary_text": summary_text,
-            "total_count": len(w_nodes) if stage_upper != "CONNECTION_REVIEW" else len(w_lines),
-            "clean_count": len(w_nodes) - len(suspicious) if stage_upper != "CONNECTION_REVIEW" else len(w_lines) - len(ambiguous),
-            "suspicious_count": len(suspicious) if stage_upper != "CONNECTION_REVIEW" else len(ambiguous),
+            "total_count": bus_summary["total_buses"] if bus_summary is not None else (len(w_nodes) if stage_upper != "CONNECTION_REVIEW" else len(w_lines)),
+            "clean_count": bus_summary["verified_buses"] if bus_summary is not None else (len(w_nodes) - len(suspicious) if stage_upper != "CONNECTION_REVIEW" else len(w_lines) - len(ambiguous)),
+            "suspicious_count": bus_summary["issue_buses"] if bus_summary is not None else (len(suspicious) if stage_upper != "CONNECTION_REVIEW" else len(ambiguous)),
             "missing_count": len(open_cands) if stage_upper != "CONNECTION_REVIEW" else len(error_issues),
+            "bus_summary": bus_summary,
             "priority_items": priority_items,
             "provider_mode": self.provider_name,
             "display_mode": self.display_mode_name,
@@ -911,14 +932,9 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                     "• 전체 도면을 한 번 확인한 뒤 하단의 파란색 **[객체 검수 완료]**(Gate 통과) 버튼을 눌러주세요."
                 )
         elif stage_upper in ("BUS_MAPPING_REVIEW", "BUS_MAPPING"):
-            all_buses = [n for n in w_nodes if (n.get("class") or n.get("className") or "").lower() == "bus"]
-            num_counts = {}
-            for b in all_buses:
-                num = b.get("bus_number")
-                if num is not None and isinstance(num, int) and num > 0:
-                    num_counts[num] = num_counts.get(num, 0) + 1
-            dups = {num for num, cnt in num_counts.items() if cnt > 1}
-            issue_count = sum(1 for b in all_buses if b.get("bus_number") is None or b.get("bus_number") in dups or b.get("bus_number_status") == "UNCERTAIN" or (isinstance(b.get("bus_number"), int) and b.get("bus_number") <= 0))
+            bus_state = evaluate_bus_mapping(w_nodes)
+            all_buses = bus_state["buses"]
+            issue_count = bus_state["issue_count"]
             reply = "🧭 **[다음 단계 진행 가이드 - ② 모선 번호 매핑]:**\n"
             if issue_count == 0 and len(all_buses) > 0:
                 target = "bus_gate"
@@ -1117,6 +1133,23 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
         cands = missing_candidates or []
         issues = topology_issues or []
 
+        if _is_bus_mapping_stage(stage):
+            # Bus Mapping is a deterministic state contract. Do not let an
+            # LLM paraphrase stale totals or omit an active duplicate reason.
+            res = LocalReviewAssistantProvider().generate_proactive_summary(
+                document_id=document_id,
+                stage=stage,
+                working_nodes=w_nodes,
+                working_lines=w_lines,
+                missing_candidates=cands,
+                topology_issues=issues,
+                app_context=app_context,
+            )
+            res["provider_mode"] = self.provider_name
+            res["display_mode"] = self.display_mode_name
+            res["agent_status"] = "LOCAL_BUS_CONTRACT"
+            return res
+
         suspicious_nodes = [
             {
                 "id": n.get("id"),
@@ -1234,6 +1267,27 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
         history: Optional[List[ChatMessagePayload]] = None,
         app_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        if _is_bus_mapping_stage(stage):
+            # Keep Bus Mapping answers aligned with the same Gate/proactive
+            # predicates even when Gemini is configured globally.
+            res = LocalReviewAssistantProvider().answer_chat(
+                message=message,
+                document_id=document_id,
+                stage=stage,
+                selected_node=selected_node,
+                selected_line=selected_line,
+                working_nodes=working_nodes,
+                working_lines=working_lines,
+                missing_candidates=missing_candidates,
+                topology_issues=topology_issues,
+                history=history,
+                app_context=app_context,
+            )
+            res["provider_mode"] = self.provider_name
+            res["display_mode"] = self.display_mode_name
+            res["agent_status"] = "LOCAL_BUS_CONTRACT"
+            return res
+
         system_instruction = (
             f"{POWERLENS_SYSTEM_KNOWLEDGE}\n\n"
             "당신은 Lensy라는 이름의 PowerLens 동반자 에이전트입니다. 전력계통 단선도(SLD) 검수와 조류계산을 처음 쓰는 사람도 쉽게 이해할 수 있게 똑똑하고 친절하게 도와주세요.\n"
@@ -1432,6 +1486,25 @@ class OpenAIReviewAssistantProvider(ReviewAssistantProvider):
         history: Optional[List[ChatMessagePayload]] = None,
         app_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        if _is_bus_mapping_stage(stage):
+            res = LocalReviewAssistantProvider().answer_chat(
+                message=message,
+                document_id=document_id,
+                stage=stage,
+                selected_node=selected_node,
+                selected_line=selected_line,
+                working_nodes=working_nodes,
+                working_lines=working_lines,
+                missing_candidates=missing_candidates,
+                topology_issues=topology_issues,
+                history=history,
+                app_context=app_context,
+            )
+            res["provider_mode"] = self.provider_name
+            res["display_mode"] = self.display_mode_name
+            res["agent_status"] = "LOCAL_BUS_CONTRACT"
+            return res
+
         from openai import OpenAI
         client = OpenAI(api_key=self.api_key, timeout=self.TIMEOUT_SECONDS)
 

@@ -486,27 +486,21 @@ void main() {
       expect(guideIds, isEmpty);
     });
 
-    // TEST N & O: [모선 검수 완료] button exists in footer and displays [모선 검수 완료]
-    testWidgets(
-      'TEST N & O: Bus complete button exists with key BusCompleteButton',
-      (tester) async {
-        await tester.pumpWidget(
-          MaterialApp(
-            home: Scaffold(
-              bottomNavigationBar: ElevatedButton.icon(
-                key: const ValueKey('BusCompleteButton'),
-                onPressed: () {},
-                icon: const Icon(Icons.check_circle_outline, size: 16),
-                label: const Text('모선 검수 완료'),
-              ),
-            ),
-          ),
-        );
-
-        expect(find.byKey(const ValueKey('BusCompleteButton')), findsOneWidget);
-        expect(find.text('모선 검수 완료'), findsOneWidget);
-      },
-    );
+    // TEST N & O: production Bus state exposes the single completion CTA and
+    // keeps phase entry behind the Object Gate.
+    test('TEST N & O: production Bus completion and phase policy', () {
+      final cleanState = BusReviewUiState.fromNodes([bus1, bus2]);
+      expect(cleanState.nextActionText, contains('[모선 검수 완료]'));
+      expect(cleanState.nextActionText, isNot(contains('결선')));
+      expect(
+        BusReviewUiPolicy.canEnterBusMapping(objectGateVerified: false),
+        isFalse,
+      );
+      expect(
+        BusReviewUiPolicy.canEnterBusMapping(objectGateVerified: true),
+        isTrue,
+      );
+    });
 
     // TEST P: COMPLETE_CURRENT_STAGE -> resolveIntentActions returns goToNextStage
     test(
@@ -586,13 +580,12 @@ void main() {
       expect(guideIds, contains('b_issue'));
       expect(guideIds, isNot(contains('bus_1')));
 
-      // View filtering
-      final uncertainBuses = nodes
-          .where((n) => guideIds.contains(n.id))
-          .toList();
-      final verifiedBuses = nodes
-          .where((n) => !guideIds.contains(n.id))
-          .toList();
+      // Production ReviewPage filtering
+      final uncertainBuses = BusReviewUiState.filter(
+        nodes,
+        status: 'UNCERTAIN',
+      );
+      final verifiedBuses = BusReviewUiState.filter(nodes, status: 'VERIFIED');
 
       expect(uncertainBuses.length, equals(1));
       expect(verifiedBuses.length, equals(1));
@@ -650,5 +643,165 @@ void main() {
         expect(find.textContaining('0.99'), findsNothing);
       },
     );
+
+    // TEST V: Bus banner state is based on Bus issues, not line issues.
+    test('TEST V: Bus UI state uses Bus issue metrics only', () {
+      final issueNodes = [
+        bus1,
+        makeBus(
+          id: 'bus_issue_1',
+          busNumber: null,
+          busNumberStatus: 'UNCERTAIN',
+        ),
+        makeBus(id: 'bus_issue_2', busNumber: 0, busNumberStatus: 'UNCERTAIN'),
+      ];
+      final state = BusReviewUiState.fromNodes(issueNodes);
+
+      expect(state.subtitle, '모선 번호 검수');
+      expect(state.totalBuses, 3);
+      expect(state.verifiedBuses, 1);
+      expect(state.issueBuses, 2);
+      expect(state.nextActionText, '번호 확인이 필요한 모선 2개를 확인하세요.');
+      expect(state.nextActionText, isNot(contains('결선 및 전기 검수')));
+      expect(state.nextActionText, isNot(contains('전기 오류')));
+      expect(state.nextActionText, isNot(contains('최종 검증')));
+    });
+
+    // TEST W: clean Bus state points only to the Bus completion CTA.
+    test('TEST W: clean Bus next action has no final-review wording', () {
+      final state = BusReviewUiState.fromNodes([bus1, bus2, bus3]);
+      expect(state.issueBuses, 0);
+      expect(state.nextActionText, '모선 번호 확인이 완료되었습니다. [모선 검수 완료]를 눌러주세요.');
+      expect(state.nextActionText, isNot(contains('최종 검증')));
+    });
+
+    // TEST X: rejected buses do not enter active totals or focus IDs.
+    test('TEST X: rejected Bus is excluded from active UI state', () {
+      final rejected = makeBus(
+        id: 'bus_rejected',
+        busNumber: null,
+        busNumberStatus: 'UNCERTAIN',
+        reviewStatus: 'REJECTED',
+      );
+      final state = BusReviewUiState.fromNodes([bus1, rejected]);
+
+      expect(state.totalBuses, 1);
+      expect(state.issueBuses, 0);
+      expect(
+        BusReviewGateEvaluator.computeGuideBusIds(
+          workingNodes: [bus1, rejected],
+        ),
+        isEmpty,
+      );
+    });
+
+    // TEST Y: an active duplicate reason blocks even a unique number.
+    test('TEST Y: active duplicate reason remains a Bus issue', () {
+      final staleReasonBus = makeBus(
+        id: 'bus_reason',
+        busNumber: 5,
+        busNumberStatus: 'VERIFIED',
+        busNumberReasons: ['DUPLICATE_BUS_NUMBER_5'],
+      );
+      final nodes = [bus1, staleReasonBus];
+
+      expect(
+        BusReviewGateEvaluator.canVerifyGate(workingNodes: nodes),
+        isFalse,
+      );
+      expect(
+        BusReviewGateEvaluator.computeGuideBusIds(workingNodes: nodes),
+        contains('bus_reason'),
+      );
+      expect(BusReviewUiState.fromNodes(nodes).issueBuses, 1);
+    });
+
+    // TEST Z: offline "전체 승인해줘" has no legacy batch-approval guidance.
+    test('TEST Z: offline Bus batch request gives the single CTA guidance', () {
+      final service = PowerLensAIService.instance;
+      const busCtx = PowerLensAssistantContext(
+        currentScreen: 'REVIEW_PAGE',
+        workflowStage: 'BUS_MAPPING',
+        unresolvedBusNumbers: 1,
+      );
+      final reply = service.generateOfflineFallbackReply('전체 승인해줘', busCtx);
+
+      expect(reply, contains('[모선 검수 완료]'));
+      expect(reply, contains('정상 모선은 개별 또는 일괄 승인할 필요가 없습니다'));
+      expect(reply, isNot(contains('일괄 승인 버튼')));
+      expect(reply, isNot(contains('승인하고 다음 모선')));
+      expect(reply, isNot(contains('하나씩 넘겨')));
+    });
+
+    // Production phase/keyboard/filter contracts used by ReviewPage.
+    test('Phase navigation blocks Object bypass and Bus arrows/Enter', () {
+      expect(
+        BusReviewUiPolicy.canEnterBusMapping(objectGateVerified: false),
+        isFalse,
+      );
+      expect(
+        BusReviewUiPolicy.canEnterBusMapping(objectGateVerified: true),
+        isTrue,
+      );
+      for (final key in const [
+        'Arrow Left',
+        'Arrow Right',
+        'Arrow Up',
+        'Arrow Down',
+        'Enter',
+      ]) {
+        expect(
+          BusReviewUiPolicy.shouldIgnoreGlobalKeyForBus(
+            isBusPhase: true,
+            isTyping: false,
+            keyLabel: key,
+          ),
+          isTrue,
+          reason: key,
+        );
+      }
+      expect(
+        BusReviewUiPolicy.shouldIgnoreGlobalKeyForBus(
+          isBusPhase: true,
+          isTyping: true,
+          keyLabel: 'Enter',
+        ),
+        isFalse,
+      );
+    });
+
+    test('Production Bus filters return ALL, UNCERTAIN, and VERIFIED sets', () {
+      final issue = makeBus(
+        id: 'bus_filter_issue',
+        busNumber: null,
+        busNumberStatus: 'UNCERTAIN',
+      );
+      final rejected = makeBus(
+        id: 'bus_filter_rejected',
+        busNumber: null,
+        busNumberStatus: 'UNCERTAIN',
+        reviewStatus: 'REJECTED',
+      );
+      final nodes = [bus1, issue, rejected];
+
+      expect(
+        BusReviewUiState.filter(nodes).map((node) => node.id),
+        containsAll(<String>['bus_1', 'bus_filter_issue']),
+      );
+      expect(
+        BusReviewUiState.filter(
+          nodes,
+          status: 'UNCERTAIN',
+        ).map((node) => node.id),
+        ['bus_filter_issue'],
+      );
+      expect(
+        BusReviewUiState.filter(
+          nodes,
+          status: 'VERIFIED',
+        ).map((node) => node.id),
+        ['bus_1'],
+      );
+    });
   });
 }

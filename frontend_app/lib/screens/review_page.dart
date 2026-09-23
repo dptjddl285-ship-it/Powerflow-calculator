@@ -169,12 +169,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       );
 
   // Statistics (Bus Number Mapping)
-  List<ReviewNodeItem> get _busNodes => _workingNodes
-      .where(
-        (n) =>
-            n.className.toLowerCase() == 'bus' && n.reviewStatus != 'REJECTED',
-      )
-      .toList();
+  List<ReviewNodeItem> get _busNodes =>
+      BusReviewUiState.activeBusNodes(_workingNodes);
   List<int> get _duplicateBusNumbers {
     final counts = <int, int>{};
     for (final b in _busNodes) {
@@ -185,11 +181,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     return counts.entries.where((e) => e.value > 1).map((e) => e.key).toList();
   }
 
-  int get _busUncertainCount => BusReviewGateEvaluator.computeGuideBusIds(
-        workingNodes: _workingNodes,
-      ).length;
+  BusReviewUiState get _busUiState =>
+      BusReviewUiState.fromNodes(_workingNodes);
 
-  int get _busVerifiedCount => _busNodes.length - _busUncertainCount;
+  int get _busUncertainCount => _busUiState.issueBuses;
+
+  int get _busVerifiedCount => _busUiState.verifiedBuses;
 
   bool get _canVerifyBusGate => BusReviewGateEvaluator.canVerifyGate(
         workingNodes: _workingNodes,
@@ -203,12 +200,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     final guideIds = BusReviewGateEvaluator.computeGuideBusIds(
       workingNodes: _workingNodes,
     );
-    List<ReviewNodeItem> list = List.from(_busNodes);
-    if (_busFilterStatus == 'UNCERTAIN') {
-      list = list.where((n) => guideIds.contains(n.id)).toList();
-    } else if (_busFilterStatus == 'VERIFIED') {
-      list = list.where((n) => !guideIds.contains(n.id)).toList();
-    }
+    final list = BusReviewUiState.filter(
+      _workingNodes,
+      status: _busFilterStatus,
+    );
     list.sort((a, b) {
       final aIsIssue = guideIds.contains(a.id);
       final bIsIssue = guideIds.contains(b.id);
@@ -1361,6 +1356,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       return false;
     }
 
+    if (BusReviewUiPolicy.shouldIgnoreGlobalKeyForBus(
+      isBusPhase: _currentPhase == ReviewPhase.busMappingReview,
+      isTyping: isTyping,
+      keyLabel: event.logicalKey.keyLabel,
+    )) {
+      // Bus Mapping is an explicit-number review; global arrows/Enter must
+      // not advance a hidden sequential queue. TextField Enter returned
+      // above so the inspector can apply its edited number.
+      return true;
+    }
+
     // Arrow Right or Down: Navigate to Next
     if (event.logicalKey == LogicalKeyboardKey.arrowRight ||
         event.logicalKey == LogicalKeyboardKey.arrowDown) {
@@ -2263,6 +2269,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   @override
   Widget build(BuildContext context) {
     _scheduleReviewLensyTargetSync();
+    final canEnterBusMapping = BusReviewUiPolicy.canEnterBusMapping(
+      objectGateVerified: _isObjectVerified,
+    );
     return Scaffold(
       backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
@@ -2324,8 +2333,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             child: _buildPhaseBadge(
               "② 모선 매핑",
               _currentPhase == ReviewPhase.busMappingReview,
-              _canVerifyBusGate,
-              onTap: _workingNodes.isNotEmpty
+              canEnterBusMapping && _canVerifyBusGate,
+              onTap: canEnterBusMapping && _workingNodes.isNotEmpty
                   ? () {
                       setState(() {
                         _currentPhase = ReviewPhase.busMappingReview;
@@ -2739,6 +2748,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       }
       return '객체 확인이 완료되었습니다. 모선 번호 매핑으로 이동할 수 있습니다.';
     }
+    if (_currentPhase == ReviewPhase.busMappingReview) {
+      return _busUiState.nextActionText;
+    }
     if (_lineAmbiguousCount > 0) {
       return '검토가 필요한 결선 $_lineAmbiguousCount개를 확인하세요.';
     }
@@ -2837,11 +2849,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   Widget _buildProactiveSummaryBanner() {
     final isObjectPhase = _currentPhase == ReviewPhase.objectReview;
+    final isBusPhase = _currentPhase == ReviewPhase.busMappingReview;
+    final isConnectionPhase = _currentPhase == ReviewPhase.connectionReview;
+    final busState = _busUiState;
     final hasNextTask = isObjectPhase
         ? (_objSuspiciousCount > 0 ||
               _unresolvedCandidatesCount > 0 ||
               !_humanCompletenessConfirmed)
-        : (_lineAmbiguousCount > 0 || _criticalIssuesCount > 0);
+        : isBusPhase
+        ? _busUncertainCount > 0
+        : isConnectionPhase &&
+              (_lineAmbiguousCount > 0 || _criticalIssuesCount > 0);
     final autoConfirmedCount = isObjectPhase
         ? _workingNodes
               .where(
@@ -2850,6 +2868,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     !node.source.contains('human'),
               )
               .length
+        : isBusPhase
+        ? _busVerifiedCount
         : _workingLines
               .where(
                 (line) =>
@@ -2905,7 +2925,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   ),
                 ),
                 Text(
-                  isObjectPhase ? '객체 인식 검수' : '결선 및 전기 검수',
+                  isObjectPhase
+                      ? '객체 인식 검수'
+                      : isBusPhase
+                      ? busState.subtitle
+                      : '결선 및 전기 검수',
                   style: const TextStyle(
                     color: Color(0xFF64748B),
                     fontSize: 8.5,
@@ -2940,20 +2964,47 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             ),
           ),
           const SizedBox(width: 6),
-          _buildAiMetric('자동 승인', autoConfirmedCount, const Color(0xFF16A34A)),
-          const SizedBox(width: 4),
-          _buildAiMetric(
-            '검토 필요',
-            isObjectPhase ? _objSuspiciousCount : _lineAmbiguousCount,
-            const Color(0xFFD97706),
-            icon: Icons.warning_amber_rounded,
-          ),
-          const SizedBox(width: 4),
-          _buildAiMetric(
-            isObjectPhase ? '누락 후보' : '전기 오류',
-            isObjectPhase ? _unresolvedCandidatesCount : _criticalIssuesCount,
-            isObjectPhase ? const Color(0xFF9333EA) : const Color(0xFFDC2626),
-          ),
+          if (isBusPhase) ...[
+            _buildAiMetric(
+              '전체 모선',
+              busState.totalBuses,
+              const Color(0xFF2563EB),
+            ),
+            const SizedBox(width: 4),
+            _buildAiMetric(
+              '확인됨',
+              _busVerifiedCount,
+              const Color(0xFF16A34A),
+            ),
+            const SizedBox(width: 4),
+            _buildAiMetric(
+              '확인 필요',
+              _busUncertainCount,
+              const Color(0xFFD97706),
+              icon: Icons.warning_amber_rounded,
+            ),
+          ] else ...[
+            _buildAiMetric(
+              '자동 승인',
+              autoConfirmedCount,
+              const Color(0xFF16A34A),
+            ),
+            const SizedBox(width: 4),
+            _buildAiMetric(
+              '검토 필요',
+              isObjectPhase ? _objSuspiciousCount : _lineAmbiguousCount,
+              const Color(0xFFD97706),
+              icon: Icons.warning_amber_rounded,
+            ),
+            const SizedBox(width: 4),
+            _buildAiMetric(
+              isObjectPhase ? '누락 후보' : '전기 오류',
+              isObjectPhase ? _unresolvedCandidatesCount : _criticalIssuesCount,
+              isObjectPhase
+                  ? const Color(0xFF9333EA)
+                  : const Color(0xFFDC2626),
+            ),
+          ],
           const SizedBox(width: 10),
           Expanded(
             child: Text(
@@ -6764,7 +6815,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 ),
               ),
               child: Text(
-                isDuplicate ? "중복 번호" : (isVerified ? "승인됨" : "검토필요"),
+                isDuplicate ? "중복 번호" : (isVerified ? "확인됨" : "검토필요"),
                 style: TextStyle(
                   color: isDuplicate
                       ? const Color(0xFFDC2626)

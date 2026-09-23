@@ -405,7 +405,7 @@ class BusReviewGateEvaluator {
       final status = (b.busNumberStatus ?? '').toUpperCase();
       final reasons = b.busNumberReasons;
       final hasActiveDupReason = reasons.any(
-        (r) => r.startsWith('DUPLICATE_BUS_NUMBER_'),
+        (r) => r.toUpperCase().startsWith('DUPLICATE_BUS_NUMBER_'),
       );
 
       if (num == null) {
@@ -475,7 +475,7 @@ class BusReviewGateEvaluator {
       final status = (b.busNumberStatus ?? '').toUpperCase();
       final reasons = b.busNumberReasons;
       final hasActiveDupReason = reasons.any(
-        (r) => r.startsWith('DUPLICATE_BUS_NUMBER_'),
+        (r) => r.toUpperCase().startsWith('DUPLICATE_BUS_NUMBER_'),
       );
 
       if (num == null ||
@@ -523,6 +523,87 @@ class BusReviewGateEvaluator {
     return "제가 다시 확인할 모선은 이제 없어요.\n"
         "전체 번호를 한번 확인한 뒤\n"
         "[모선 검수 완료]를 눌러주세요.";
+  }
+}
+
+class BusReviewUiState {
+  final int totalBuses;
+  final int verifiedBuses;
+  final int issueBuses;
+
+  const BusReviewUiState({
+    required this.totalBuses,
+    required this.verifiedBuses,
+    required this.issueBuses,
+  });
+
+  bool get hasIssues => issueBuses > 0;
+
+  String get subtitle => '모선 번호 검수';
+
+  String get nextActionText => hasIssues
+      ? '번호 확인이 필요한 모선 ${issueBuses}개를 확인하세요.'
+      : '모선 번호 확인이 완료되었습니다. [모선 검수 완료]를 눌러주세요.';
+
+  static List<ReviewNodeItem> activeBusNodes(Iterable<ReviewNodeItem> nodes) {
+    return nodes
+        .where(
+          (node) =>
+              node.className.toLowerCase() == 'bus' &&
+              node.reviewStatus.toUpperCase() != 'REJECTED',
+        )
+        .toList();
+  }
+
+  factory BusReviewUiState.fromNodes(Iterable<ReviewNodeItem> nodes) {
+    final active = activeBusNodes(nodes);
+    final issueIds = BusReviewGateEvaluator.computeGuideBusIds(
+      workingNodes: active,
+    );
+    return BusReviewUiState(
+      totalBuses: active.length,
+      verifiedBuses: active.length - issueIds.length,
+      issueBuses: issueIds.length,
+    );
+  }
+
+  static List<ReviewNodeItem> filter(
+    Iterable<ReviewNodeItem> nodes, {
+    String status = 'ALL',
+  }) {
+    final active = activeBusNodes(nodes);
+    final issueIds = BusReviewGateEvaluator.computeGuideBusIds(
+      workingNodes: active,
+    );
+    if (status == 'UNCERTAIN') {
+      return active.where((node) => issueIds.contains(node.id)).toList();
+    }
+    if (status == 'VERIFIED') {
+      return active.where((node) => !issueIds.contains(node.id)).toList();
+    }
+    return active;
+  }
+}
+
+class BusReviewUiPolicy {
+  static bool canEnterBusMapping({required bool objectGateVerified}) {
+    return objectGateVerified;
+  }
+
+  static bool shouldIgnoreGlobalKeyForBus({
+    required bool isBusPhase,
+    required bool isTyping,
+    required String keyLabel,
+  }) {
+    if (!isBusPhase || isTyping) return false;
+    return const {
+      'Arrow Right',
+      'Arrow Left',
+      'Arrow Up',
+      'Arrow Down',
+      'Enter',
+      'Numpad Enter',
+    }.contains(keyLabel);
   }
 }
 
