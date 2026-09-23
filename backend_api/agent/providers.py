@@ -1121,8 +1121,10 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
             "total_lines": len(w_lines),
             "ambiguous_lines_count": len(ambiguous_lines),
             "ambiguous_lines": ambiguous_lines,
-            "topology_issues_count": len(issues),
-            "topology_issues": issues,
+            "topology_error_count": len([i for i in issues if str(i.get("severity", "")).lower() == "error"]),
+            "topology_errors": [i for i in issues if str(i.get("severity", "")).lower() == "error"],
+            "topology_warning_count": len([i for i in issues if str(i.get("severity", "")).lower() != "error"]),
+            "topology_warnings": [i for i in issues if str(i.get("severity", "")).lower() != "error"],
             "app_context": app_context or {},
         }
 
@@ -1133,8 +1135,9 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
             "현재 단계와 실제 감지된 증거(Evidence) 상태를 면밀히 관찰하고,\n"
             "사용자가 어디를 먼저 살펴봐야 하는지 직관적이고 친절하게 1~3문장으로 브리핑하세요.\n"
             "반드시 Canonical Agent Response Contract JSON 형식으로만 응답해야 합니다.\n"
-            "- 의심 객체나 누락 후보, 결선 오류가 있다면 decision: 'HUMAN_CHECK'를 부여하고 focus_targets에 실제 evidence에 존재하는 ID들을 포함하세요.\n"
-            "- 아무 문제가 없다면 decision: 'PROCEED'를 부여하세요.\n"
+            "- 의심 객체(suspicious_nodes), 누락 후보(missing_candidates), 치명적 결선 오류(topology_errors)가 있다면 decision: 'HUMAN_CHECK'를 부여하고 focus_targets에 실제 ID들을 포함하세요.\n"
+            "- warning이나 info 수준의 경고(topology_warnings)만 존재하는 경우는 치명 결선 오류가 아니므로, 다른 의심 항목이 없다면 치명적 오류가 있다고 표현하지 마세요.\n"
+            "- 아무 미결 이슈가 없다면 decision: 'PROCEED'를 부여하세요.\n"
             "- action_mode: 'NONE'\n"
             "- reply_ko: 1~3문장의 따뜻하고 명쾌한 한국어 안내\n"
         )

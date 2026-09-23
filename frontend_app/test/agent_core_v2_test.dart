@@ -6,6 +6,7 @@ import 'package:circuit_solver/services/powerlens_ai_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  HttpOverrides.global = null;
   final service = PowerLensAIService.instance;
 
   group('Agent Core V2 Action Mapping Tests', () {
@@ -150,7 +151,7 @@ void main() {
     test('Routes HTTP 200 + status:error to offline fallback', () async {
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       final originalBaseUrl = PowerLensAIService.baseUrl;
-      PowerLensAIService.baseUrl = 'http://${server.address.host}:${server.port}';
+      PowerLensAIService.baseUrl = 'http://127.0.0.1:${server.port}';
 
       server.listen((HttpRequest request) async {
         if (request.uri.path == '/review/agent_chat') {
@@ -185,6 +186,313 @@ void main() {
         expect(lastMsg.agentStatus, 'LOCAL_READY');
         expect(lastMsg.sender, 'assistant');
         expect(service.mascotState, 'blocked');
+      } finally {
+        await server.close(force: true);
+        PowerLensAIService.baseUrl = originalBaseUrl;
+      }
+    });
+  });
+
+  group('Agent Core V2 Final Wiring Tests (TEST A - TEST F)', () {
+    test('TEST A: /review/proactive_summary success triggers 1 call and 1 message; second notify triggers 0 calls', () async {
+      int proactiveCallCount = 0;
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final originalBaseUrl = PowerLensAIService.baseUrl;
+      PowerLensAIService.baseUrl = 'http://127.0.0.1:${server.port}';
+
+      server.listen((HttpRequest request) async {
+        if (request.uri.path == '/review/proactive_summary') {
+          proactiveCallCount++;
+          request.response
+            ..statusCode = HttpStatus.ok
+            ..headers.contentType = ContentType.json
+            ..write(jsonEncode({
+              'status': 'success',
+              'reply_ko': '의심 객체 2개를 확인해주세요.',
+              'highlight_target': null,
+              'focus_targets': [
+                {
+                  'type': 'OBJECT',
+                  'id': 'node_1',
+                  'reason': 'suspicious',
+                  'severity': 'warning'
+                }
+              ],
+              'agent_status': 'GEMINI_PROACTIVE',
+              'provider_mode': 'gemini'
+            }));
+          await request.response.close();
+        } else {
+          request.response
+            ..statusCode = HttpStatus.notFound
+            ..close();
+        }
+      });
+
+      try {
+        service.clearHistory();
+        service.clearProactiveKeys();
+        service.clearFocusTargets();
+
+        const contextA = PowerLensAssistantContext(
+          documentId: 'doc_1',
+          workflowStage: 'OBJECT_REVIEW',
+          suspiciousObjects: 2,
+        );
+
+        // First notify: 1 HTTP call, 1 message added, focus_targets preserved
+        await service.notifyStageChange(contextA);
+        expect(proactiveCallCount, 1);
+        expect(service.messages.length, 1);
+        expect(service.messages.first.text, contains('의심 객체 2개를 확인해주세요.'));
+        expect(service.lastFocusTargets.length, 1);
+        expect(service.lastFocusTargets.first['id'], 'node_1');
+
+        // Second notify in same stage: 0 additional calls, no duplicate message
+        await service.notifyStageChange(contextA);
+        expect(proactiveCallCount, 1);
+        expect(service.messages.length, 1);
+      } finally {
+        await server.close(force: true);
+        PowerLensAIService.baseUrl = originalBaseUrl;
+      }
+    });
+
+    test('TEST B: Different stage BUS_MAPPING makes +1 proactive HTTP call', () async {
+      int proactiveCallCount = 0;
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final originalBaseUrl = PowerLensAIService.baseUrl;
+      PowerLensAIService.baseUrl = 'http://127.0.0.1:${server.port}';
+
+      server.listen((HttpRequest request) async {
+        if (request.uri.path == '/review/proactive_summary') {
+          proactiveCallCount++;
+          request.response
+            ..statusCode = HttpStatus.ok
+            ..headers.contentType = ContentType.json
+            ..write(jsonEncode({
+              'status': 'success',
+              'reply_ko': '모선 번호를 확인해주세요.',
+              'highlight_target': null,
+              'focus_targets': [],
+              'agent_status': 'GEMINI_PROACTIVE',
+              'provider_mode': 'gemini'
+            }));
+          await request.response.close();
+        } else {
+          request.response
+            ..statusCode = HttpStatus.notFound
+            ..close();
+        }
+      });
+
+      try {
+        service.clearHistory();
+        service.clearProactiveKeys();
+
+        const context1 = PowerLensAssistantContext(
+          documentId: 'doc_1',
+          workflowStage: 'OBJECT_REVIEW',
+        );
+        await service.notifyStageChange(context1);
+        expect(proactiveCallCount, 1);
+
+        const context2 = PowerLensAssistantContext(
+          documentId: 'doc_1',
+          workflowStage: 'BUS_MAPPING',
+        );
+        await service.notifyStageChange(context2);
+        expect(proactiveCallCount, 2);
+        expect(service.messages.length, 2);
+      } finally {
+        await server.close(force: true);
+        PowerLensAIService.baseUrl = originalBaseUrl;
+      }
+    });
+
+    test('TEST C: Backend proactive failure uses deterministic local proactive fallback without UI lock or duplicates', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final originalBaseUrl = PowerLensAIService.baseUrl;
+      PowerLensAIService.baseUrl = 'http://127.0.0.1:${server.port}';
+
+      server.listen((HttpRequest request) async {
+        if (request.uri.path == '/review/proactive_summary') {
+          request.response
+            ..statusCode = HttpStatus.internalServerError
+            ..write('Server Error');
+          await request.response.close();
+        } else {
+          request.response
+            ..statusCode = HttpStatus.notFound
+            ..close();
+        }
+      });
+
+      try {
+        service.clearHistory();
+        service.clearProactiveKeys();
+
+        const contextFail = PowerLensAssistantContext(
+          documentId: 'doc_fail',
+          workflowStage: 'OBJECT_REVIEW',
+          suspiciousObjects: 1,
+        );
+
+        await service.notifyStageChange(contextFail);
+        expect(service.messages.length, 1);
+        expect(service.messages.first.agentStatus, 'LOCAL_READY');
+        expect(service.isLoading, isFalse);
+
+        // Dedup prevents duplicate fallback message for same doc and stage
+        await service.notifyStageChange(contextFail);
+        expect(service.messages.length, 1);
+      } finally {
+        await server.close(force: true);
+        PowerLensAIService.baseUrl = originalBaseUrl;
+      }
+    });
+
+    test('TEST D: normal /agent_chat with action_mode: NONE and highlight_target: null leaves activeHighlightTarget unchanged', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final originalBaseUrl = PowerLensAIService.baseUrl;
+      PowerLensAIService.baseUrl = 'http://127.0.0.1:${server.port}';
+
+      server.listen((HttpRequest request) async {
+        if (request.uri.path == '/review/agent_chat') {
+          request.response
+            ..statusCode = HttpStatus.ok
+            ..headers.contentType = ContentType.json
+            ..write(jsonEncode({
+              'status': 'success',
+              'result': {
+                'reply_ko': '설명을 안내해 드립니다.',
+                'action_mode': 'NONE',
+                'highlight_target': null,
+                'agent_status': 'GEMINI'
+              }
+            }));
+          await request.response.close();
+        } else {
+          request.response
+            ..statusCode = HttpStatus.notFound
+            ..close();
+        }
+      });
+
+      try {
+        service.clearHistory();
+        service.clearHighlight();
+
+        const context = PowerLensAssistantContext(
+          documentId: 'doc_1',
+          workflowStage: 'HOME',
+        );
+
+        expect(service.activeHighlightTarget.value, isNull);
+        await service.sendMessage('계통이 뭐야?', context);
+        expect(service.activeHighlightTarget.value, isNull);
+        expect(service.messages.last.text.contains('반짝'), isFalse);
+      } finally {
+        await server.close(force: true);
+        PowerLensAIService.baseUrl = originalBaseUrl;
+      }
+    });
+
+    test('TEST E: GUIDE + final_powerflow triggers highlight', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final originalBaseUrl = PowerLensAIService.baseUrl;
+      PowerLensAIService.baseUrl = 'http://127.0.0.1:${server.port}';
+
+      server.listen((HttpRequest request) async {
+        if (request.uri.path == '/review/agent_chat') {
+          request.response
+            ..statusCode = HttpStatus.ok
+            ..headers.contentType = ContentType.json
+            ..write(jsonEncode({
+              'status': 'success',
+              'result': {
+                'reply_ko': '조류계산을 실행할 수 있는 버튼을 확인하세요.',
+                'action_mode': 'GUIDE',
+                'highlight_target': 'final_powerflow',
+                'agent_status': 'GEMINI'
+              }
+            }));
+          await request.response.close();
+        } else {
+          request.response
+            ..statusCode = HttpStatus.notFound
+            ..close();
+        }
+      });
+
+      try {
+        service.clearHistory();
+        service.clearHighlight();
+
+        const context = PowerLensAssistantContext(
+          documentId: 'doc_1',
+          workflowStage: 'FINAL',
+          excelLoaded: true,
+        );
+
+        await service.sendMessage('조류계산 어디서 눌러?', context);
+        expect(service.activeHighlightTarget.value, 'final_powerflow');
+        expect(service.messages.last.text.contains('반짝반짝 빛나고 있어요'), isTrue);
+      } finally {
+        await server.close(force: true);
+        PowerLensAIService.baseUrl = originalBaseUrl;
+      }
+    });
+
+    test('TEST F: NONE + backend highlight null does NOT automatically turn on object_gate even if determineTargetForContext would suggest it', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final originalBaseUrl = PowerLensAIService.baseUrl;
+      PowerLensAIService.baseUrl = 'http://127.0.0.1:${server.port}';
+
+      server.listen((HttpRequest request) async {
+        if (request.uri.path == '/review/agent_chat') {
+          request.response
+            ..statusCode = HttpStatus.ok
+            ..headers.contentType = ContentType.json
+            ..write(jsonEncode({
+              'status': 'success',
+              'result': {
+                'reply_ko': '모든 객체가 승인된 상태입니다.',
+                'action_mode': 'NONE',
+                'highlight_target': null,
+                'agent_status': 'GEMINI'
+              }
+            }));
+          await request.response.close();
+        } else {
+          request.response
+            ..statusCode = HttpStatus.notFound
+            ..close();
+        }
+      });
+
+      try {
+        service.clearHistory();
+        service.clearHighlight();
+
+        // Under this context, determineTargetForContext returns 'object_gate'
+        const context = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'OBJECT_REVIEW',
+          documentId: 'doc_1',
+          suspiciousObjects: 0,
+          unresolvedMissingCandidates: 0,
+          workingNodes: [
+            {'id': 'node_1', 'status': 'CONFIRMED'}
+          ],
+        );
+        expect(service.determineTargetForContext(context), 'object_gate');
+
+        await service.sendMessage('상태 알려줘', context);
+
+        // Online flow must strictly respect backend contract: highlight_target is null -> NO highlight!
+        expect(service.activeHighlightTarget.value, isNull);
+        expect(service.messages.last.text.contains('반짝'), isFalse);
       } finally {
         await server.close(force: true);
         PowerLensAIService.baseUrl = originalBaseUrl;

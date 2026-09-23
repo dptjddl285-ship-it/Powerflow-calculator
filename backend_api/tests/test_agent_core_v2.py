@@ -33,8 +33,10 @@ from core.model_config import (
 from agent.system_knowledge import (
     ALLOW_LISTED_ACTIONS,
     CANONICAL_RESPONSE_SCHEMA,
+    POWERLENS_SYSTEM_KNOWLEDGE,
     VALID_ACTION_MODES,
     VALID_DECISIONS,
+    VALID_FOCUS_TARGET_TYPES,
 )
 from agent.providers import (
     GeminiReviewAssistantProvider,
@@ -434,6 +436,82 @@ class AgentCoreV2Test(unittest.TestCase):
             data_pro = json.loads(resp_pro.body.decode("utf-8"))
             self.assertEqual(data_pro.get("status"), "error")
             self.assertIn("Test proactive crash", data_pro.get("message", ""))
+
+    def test_18_system_knowledge_decision_contract_uses_blocked(self):
+        """TEST 18: System knowledge decision contract uses BLOCKED and matches VALID_DECISIONS."""
+        self.assertIn("BLOCKED", VALID_DECISIONS)
+        self.assertNotIn("BLOCK", VALID_DECISIONS)
+        self.assertIn('"decision": "PROCEED" | "HUMAN_CHECK" | "BLOCKED" | "UNKNOWN"', POWERLENS_SYSTEM_KNOWLEDGE)
+        self.assertNotIn('"decision": "PROCEED" | "HUMAN_CHECK" | "BLOCK" | "UNKNOWN"', POWERLENS_SYSTEM_KNOWLEDGE)
+
+    def test_19_focus_target_canonical_types_match_system_knowledge(self):
+        """TEST 19: Focus target canonical types (OBJECT, LINE, CANDIDATE, ISSUE, UI) match system knowledge."""
+        expected_types = {"OBJECT", "LINE", "CANDIDATE", "ISSUE", "UI"}
+        self.assertEqual(VALID_FOCUS_TARGET_TYPES, expected_types)
+        self.assertIn('"type": "OBJECT" | "LINE" | "CANDIDATE" | "ISSUE" | "UI"', POWERLENS_SYSTEM_KNOWLEDGE)
+        self.assertNotIn('"type": "OBJECT" | "BUS" | "LINE" | "UI"', POWERLENS_SYSTEM_KNOWLEDGE)
+
+    def test_20_warning_info_only_topology_issues_yield_zero_error_count(self):
+        """TEST 20: When only warning/info topology issues exist, topology_error_count is 0 and decision is PROCEED."""
+        issues = [
+            {"id": "w1", "severity": "warning", "message": "모선 간격 협소"},
+            {"id": "w2", "severity": "WARNING", "message": "모선 레이블 중복 가능성"},
+            {"id": "i1", "severity": "info", "message": "도면 여백 안내"},
+        ]
+        res = sanitize_and_validate_agent_response(
+            {"reply_ko": "검토 완료", "decision": "PROCEED"},
+            user_message="상태 어때?",
+            working_nodes=[{"id": "bus_1", "review_status": "CONFIRMED"}],
+            working_lines=[{"line_id": "line_1", "review_status": "CONFIRMED"}],
+            missing_candidates=[],
+            topology_issues=issues,
+        )
+        self.assertEqual(res["evidence_summary"]["topology_error_count"], 0)
+        self.assertEqual(res["decision"], "PROCEED")
+
+    def test_21_proactive_payload_separates_topology_errors_and_warnings(self):
+        """TEST 21: Proactive payload distinguishes critical topology errors from warnings/info."""
+        prov = GeminiReviewAssistantProvider(
+            api_key="test_dummy_key",
+            model_name="gemini-3.8-flash",
+        )
+        captured_user_prompt = []
+
+        def mock_call_gemini(system_instruction, contents, timeout_sec=25.0):
+            for part in contents[0].get("parts", []):
+                captured_user_prompt.append(part.get("text", ""))
+            mock_json = json.dumps({
+                "reply_ko": "브리핑 완료",
+                "decision": "PROCEED",
+                "action_mode": "NONE",
+            })
+            return mock_json, "gemini-3.8-flash", False
+
+        prov._call_gemini_with_fallback = mock_call_gemini
+
+        issues = [
+            {"id": "err_1", "severity": "error", "message": "모선 단락 결선 결함"},
+            {"id": "warn_1", "severity": "warning", "message": "단선도 선로 교차 경고"},
+            {"id": "info_1", "severity": "info", "message": "도면 정보"},
+        ]
+
+        prov.generate_proactive_summary(
+            document_id="doc_proactive_test",
+            stage="CONNECTION_REVIEW",
+            working_nodes=[{"id": "b1", "review_status": "NORMAL"}],
+            working_lines=[{"line_id": "l1", "review_status": "NORMAL"}],
+            missing_candidates=[],
+            topology_issues=issues,
+        )
+
+        self.assertTrue(len(captured_user_prompt) > 0)
+        full_prompt = captured_user_prompt[0]
+
+        # Ensure prompt contains explicit separated counts and sections
+        self.assertIn('"topology_error_count": 1', full_prompt)
+        self.assertIn('"topology_warning_count": 2', full_prompt)
+        self.assertIn('"topology_errors"', full_prompt)
+        self.assertIn('"topology_warnings"', full_prompt)
 
 
 if __name__ == "__main__":

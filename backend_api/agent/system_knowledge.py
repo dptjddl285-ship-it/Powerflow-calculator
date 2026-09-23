@@ -83,7 +83,7 @@ Lensy가 반환할 수 있는 action_id는 오직 다음으로 한정됩니다:
 당신은 반드시 아래 JSON 구조로만 응답해야 합니다. 마크다운 코드블록(```json 등)이나 불필요한 서두 없이 순수 JSON으로만 출력하세요:
 {
   "reply_ko": "사용자에게 전할 1~3문장의 간결하고 친절한 한국어 답변",
-  "decision": "PROCEED" | "HUMAN_CHECK" | "BLOCK" | "UNKNOWN",
+  "decision": "PROCEED" | "HUMAN_CHECK" | "BLOCKED" | "UNKNOWN",
   "intent": "사용자 발화 의도 요약",
   "action_mode": "NONE" | "GUIDE" | "EXECUTE" | "CONFIRM_REQUIRED",
   "action_id": "위 허용된 action_id 중 하나 또는 null",
@@ -91,8 +91,8 @@ Lensy가 반환할 수 있는 action_id는 오직 다음으로 한정됩니다:
   "highlight_target": "점등할 UI 타깃 ID 또는 null",
   "focus_targets": [
     {
-      "type": "OBJECT" | "BUS" | "LINE" | "UI",
-      "id": "실제 evidence에 존재하는 node_id, line_id, candidate_id",
+      "type": "OBJECT" | "LINE" | "CANDIDATE" | "ISSUE" | "UI",
+      "id": "실제 evidence에 존재하는 node_id, line_id, candidate_id, issue_id",
       "reason": "검토 사유",
       "severity": "INFO" | "REVIEW" | "WARNING" | "ERROR"
     }
@@ -119,9 +119,13 @@ Lensy가 반환할 수 있는 action_id는 오직 다음으로 한정됩니다:
   - "엑셀 추가해줘", "엑셀 파일 열어줘": action_mode="EXECUTE", action_id="OPEN_EXCEL_PICKER"
   - "선로 추가해줘", "모선 삭제해줘", "이 객체 Generator로 바꿔": action_mode="CONFIRM_REQUIRED", action_id=null (회로 물리적 변경은 자동 실행 금지, 사용자 확인 필수)
 
-• focus_targets 주의사항:
-  - 반드시 현재 context의 working_nodes, working_lines, missing_candidates, topology_issues에 실제로 존재하는 ID만 포함해야 합니다.
-  - OBJECT 타입에는 노드 ID만, LINE 타입에는 선로 ID만 매핑해야 하며, 타입을 혼동하거나 가상의 ID(node_999 등)를 절대 만들어내지 마세요.
+• focus_targets 타입 및 ID 가이드:
+  - OBJECT: working_nodes에 존재하는 노드 ID (모선, 발전기, 변압기, 부하 등 모든 설비는 OBJECT 타입에 매핑하며 BUS 타입은 별도로 쓰지 않고 OBJECT로 일원화합니다)
+  - LINE: working_lines에 존재하는 선로 ID
+  - CANDIDATE: missing_candidates에 존재하는 누락 후보 ID
+  - ISSUE: topology_issues에 존재하는 결선 이슈 ID
+  - UI: 허용된 highlight UI 타깃 ID (예: object_approve, final_powerflow 등)
+  - 반드시 현재 context의 working_nodes, working_lines, missing_candidates, topology_issues에 실제로 존재하는 ID만 매핑해야 하며, 가상의 ID(node_999 등)를 절대 만들어내지 마세요.
 """
 
 VALID_DECISIONS = {"PROCEED", "HUMAN_CHECK", "BLOCKED", "UNKNOWN"}

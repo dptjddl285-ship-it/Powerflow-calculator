@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../models/powerlens_assistant_context.dart';
@@ -83,6 +82,14 @@ class PowerLensAIService extends ChangeNotifier {
   /// Target UI element currently sparkling/glowing on screen for user guidance
   final ValueNotifier<String?> activeHighlightTarget = ValueNotifier<String?>(null);
   Timer? _highlightTimer;
+
+  /// Focus targets received from the latest proactive summary or agent chat
+  List<Map<String, dynamic>> _lastFocusTargets = [];
+  List<Map<String, dynamic>> get lastFocusTargets => List.unmodifiable(_lastFocusTargets);
+
+  void clearFocusTargets() {
+    _lastFocusTargets = [];
+  }
 
   /// User-dragged position offset for the AI chat panel (persists while app runs)
   Offset panelOffset = Offset.zero;
@@ -671,31 +678,103 @@ class PowerLensAIService extends ChangeNotifier {
     notifyListeners();
   }
 
-  void notifyStageChange(PowerLensAssistantContext context) {
-    final newStage = context.workflowStage;
-    if (!shouldRequestProactive(context.documentId, newStage)) return;
-    _lastNotifiedStage = newStage;
-
-    final proactiveText = _getStageProactiveText(context);
-    if (proactiveText != null) {
-      _messages.add(
-        PowerLensAIMessageItem(
-          id: 'proactive_${DateTime.now().millisecondsSinceEpoch}',
-          sender: 'assistant',
-          text: proactiveText,
-          stage: newStage,
-          suggestedActions: _getQuickActions(newStage, context),
-          agentStatus: 'PROACTIVE',
-        ),
-      );
-      notifyListeners();
-    }
+  Future<void> notifyStageChange(PowerLensAssistantContext context) async {
+    await _requestProactiveForContext(context.workflowStage, context);
   }
 
-  void onStageChanged(String stage, [PowerLensAssistantContext? context]) {
+  Future<void> onStageChanged(String stage, [PowerLensAssistantContext? context]) async {
+    await _requestProactiveForContext(stage, context);
+  }
+
+  Future<void> _requestProactiveForContext(String stage, [PowerLensAssistantContext? context]) async {
     if (!shouldRequestProactive(context?.documentId, stage)) return;
     _lastNotifiedStage = stage;
 
+    final uri = Uri.parse('$baseUrl/review/proactive_summary');
+    final payload = {
+      'document_id': context?.documentId ?? 'default_doc',
+      'stage': stage,
+      'working_nodes': context?.workingNodes ?? const [],
+      'working_lines': context?.workingLines ?? const [],
+      'missing_candidates': context?.missingCandidates ?? const [],
+      'topology_issues': context?.topologyIssues ?? const [],
+      'app_context': context?.toJson() ?? {'workflow_stage': stage},
+    };
+
+    try {
+      final response = await http
+          .post(
+            uri,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(payload),
+          )
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+        if (decoded is! Map || decoded['status']?.toString().toLowerCase() != 'success') {
+          throw Exception('Proactive summary returned non-success status: ${decoded is Map ? decoded['status'] : 'unknown'}');
+        }
+
+        final result = decoded;
+        var replyKo = _cleanAssistantReply(
+          result['reply_ko']?.toString() ??
+              result['summary_text']?.toString() ??
+              '단계를 검토하고 있습니다.',
+        );
+
+        // Online highlight policy: only highlight if backend explicitly provided a target
+        final backendHighlight = result['highlight_target']?.toString();
+        if (backendHighlight != null &&
+            backendHighlight.isNotEmpty &&
+            backendHighlight.toLowerCase() != 'null') {
+          triggerHighlight(backendHighlight);
+          if (!replyKo.contains('반짝')) {
+            replyKo += "\n\n✨ 지금 진행할 위치가 화면에서 반짝반짝 빛나고 있어요!";
+          }
+        }
+
+        if (result['focus_targets'] is List) {
+          _lastFocusTargets = List<Map<String, dynamic>>.from(
+            (result['focus_targets'] as List)
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e)),
+          );
+        }
+
+        final agentStatus = result['agent_status']?.toString() ?? 'PROACTIVE';
+        final providerMode = result['provider_mode']?.toString().toLowerCase();
+        _geminiStatus = (providerMode == 'gemini' || agentStatus.toUpperCase().contains('GEMINI'))
+            ? 'CONNECTED'
+            : 'LOCAL_READY';
+
+        final rawActions = result['suggested_actions'];
+        final actions = rawActions is List
+            ? rawActions.map((e) => e.toString()).take(3).toList()
+            : _getQuickActions(stage, context);
+
+        _messages.add(
+          PowerLensAIMessageItem(
+            id: 'proactive_${DateTime.now().millisecondsSinceEpoch}',
+            sender: 'assistant',
+            text: replyKo,
+            stage: stage,
+            suggestedActions: actions,
+            agentStatus: agentStatus,
+          ),
+        );
+        notifyListeners();
+        return;
+      } else {
+        throw Exception('HTTP ${response.statusCode}');
+      }
+    } catch (_) {
+      // Local deterministic proactive fallback on error or offline
+      _executeLocalProactiveFallback(stage, context);
+    }
+  }
+
+  void _executeLocalProactiveFallback(String stage, [PowerLensAssistantContext? context]) {
     String? proactiveText;
     if (stage == 'EXCEL_LOADED') {
       proactiveText = "제원이 연결되었습니다. 조류계산을 실행할 수 있습니다.";
@@ -724,19 +803,19 @@ class PowerLensAIService extends ChangeNotifier {
       }
     }
 
-    if (proactiveText != null) {
-      _messages.add(
-        PowerLensAIMessageItem(
-          id: 'proactive_${DateTime.now().millisecondsSinceEpoch}',
-          sender: 'assistant',
-          text: proactiveText,
-          stage: stage,
-          suggestedActions: _getQuickActions(stage),
-          agentStatus: 'PROACTIVE',
-        ),
-      );
-      notifyListeners();
-    }
+    proactiveText ??= "현재 $stage 단계입니다. 안내가 필요하시면 언제든 질문해주세요.";
+
+    _messages.add(
+      PowerLensAIMessageItem(
+        id: 'proactive_fallback_${DateTime.now().millisecondsSinceEpoch}',
+        sender: 'assistant',
+        text: _cleanAssistantReply(proactiveText),
+        stage: stage,
+        suggestedActions: _getQuickActions(stage, context),
+        agentStatus: 'LOCAL_READY',
+      ),
+    );
+    notifyListeners();
   }
 
   Future<void> sendMessage(
@@ -808,13 +887,21 @@ class PowerLensAIService extends ChangeNotifier {
                 backendHighlight.isNotEmpty &&
                 backendHighlight.toLowerCase() != 'null')
             ? backendHighlight
-            : fallbackHighlightTarget;
+            : null;
 
         if (effectiveHighlight != null) {
           triggerHighlight(effectiveHighlight);
           if (!replyKo.contains('반짝')) {
             replyKo += "\n\n✨ 지금 진행할 위치가 화면에서 반짝반짝 빛나고 있어요!";
           }
+        }
+
+        if (result['focus_targets'] is List) {
+          _lastFocusTargets = List<Map<String, dynamic>>.from(
+            (result['focus_targets'] as List)
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e)),
+          );
         }
 
         final actionMode = result['action_mode']?.toString().toUpperCase() ?? 'NONE';
@@ -1094,30 +1181,6 @@ class PowerLensAIService extends ChangeNotifier {
 
   bool _isPointingAction(PowerLensAppAction action) {
     return false;
-  }
-
-  String _getNaturalStageGuidance(PowerLensAssistantContext ctx) {
-    switch (ctx.workflowStage) {
-      case 'HOME':
-        return '도면 파일을 올리거나 샘플을 불러오면 분석이 시작돼요. 처음이라면 샘플로 흐름을 먼저 체험해보세요.';
-      case 'OBJECT_REVIEW':
-        return '지금은 객체를 하나씩 확인하는 단계예요. 실제 기호와 맞으면 승인하고, 다르면 종류를 바꾸거나 제외해주세요.';
-      case 'BUS_MAPPING':
-        return '각 Bus 번호가 도면과 맞는지 확인한 뒤 승인하고 다음으로 넘어가면 돼요.';
-      case 'CONNECTION_REVIEW':
-      case 'LINE_REVIEW':
-        return '선로 양 끝의 Bus가 실제 도면과 맞는지 확인해주세요. 맞으면 승인하고 다음 선로로 이동하면 돼요.';
-      case 'FINAL':
-      case 'FINAL_CAD':
-      case 'EXCEL':
-        return ctx.excelLoaded
-            ? '계통 제원이 연결됐어요. 조류계산을 실행하면 전압과 선로 흐름을 확인할 수 있어요.'
-            : '검증된 회로도에 계통 제원 엑셀을 연결하면 조류계산을 실행할 수 있어요.';
-      case 'POWERFLOW':
-        return '조류계산 결과가 준비됐어요. 숫자 라벨은 필요할 때 켜고, 흐름 화살표로 방향을 먼저 확인해보세요.';
-      default:
-        return '현재 화면의 안내를 따라 진행하면 돼요. 제가 단계 이동과 검수 항목 확인도 도와드릴게요.';
-    }
   }
 
   String _cleanAssistantReply(String reply) {
