@@ -1,75 +1,73 @@
-# 파일명: main_server.py
-from fastapi import FastAPI, Request, File, UploadFile, Response
+# PowerLens Pro - Backend API & Solver Server
+# Version: v2.4.0 (Synchronized Release)
+# Description: FastAPI backend providing AC Newton-Raphson power flow calculations,
+#              AI diagram recognition, and Excel parameter synchronization.
+
+from fastapi import FastAPI, Request, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from ultralytics import YOLO
 import pandas as pd
 import io
 import os
-import sys
+from pathlib import Path
 
-# Ensure UTF-8 output encoding on Windows console
-if sys.platform.startswith('win'):
-    try:
-        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
-    except Exception:
-        pass
-
-# 프로젝트 루트 경로 추가
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-if CURRENT_DIR not in sys.path:
-    sys.path.insert(0, CURRENT_DIR)
+import core.env_loader
 
 try:
-    from ultralytics import YOLO
-except ImportError:
-    YOLO = None
-
-try:
+    from agent_tools.vision_tools import configure_review_tools
     from core.power_logic import construct_y_bus
-except ImportError:
-    construct_y_bus = None
+    from core.adaptive_vision_pipeline import analyze_circuit_image_adaptive
+    from core.bus_number_linker import (
+        link_and_validate_bus_numbers,
+        propagate_bus_numbers_to_devices,
+        synchronize_node_and_line_ids,
+    )
+    from review.api import router as review_router
+    from review.staged_api import (
+        configure_staged_review_model,
+        router as staged_review_router,
+    )
+    from review.store import review_store
+    from review.vision_adapter import build_graph_document
+except ImportError as e:
+    print(f"❌ 에러: 파일을 찾을 수 없습니다. {e}")
 
-try:
-    from core.pandapower_engine import run_power_flow_simulation, render_single_line_diagram
-except ImportError:
-    run_power_flow_simulation = None
-    render_single_line_diagram = None
-
-try:
-    from core.vision_logic import analyze_circuit_image
-except ImportError:
-    analyze_circuit_image = None
-
-app = FastAPI(title="PowerLens Powerflow & Vision API")
+app = FastAPI()
+app.include_router(review_router)
+app.include_router(staged_review_router)
 yolo_model = None
+configure_staged_review_model(lambda: yolo_model)
+
+
+def _run_review_vision(image_bytes: bytes):
+    if yolo_model is None:
+        raise RuntimeError("Vision model is not loaded")
+    return analyze_circuit_image_adaptive(image_bytes, yolo_model)
+
+
+configure_review_tools(_run_review_vision)
 
 @app.on_event("startup")
 async def startup_event():
     global yolo_model
     print("\n" + "★"*60)
-    print(" 🚀 [PowerLens] Pandapower 통합 전력망 서버 가동 시작!")
-    
-    # 모델 경로 탐색 (로컬 경로 우선, 없으면 models 폴더 탐색)
-    if YOLO is not None:
-        candidate_model_paths = [
-            os.path.join(CURRENT_DIR, "models", "2026_07_30_coslr.pt"),
-            os.path.join(CURRENT_DIR, "icon_recognition", "models", "2026_07_30_coslr.pt"),
-            os.path.join(os.path.dirname(CURRENT_DIR), "yolo11s.pt"),
-            r"C:\Users\dptjd\Downloads\PowerLens\backend_api\models\2026_07_30_coslr.pt"
-        ]
-        for m_path in candidate_model_paths:
-            if os.path.exists(m_path):
-                try:
-                    yolo_model = YOLO(m_path)
-                    print(f" ✅ AI 모델(YOLO) 로딩 완료: {m_path}")
-                    break
-                except Exception as e:
-                    print(f" ⚠️ 모델 로딩 시도 실패 ({m_path}): {e}")
-        
-        if yolo_model is None:
-            print(" ℹ️ AI Vision 모델이 로드되지 않았습니다 (조류 계산 및 Pandapower 엔진은 정상 동작).")
-    else:
-        print(" ℹ️ YOLO 패키지 미설치 (조류 계산 및 Pandapower 엔진은 정상 동작).")
+    print(" 🚀 [PowerLens] 통합 서버 가동 시작!")
+    try:
+        # 2026_07_30_coslr.pt: cos_lr + 런타임 증강 켜서 재학습한 최신 모델.
+        # 24bus/IEEE24bus 변압기까지 잡힘(이전 aug모델은 0개). vision_logic imgsz=960과 세트.
+        # The local checkpoint remains the safe default.  A friend/all-class
+        # checkpoint can be selected for the same hybrid pipeline without
+        # changing code: POWERLENS_YOLO_MODEL=<path-to-best.pt>.
+        default_model_path = (
+            Path(__file__).resolve().parent
+            / "models"
+            / "2026_07_30_coslr.pt"
+        )
+        model_path = os.environ.get("POWERLENS_YOLO_MODEL", str(default_model_path))
+        yolo_model = YOLO(model_path)
+        print(" ✅ AI 모델(YOLO) 로딩 완료!")
+    except Exception as e:
+        print(f" ❌ 모델 로딩 실패: {e}")
     print("★"*60 + "\n")
 
 app.add_middleware(
@@ -79,151 +77,271 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# [API 1] 사진 분석
+@app.get("/health")
+async def health_check():
+    return {
+        "status": "ok",
+        "model_loaded": yolo_model is not None,
+    }
+
+# [API 1] 사진 분석 
 @app.post("/analyze_image")
 async def process_image(file: UploadFile = File(...)):
     print("\n📸 [사진 수신] 분석 요청이 들어왔습니다.")
-    if analyze_circuit_image is None:
-        return {"status": "error", "message": "Vision 분석 모듈이 설치되지 않았습니다."}
     try:
         image_bytes = await file.read()
-        result_data = analyze_circuit_image(image_bytes, yolo_model, filename=file.filename)
+        result_data = analyze_circuit_image_adaptive(image_bytes, yolo_model)
+        
+        # Link & Validate Bus Numbers (Runs after all objects are masked and rescued)
+        if "nodes" in result_data and result_data["nodes"]:
+            result_data["nodes"], bus_report = link_and_validate_bus_numbers(image_bytes, result_data["nodes"])
+            result_data["nodes"] = propagate_bus_numbers_to_devices(result_data["nodes"], result_data.get("lines", []))
+            result_data["nodes"], result_data["lines"] = synchronize_node_and_line_ids(result_data["nodes"], result_data.get("lines", []))
+            result_data["bus_number_report"] = bus_report
+
+        # Keep the legacy nodes/lines response for the current Flutter canvas,
+        # and attach the versioned review contract for the new Agent workflow.
+        graph_document = build_graph_document(
+            result_data,
+            image_bytes=image_bytes,
+            filename=file.filename,
+        )
+        review_store.put(graph_document, overwrite=True)
+        review_store.put_analysis_asset(
+            graph_document.document_id,
+            image_bytes=image_bytes,
+            vision_result=result_data,
+        )
+        result_data["graph_document"] = graph_document.model_dump(mode="json")
         return {"status": "success", "data": result_data}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 # ==========================================
-# 🎯 [API 2 - 엑셀 업로드] 플러터에서 엑셀 파일이 날아오면 바로 읽어서 돌려줌!
+# 🎯 [API 2 - 엑셀 업로드 및 계통 파라미터 매핑]
 # ==========================================
+from core.excel_case_importer import ExcelCaseImporter
+
+excel_importer = ExcelCaseImporter()
+
+
 @app.post("/upload_excel")
 async def upload_excel(file: UploadFile = File(...)):
     print(f"\n📂 [엑셀 수신] 업로드된 파일명: {file.filename}")
     try:
         contents = await file.read()
-        df_gen = pd.read_excel(io.BytesIO(contents), sheet_name='Generator')
-        generators = df_gen.set_index('Gen_ID').to_dict(orient='index')
-        
-        df_line = pd.read_excel(io.BytesIO(contents), sheet_name='Line')
-        lines = df_line.set_index('Line_ID').to_dict(orient='index')
-        
-        excel_data = {
-            "generators": generators,
-            "lines": lines
-        }
-        print(f"✅ 엑셀 업로드 및 파싱 성공! 발전기({len(generators)}개), 선로({len(lines)}개) 데이터 전송.")
-        return {"status": "success", "data": excel_data}
+        parsed_case = excel_importer.parse_excel(contents)
+        print(
+            f"✅ 엑셀 파싱 성공! 슬랙 모선: #{parsed_case['slack_bus_number']}, "
+            f"모선({parsed_case['total_buses']}개), 발전기({parsed_case['total_generators']}개), "
+            f"선로({parsed_case['total_branches']}개)"
+        )
+        return {"status": "success", "data": parsed_case}
     except Exception as e:
         print(f"❌ 엑셀 처리 중 에러 발생: {e}")
         return {"status": "error", "message": str(e)}
 
-# ==========================================
-# ⚡ [API 3 - 조류 계산 시뮬레이션]
-# 플러터 UI에서 보낸 커스텀 전력망 데이터로 정밀 조류 계산 및 단선도 히트맵 생성
-# ==========================================
+
+@app.get("/load_default_excel")
+async def load_default_excel():
+    sample_path = Path(__file__).parent / "sample_cases" / "case24_psse.xlsx"
+    if not sample_path.exists():
+        sample_path = Path(__file__).parent / "sample_cases" / "ac_case25.xlsx"
+    if not sample_path.exists():
+        return {"status": "error", "message": "기본 샘플 파일을 찾을 수 없습니다."}
+    try:
+        with open(sample_path, "rb") as f:
+            contents = f.read()
+        parsed_case = excel_importer.parse_excel(contents)
+        print(f"✅ 기본 엑셀 로드 성공! 슬랙 모선: #{parsed_case['slack_bus_number']}")
+        return {"status": "success", "data": parsed_case}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/apply_excel_to_elements")
+async def apply_excel_to_elements(request: Request):
+    try:
+        body = await request.json()
+        elements = body.get("elements", [])
+        excel_data = body.get("excel_data", {})
+        updated_elements, summary = excel_importer.apply_to_elements(elements, excel_data)
+        return {
+            "status": "success",
+            "elements": updated_elements,
+            "summary": summary,
+            "mismatch_report": summary.get("mismatch_report"),
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+from agent.excel_discrepancy_agent import excel_discrepancy_agent
+
+@app.post("/diagnose_excel_mismatch")
+async def diagnose_excel_mismatch(request: Request):
+    """AI 에이전트: 도면과 엑셀 데이터 불일치 원인 분석 및 해결 가이드 제공."""
+    try:
+        body = await request.json()
+        elements = body.get("elements", [])
+        excel_data = body.get("excel_data", {})
+        mismatch_report = body.get("mismatch_report")
+        if not mismatch_report:
+            mismatch_report = excel_importer.compare_elements_with_excel(elements, excel_data)
+        diagnosis = excel_discrepancy_agent.diagnose(elements, excel_data, mismatch_report)
+        return {
+            "status": "success",
+            "data": diagnosis,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+# [API 3] 조류 계산 (AC Newton-Raphson Solver)
+from core.power_flow_solver import PowerFlowSolver
+import io
+import openpyxl
+from fastapi.responses import Response
+
+power_flow_solver = PowerFlowSolver(s_base=100.0, tol=1e-4, max_iter=30)
+last_simulation_result = None
+
+
 @app.post("/run_simulation")
 async def run_simulation(request: Request):
+    global last_simulation_result
     try:
         data = await request.json()
         elements = data.get("elements", [])
-        print(f"\n⚡ [조류계산 요청] {len(elements)}개의 부품 데이터를 받았습니다.")
-        
-        if not elements:
+        print(f"\n⚡ [조류계산 요청] {len(elements)}개의 부품 데이터를 수신하여 계산을 시작합니다.")
+
+        result = power_flow_solver.solve(elements)
+        if result.get("status") == "error":
+            print(f"⚠️ 조류계산 실패: {result.get('message')}")
+            return result
+
+        last_simulation_result = result
+
+        converged = result.get("converged", False)
+        if not converged:
+            print(f"⚠️ 조류계산 미수렴(발산): {result['iterations']}회 반복, 최대 오차: {result['max_mismatch']}")
             return {
                 "status": "warning",
-                "message": "⚠️ 전송된 전력망 요소(elements)가 없습니다.",
-                "summary": None,
-                "bus_results": [],
-                "line_results": [],
-                "plot_image_base64": None
+                "message": f"⚠️ 조류 계산 미수렴 (발산): {result['iterations']}회 반복 후에도 허용 오차 내에 수렴하지 못했습니다. (최대 오차: {result['max_mismatch']:.4e})",
+                "data": result,
             }
-        
-        # 1. Y-Bus 행렬 계산 (하위 호환성 유지)
-        bus_ids = []
-        if construct_y_bus is not None:
-            _, bus_ids = construct_y_bus(elements)
-        
-        # 2. Pandapower 정밀 조류 계산 및 단선도 시각화
-        if run_power_flow_simulation is None:
-            return {"status": "error", "message": "Pandapower 엔진이 로드되지 않았습니다."}
-            
-        pf_result = run_power_flow_simulation(elements=elements, return_plot=True)
-        
-        if pf_result.get("status") == "success":
-            pf_result["y_bus_ids"] = bus_ids
-            pf_result["y_bus_size"] = len(bus_ids)
-            print(f"✅ Pandapower 조류 계산 성공! 모선 {len(pf_result.get('bus_results', []))}개 분석 완료.")
-            return pf_result
-        else:
-            return {
-                "status": "partial_success",
-                "message": f"Y-Bus 행렬 구성 완료({len(bus_ids)}개 모선). AC 조류 계산 비수렴: {pf_result.get('message')}",
-                "y_bus_ids": bus_ids,
-                "summary": None,
-                "bus_results": [],
-                "line_results": []
-            }
-            
-    except Exception as e:
-        print(f"❌ 조류 계산 에러: {e}")
-        return {"status": "error", "message": str(e)}
 
-# ==========================================
-# 🌐 [API 4 - IEEE 표준 계통 목록 조회]
-# ==========================================
-@app.get("/ieee_cases")
-async def get_ieee_cases():
-    cases = [
-        {"id": "case4gs", "name": "IEEE 4-Bus (Gauss-Seidel Test)", "buses": 4},
-        {"id": "case14", "name": "IEEE 14-Bus Standard System", "buses": 14},
-        {"id": "case30", "name": "IEEE 30-Bus Standard System", "buses": 30},
-        {"id": "case39", "name": "IEEE 39-Bus New England System", "buses": 39},
-        {"id": "case57", "name": "IEEE 57-Bus Standard System", "buses": 57},
-        {"id": "case118", "name": "IEEE 118-Bus Large System", "buses": 118},
-    ]
-    return {"status": "success", "cases": cases}
+        print(
+            f"✅ 조류계산 성공 (수렴 완료: {result['converged']}, "
+            f"{result['iterations']}회 반복, 슬랙: #{result['slack_bus']})"
+        )
+        print(
+            f"📊 총 발전: {result['summary']['total_gen_p_mw']} MW | "
+            f"총 부하: {result['summary']['total_load_p_mw']} MW | "
+            f"손실: {result['summary']['total_loss_p_mw']} MW"
+        )
 
-# ==========================================
-# 🚀 [API 5 - IEEE 표준 계통 즉시 시뮬레이션]
-# ==========================================
-@app.post("/run_ieee_case")
-async def run_ieee_case(request: Request):
-    try:
-        data = await request.json()
-        case_name = data.get("case", "case30")
-        print(f"\n🌐 [IEEE 시뮬레이션 요청] Case: {case_name}")
-        
-        if run_power_flow_simulation is None:
-            return {"status": "error", "message": "Pandapower 엔진이 로드되지 않았습니다."}
-            
-        result = run_power_flow_simulation(case_name=case_name, return_plot=True)
-        return result
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# ==========================================
-# 🖼️ [API 6 - 단선도 이미지 직접 다운로드/조회]
-# ==========================================
-@app.get("/render_ieee_image/{case_name}")
-async def render_ieee_image(case_name: str):
-    try:
-        import pandapower as pp
-        import pandapower.networks as nw
-        case_lower = case_name.lower().replace('-', '').replace('_', '')
-        case_loaders = {
-            'case4gs': nw.case4gs,
-            'case14': nw.case14,
-            'case30': nw.case30,
-            'case39': nw.case39,
-            'case57': nw.case57,
-            'case118': nw.case118,
+        return {
+            "status": "success",
+            "message": f"조류 계산 수렴 완료! ({result['iterations']}회 반복, 최대 오차: {result['max_mismatch']})",
+            "data": result,
         }
-        loader = case_loaders.get(case_lower, nw.case30)
-        net = loader()
-        pp.runpp(net, numba=False)
-        img_bytes = render_single_line_diagram(net, title=f"IEEE {case_name.upper()} Power Flow SLD", return_format="bytes")
-        return Response(content=img_bytes, media_type="image/png")
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        print(f"❌ 조류계산 중 예외 발생: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "message": f"조류계산 중 오류가 발생했습니다: {str(e)}"}
+
+
+@app.get("/download_result_csv")
+async def download_result_csv():
+    if not last_simulation_result or "csv_text" not in last_simulation_result:
+        return Response(content="Bus,Volt,Angle,Pgen,Qgen,Pload,Qload\n", media_type="text/csv")
+    csv_bytes = last_simulation_result["csv_text"].encode("utf-8-sig")
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="power_flow_result.csv"'},
+    )
+
+
+@app.get("/download_result_excel")
+async def download_result_excel():
+    if not last_simulation_result:
+        return {"status": "error", "message": "먼저 조류계산을 실행해 주세요."}
+
+    wb = openpyxl.Workbook()
+    # Sheet 1: Bus Results
+    ws_bus = wb.active
+    ws_bus.title = "Bus Results"
+    ws_bus.append(["Bus", "Volt (pu)", "Angle (deg)", "Pgen (MW)", "Qgen (MVAR)", "Pload (MW)", "Qload (MVAR)", "Type"])
+    for r in last_simulation_result.get("bus_results", []):
+        ws_bus.append([
+            r.get("bus"),
+            r.get("volt"),
+            r.get("angle"),
+            r.get("pgen"),
+            r.get("qgen"),
+            r.get("pload"),
+            r.get("qload"),
+            r.get("type"),
+        ])
+
+    # Sheet 2: Line Flows
+    ws_line = wb.create_sheet(title="Line Flows")
+    ws_line.append(["No.", "Line", "From Bus", "To Bus", "P From (MW)", "Q From (MVAR)", "P To (MW)", "Q To (MVAR)", "Loss P (MW)", "Loss Q (MVAR)"])
+    for idx, r in enumerate(last_simulation_result.get("line_results", []), 1):
+        ws_line.append([
+            idx,
+            r.get("label"),
+            r.get("from_bus"),
+            r.get("to_bus"),
+            r.get("p_from_mw"),
+            r.get("q_from_mvar"),
+            r.get("p_to_mw"),
+            r.get("q_to_mvar"),
+            r.get("loss_p_mw"),
+            r.get("loss_q_mvar"),
+        ])
+
+    # Sheet 3: Summary
+    ws_sum = wb.create_sheet(title="Summary")
+    summary = last_simulation_result.get("summary", {})
+    ws_sum.append(["Metric", "Value"])
+    ws_sum.append(["Converged", last_simulation_result.get("converged")])
+    ws_sum.append(["Iterations", last_simulation_result.get("iterations")])
+    ws_sum.append(["Slack Bus", f"#{last_simulation_result.get('slack_bus')}"])
+    ws_sum.append(["Total Gen P (MW)", summary.get("total_gen_p_mw")])
+    ws_sum.append(["Total Gen Q (MVAR)", summary.get("total_gen_q_mvar")])
+    ws_sum.append(["Total Load P (MW)", summary.get("total_load_p_mw")])
+    ws_sum.append(["Total Load Q (MVAR)", summary.get("total_load_q_mvar")])
+    ws_sum.append(["Total Loss P (MW)", summary.get("total_loss_p_mw")])
+    ws_sum.append(["Total Loss Q (MVAR)", summary.get("total_loss_q_mvar")])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    excel_bytes = buf.getvalue()
+
+    return Response(
+        content=excel_bytes,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="power_flow_result.xlsx"'},
+    )
+
+
+@app.get("/debug_last_result")
+async def debug_last_result():
+    if not last_simulation_result:
+        return {"msg": "no result"}
+    return {
+        "converged": last_simulation_result.get("converged"),
+        "iterations": last_simulation_result.get("iterations"),
+        "max_mismatch": last_simulation_result.get("max_mismatch"),
+        "total_buses": last_simulation_result.get("total_buses"),
+        "total_branches": last_simulation_result.get("total_branches"),
+        "line_results": last_simulation_result.get("line_results", [])[:20],
+        "summary": last_simulation_result.get("summary"),
+    }
+
 
 if __name__ == "__main__":
     import uvicorn

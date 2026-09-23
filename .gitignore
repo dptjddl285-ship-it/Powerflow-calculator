@@ -1,71 +1,24 @@
-# ==========================================
-# Python & Bytecode
-# ==========================================
+# Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-.venv/
-ENV/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+*.pyc
+.pytest_cache/
+.env
+*.env
+~$*
+backend_api/.env
+backend_api/.venv/
+backend_api/.ultralytics/
+backend_api/Ultralytics/
 
-# ==========================================
-# Virtual Environments & IDE
-# ==========================================
-.idea/
-.vscode/
-*.swp
-*.swo
-.DS_Store
-Thumbs.db
-
-# ==========================================
-# Flutter & Dart (Frontend App)
-# ==========================================
-frontend_app/.dart_tool/
-frontend_app/.flutter-plugins
-frontend_app/.flutter-plugins-dependencies
-frontend_app/.packages
-frontend_app/.pub-cache/
-frontend_app/.pub/
-frontend_app/build/
-frontend_app/ios/Flutter/.last_build_id
-frontend_app/android/app/debug
-frontend_app/android/app/profile
-frontend_app/android/app/release
-
-# ==========================================
-# AI Models & Weight Checkpoints
-# ==========================================
-*.cache
+# Local models and generated experiments: transfer the active checkpoint
+# privately when moving computers; do not push large artifacts to GitHub.
+*.pt
 *.joblib
+runs/
+*.cache
 backend_api/icon_recognition/models/load_crop_cnn*.pt
 
-# Exclude massive training iterations, keep key weights
-runs/detect/runs/
-!runs/detect/backend_api/auto_tune_runs/finetune_12_clean20_aug640/weights/best.pt
-!backend_api/icon_recognition/models/best.pt
-
-# ==========================================
-# Temporary Diagnosis & Output Dumps
-# ==========================================
+# 재생성 가능한 진단/산출물
 backend_api/temp_data/
 cv_bus_comparison/
 cv_bus_refined_comparison/
@@ -73,8 +26,43 @@ cv_bus_topology_recovery_comparison/
 cv_generator_hybrid_comparison/
 hybrid_api_verification/
 cv_load_comparison/
+cv_transformer_comparison/
+transformer_debug_crops/
+hybrid_full_comparison/
+load_mask_strategy_comparison/
+hybrid_full_30_triangle/
+hybrid_full_30_box/
+hybrid_full_30_core_contour/
+hybrid_TEST_20_box/
+bus_test20_diagnostics/
+bus_topology_mode_comparison/
+bus_thickness_comparison/
+bus_orientation_hybrid_comparison/
+bus_branch_threshold_comparison/
+bus_candidate_inspection/
+bus_geometry_selection_experiment/
+bus_reference_diagnostics/
+hybrid_TEST_20_bus_fixed/
+hybrid_TEST1_20_full/
+hybrid_TEST1_20_thin_recovery_*/
+hybrid_TEST1_20_load29_*/
+_archive_experiments/
 괴물박스_비교결과/
-*.log
 
-# Autonomous feedback-loop logs and regenerated review artifacts
-feedback_artifacts/
+# 선로 추적 실행 결과와 로컬 비교 런타임
+_external_compare/
+electrical_topology_*/
+results/line_tracing/
+object_regression_latest/
+
+# 학습용 원본 이미지(라벨은 Roboflow에 있음)
+학습 IEEE/
+
+# 디버그 및 임시 산출물
+debug_*/
+agent calculator/
+backend_api/*.jpg
+backend_api/*.png
+
+# 사용자가 검토 후 삭제할 임시 정리함
+delete/

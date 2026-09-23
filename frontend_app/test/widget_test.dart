@@ -1,30 +1,17 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:circuit_solver/main.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('Power Designer renders its main controls', (WidgetTester tester) async {
+    await tester.pumpWidget(const PowerDesignerApp());
+    // Lensy intentionally has a repeating idle animation, so the widget tree
+    // never reaches a settled ticker state. Pump one frame for initial layout.
+    await tester.pump(const Duration(milliseconds: 100));
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
-
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(find.text('Power Designer Pro'), findsOneWidget);
+    expect(find.text('PowerLens 시작하기'), findsOneWidget);
+    expect(find.text('도면 사진으로 시작'), findsOneWidget);
+    expect(find.text('샘플로 빠르게 체험하기'), findsOneWidget);
   });
 }
