@@ -11,7 +11,6 @@ Also propagates verified Bus numbers to connected Generators, Loads, and Transfo
 
 import os
 import json
-import re
 import time
 import base64
 import urllib.request
@@ -231,12 +230,10 @@ def link_and_validate_bus_numbers(
             b['bus_number_reasons'].append(f'DUPLICATE_BUS_NUMBER_{num}')
             uncertain_count += 1
         else:
-            # 4. Valid, unique bus number
             b['bus_number'] = num
             b['display_name'] = f"Bus {num}"
             b['display_label'] = f"{num}"
             b['bus_number_status'] = 'VERIFIED'
-            b['bus_confidence'] = 0.99
             assigned_numbers.add(num)
             verified_count += 1
 
@@ -404,10 +401,6 @@ def synchronize_node_and_line_ids(
         bnum = n.get('bus_number')
         if nid and bnum is not None and cls == 'bus':
             node_id_to_bnum[nid] = bnum
-        elif nid and cls == 'bus':
-            m = re.search(r'bus_(\d+)', str(nid))
-            if m:
-                node_id_to_bnum[nid] = int(m.group(1))
 
     used_line_ids = set()
     for idx, line in enumerate(lines):
@@ -429,8 +422,10 @@ def synchronize_node_and_line_ids(
 
                 if is_bus1 and is_bus2:
                     # True transmission line between two buses
-                    n1 = b1 if b1 is not None else (re.search(r'\d+', ep1).group(0) if re.search(r'\d+', ep1) else ep1)
-                    n2 = b2 if b2 is not None else (re.search(r'\d+', ep2).group(0) if re.search(r'\d+', ep2) else ep2)
+                    # Internal IDs are not evidence for a Bus number. If a
+                    # number is unavailable, keep the endpoint ID as a label.
+                    n1 = b1 if b1 is not None else ep1
+                    n2 = b2 if b2 is not None else ep2
                     label = f"Line {n1}-{n2}"
                     lid = f"line_{n1}_{n2}"
                 elif (is_bus1 and not is_bus2) or (is_bus2 and not is_bus1):

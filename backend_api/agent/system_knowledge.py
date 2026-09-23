@@ -61,8 +61,7 @@ Lensy가 반환할 수 있는 action_id는 오직 다음으로 한정됩니다:
   - object_gate: 하단 [객체 검수 완료] 단일 완료 버튼 (모든 의심 객체와 누락 후보가 해결되고 최종 확인 후 다음 단계로 진행)
   - missing_candidates: 상단 보라색 [누락 후보] 배지 또는 카드 [문제 없음] 버튼
 • 모선 매핑 (BUS_MAPPING):
-  - bus_input: 모선 번호 입력 필드 및 [승인하고 다음 모선으로] 버튼
-  - bus_gate: 하단 [모선 확정 ➔ 결선 검수로] 게이트 버튼
+  - bus_gate: 하단 [모선 검수 완료] 게이트 버튼 (확인 필요 모선은 도면 위 Guide Box로 안내)
 • 결선 검수 (CONNECTION_REVIEW):
   - connection_priority: [선로 승인하고 다음 (Enter)] 버튼
   - connection_gate: 하단 [결선 확정 ➔ 최종 검증] 게이트 버튼
@@ -154,7 +153,6 @@ VALID_HIGHLIGHT_TARGETS = {
     "missing_candidates",
     "object_gate",
     # Bus Mapping
-    "bus_input",
     "bus_gate",
     # Connection Review
     "connection_priority",

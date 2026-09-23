@@ -573,6 +573,150 @@ class AgentCoreV2Test(unittest.TestCase):
         self.assertEqual(len(res["focus_targets"]), 0)
         self.assertIsNone(res["highlight_target"])
 
+    def test_24_bus_mapping_proactive_with_uncertain_bus(self):
+        """BACKEND TEST 1: BUS_MAPPING + uncertain Bus -> HUMAN_CHECK, GUIDE, focus target type OBJECT, actual Bus ID."""
+        nodes = [
+            {"id": "bus_1", "class": "bus", "bus_number": 1, "bus_number_status": "VERIFIED"},
+            {"id": "bus_2", "class": "bus", "bus_number": None, "bus_number_status": "UNCERTAIN"},
+        ]
+        res = self.local_prov.generate_proactive_summary(
+            document_id="doc_bus_test",
+            stage="BUS_MAPPING",
+            working_nodes=nodes,
+            working_lines=[],
+            missing_candidates=[],
+            topology_issues=[],
+        )
+        self.assertEqual(res["decision"], "HUMAN_CHECK")
+        self.assertEqual(res["action_mode"], "GUIDE")
+        self.assertIsNone(res["highlight_target"])  # bus_input button highlight is NOT used
+        self.assertEqual(len(res["focus_targets"]), 1)
+        self.assertEqual(res["focus_targets"][0]["type"], "OBJECT")
+        self.assertEqual(res["focus_targets"][0]["id"], "bus_2")
+
+    def test_25_focus_target_type_bus_normalized_to_object(self):
+        """BACKEND TEST 2: focus target type BUS does not remain in canonical output (normalized to OBJECT)."""
+        raw = {
+            "reply_ko": "모선 확인",
+            "decision": "HUMAN_CHECK",
+            "intent": "TEST_INTENT",
+            "focus_targets": [
+                {"type": "BUS", "id": "bus_1"},
+            ],
+        }
+        res = sanitize_and_validate_agent_response(
+            raw,
+            user_message="모선 확인",
+            working_nodes=[{"id": "bus_1", "class": "bus", "review_status": "NORMAL"}],
+            working_lines=[],
+            missing_candidates=[],
+            topology_issues=[],
+            stage="BUS_MAPPING",
+        )
+        for t in res["focus_targets"]:
+            self.assertNotEqual(t["type"], "BUS")
+            self.assertEqual(t["type"], "OBJECT")
+            self.assertEqual(t["id"], "bus_1")
+
+    def test_26_bus_mapping_clean_bus_proactive(self):
+        """BACKEND TEST 3: clean Bus -> PROCEED, NONE, no fabricated target."""
+        nodes = [
+            {"id": "bus_1", "class": "bus", "bus_number": 1, "bus_number_status": "VERIFIED"},
+            {"id": "bus_2", "class": "bus", "bus_number": 2, "bus_number_status": "VERIFIED"},
+        ]
+        res = self.local_prov.generate_proactive_summary(
+            document_id="doc_bus_clean",
+            stage="BUS_MAPPING",
+            working_nodes=nodes,
+            working_lines=[],
+            missing_candidates=[],
+            topology_issues=[],
+        )
+        self.assertEqual(res["decision"], "PROCEED")
+        self.assertEqual(res["action_mode"], "NONE")
+        self.assertEqual(len(res["focus_targets"]), 0)
+        self.assertIsNone(res["highlight_target"])
+
+    def test_27_bus_gate_duplicate_bus_numbers(self):
+        """BACKEND TEST 4: duplicate Bus 번호 -> 두 Bus 모두 issue 대상."""
+        import asyncio
+        from review.staged_api import review_verify_bus_gate
+        from review.schemas import VerifyBusGateRequest
+
+        nodes = [
+            {"id": "bus_1", "class": "bus", "bus_number": 5, "bus_number_status": "VERIFIED"},
+            {"id": "bus_2", "class": "bus", "bus_number": 5, "bus_number_status": "VERIFIED"},
+        ]
+        req = VerifyBusGateRequest(document_id="doc_dup", working_nodes=nodes)
+        res = asyncio.run(review_verify_bus_gate(req))
+
+        self.assertEqual(res["gate_status"], "BLOCKED")
+        self.assertIn("bus_1", res["focus_node_ids"])
+        self.assertIn("bus_2", res["focus_node_ids"])
+        self.assertTrue(any("중복" in b for b in res["blockers"]))
+
+    def test_28_bus_gate_null_number(self):
+        """BACKEND TEST 5: 번호 null -> issue."""
+        import asyncio
+        from review.staged_api import review_verify_bus_gate
+        from review.schemas import VerifyBusGateRequest
+
+        nodes = [
+            {"id": "bus_1", "class": "bus", "bus_number": 1, "bus_number_status": "VERIFIED"},
+            {"id": "bus_2", "class": "bus", "bus_number": None, "bus_number_status": "UNCERTAIN"},
+        ]
+        req = VerifyBusGateRequest(document_id="doc_null", working_nodes=nodes)
+        res = asyncio.run(review_verify_bus_gate(req))
+
+        self.assertEqual(res["gate_status"], "BLOCKED")
+        self.assertIn("bus_2", res["focus_node_ids"])
+        self.assertTrue(any("미지정" in b for b in res["blockers"]))
+
+    def test_29_bus_gate_uncertain_status_with_number(self):
+        """BACKEND TEST 6: bus_number_status UNCERTAIN인데 번호 자체는 존재 -> Gate BLOCKED, blocker 설명 존재."""
+        import asyncio
+        from review.staged_api import review_verify_bus_gate
+        from review.schemas import VerifyBusGateRequest
+
+        nodes = [
+            {"id": "bus_1", "class": "bus", "bus_number": 1, "bus_number_status": "VERIFIED"},
+            {"id": "bus_2", "class": "bus", "bus_number": 2, "bus_number_status": "UNCERTAIN"},
+        ]
+        req = VerifyBusGateRequest(document_id="doc_unc", working_nodes=nodes)
+        res = asyncio.run(review_verify_bus_gate(req))
+
+        self.assertEqual(res["gate_status"], "BLOCKED")
+        self.assertIn("bus_2", res["focus_node_ids"])
+        self.assertTrue(len(res["blockers"]) > 0)
+        self.assertTrue(any("UNCERTAIN" in b or "불확실" in b for b in res["blockers"]))
+
+    def test_30_bus_gate_non_contiguous_valid_ids(self):
+        """BACKEND TEST 7: non-contiguous valid IDs: Bus 1, Bus 5, Bus 20이 모두 unique/verified라면 expected range가 별도 제공되지 않은 경우 '2~4가 없다'는 이유로 막지 않는다."""
+        import asyncio
+        from review.staged_api import review_verify_bus_gate
+        from review.schemas import VerifyBusGateRequest
+
+        nodes = [
+            {"id": "bus_1", "class": "bus", "bus_number": 1, "bus_number_status": "VERIFIED"},
+            {"id": "bus_2", "class": "bus", "bus_number": 5, "bus_number_status": "VERIFIED"},
+            {"id": "bus_3", "class": "bus", "bus_number": 20, "bus_number_status": "VERIFIED"},
+        ]
+        req = VerifyBusGateRequest(document_id="doc_non_contig", working_nodes=nodes)
+        res = asyncio.run(review_verify_bus_gate(req))
+
+        self.assertEqual(res["gate_status"], "BUS_VERIFIED")
+        self.assertEqual(len(res["blockers"]), 0)
+        self.assertEqual(len(res["focus_node_ids"]), 0)
+
+    def test_31_no_hardcoded_bus_confidence_099(self):
+        """BACKEND TEST 8: hardcoded bus_confidence 0.99 없음."""
+        import inspect
+        import core.bus_number_linker as linker_mod
+
+        src = inspect.getsource(linker_mod)
+        self.assertNotIn("bus_confidence = 0.99", src)
+        self.assertNotIn("0.99", src)
+
 
 if __name__ == "__main__":
     unittest.main()

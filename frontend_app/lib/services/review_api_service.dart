@@ -112,6 +112,27 @@ class ReviewApiService {
     return jsonDecode(utf8.decode(response.bodyBytes));
   }
 
+  Future<Map<String, dynamic>> verifyBusGate({
+    required String documentId,
+    required List<ReviewNodeItem> workingNodes,
+  }) async {
+    final uri = Uri.parse('$baseUrl/review/verify_bus_gate');
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'document_id': documentId,
+        'working_nodes': workingNodes.map((n) => n.toJson()).toList(),
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Bus Gate 검증 실패: HTTP ${response.statusCode}');
+    }
+
+    return jsonDecode(utf8.decode(response.bodyBytes));
+  }
+
   Future<Map<String, dynamic>> detectConnections(
     String documentId,
     List<ReviewNodeItem> confirmedNodes,

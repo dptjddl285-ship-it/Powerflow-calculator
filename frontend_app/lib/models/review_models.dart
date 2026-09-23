@@ -163,6 +163,8 @@ class ReviewNodeItem {
       'label_offset_dx': labelOffsetDx,
       'label_offset_dy': labelOffsetDy,
       'bus_number': busNumber,
+      'bus_number_status': busNumberStatus,
+      'bus_number_reasons': busNumberReasons,
       'connected_bus_number': connectedBusNumber,
       'connected_bus_id': connectedBusId,
     };
@@ -284,18 +286,21 @@ class ObjectReviewGateEvaluator {
     required List<MissingCandidateItem> missingCandidates,
   }) {
     final blockers = <String>[];
-    final validNodes =
-        workingNodes.where((n) => n.reviewStatus != 'REJECTED').toList();
+    final validNodes = workingNodes
+        .where((n) => n.reviewStatus != 'REJECTED')
+        .toList();
     if (validNodes.isEmpty) {
       blockers.add("유효한 전력 설비 심볼이 없습니다.");
     }
-    final suspiciousNodes =
-        validNodes.where((n) => n.reviewStatus == 'SUSPICIOUS').toList();
+    final suspiciousNodes = validNodes
+        .where((n) => n.reviewStatus == 'SUSPICIOUS')
+        .toList();
     if (suspiciousNodes.isNotEmpty) {
       blockers.add("확인이 필요한 의심 객체(${suspiciousNodes.length}개)가 남아 있습니다.");
     }
-    final unresolvedCands =
-        missingCandidates.where((c) => c.status == 'OPEN').toList();
+    final unresolvedCands = missingCandidates
+        .where((c) => c.status == 'OPEN')
+        .toList();
     if (unresolvedCands.isNotEmpty) {
       blockers.add("미해결된 누락 의심 영역(${unresolvedCands.length}개)이 있습니다.");
     }
@@ -358,6 +363,166 @@ class ObjectReviewGateEvaluator {
     }
     return "도면 내 모든 객체 인식이 정상적으로 완료되었어요!\n"
         "검토가 필요한 항목이 없으니 아래의 [객체 검수 완료]를 눌러 다음 단계로 가면 돼요.";
+  }
+}
+
+class BusReviewGateEvaluator {
+  static List<String> getBlockers({
+    required List<ReviewNodeItem> workingNodes,
+  }) {
+    final blockers = <String>[];
+    final busNodes = workingNodes
+        .where(
+          (n) =>
+              n.className.toLowerCase() == 'bus' &&
+              n.reviewStatus != 'REJECTED',
+        )
+        .toList();
+
+    if (busNodes.isEmpty) {
+      blockers.add("도면 내 유효한 모선(Bus) 객체가 없습니다.");
+      return blockers;
+    }
+
+    final counts = <int, int>{};
+    for (final b in busNodes) {
+      if (b.busNumber != null && b.busNumber! > 0) {
+        counts[b.busNumber!] = (counts[b.busNumber!] ?? 0) + 1;
+      }
+    }
+    final duplicates = counts.entries
+        .where((e) => e.value > 1)
+        .map((e) => e.key)
+        .toList();
+
+    final missingNumberBuses = <String>[];
+    final invalidNumberBuses = <String>[];
+    final duplicateBuses = <String>[];
+    final uncertainStatusBuses = <String>[];
+
+    for (final b in busNodes) {
+      final num = b.busNumber;
+      final status = (b.busNumberStatus ?? '').toUpperCase();
+      final reasons = b.busNumberReasons;
+      final hasActiveDupReason = reasons.any(
+        (r) => r.startsWith('DUPLICATE_BUS_NUMBER_'),
+      );
+
+      if (num == null) {
+        missingNumberBuses.add(b.id);
+      } else if (num <= 0) {
+        invalidNumberBuses.add(b.id);
+      } else if (duplicates.contains(num) || hasActiveDupReason) {
+        duplicateBuses.add(b.id);
+      } else if (status == 'UNCERTAIN') {
+        uncertainStatusBuses.add(b.id);
+      }
+    }
+
+    if (duplicates.isNotEmpty || duplicateBuses.isNotEmpty) {
+      final dupStr = duplicates.isNotEmpty
+          ? duplicates.map((n) => "#$n").join(", ")
+          : "확인 필요";
+      blockers.add("중복된 모선 번호($dupStr)가 존재합니다. 각각 고유한 번호로 수정해 주세요.");
+    }
+    if (missingNumberBuses.isNotEmpty) {
+      blockers.add("번호가 미지정된 모선(${missingNumberBuses.length}개)이 있습니다.");
+    }
+    if (invalidNumberBuses.isNotEmpty) {
+      blockers.add(
+        "유효하지 않은 번호(0 이하)를 가진 모선(${invalidNumberBuses.length}개)이 있습니다.",
+      );
+    }
+    if (uncertainStatusBuses.isNotEmpty) {
+      blockers.add(
+        "판독 상태가 불확실(UNCERTAIN)한 모선(${uncertainStatusBuses.length}개)이 있습니다.",
+      );
+    }
+
+    return blockers;
+  }
+
+  static bool canVerifyGate({required List<ReviewNodeItem> workingNodes}) {
+    return getBlockers(workingNodes: workingNodes).isEmpty;
+  }
+
+  static Set<String> computeGuideBusIds({
+    required List<ReviewNodeItem> workingNodes,
+    List<Map<String, dynamic>>? focusTargets,
+  }) {
+    final ids = <String>{};
+    final busNodes = workingNodes
+        .where(
+          (n) =>
+              n.className.toLowerCase() == 'bus' &&
+              n.reviewStatus != 'REJECTED',
+        )
+        .toList();
+
+    final counts = <int, int>{};
+    for (final b in busNodes) {
+      if (b.busNumber != null && b.busNumber! > 0) {
+        counts[b.busNumber!] = (counts[b.busNumber!] ?? 0) + 1;
+      }
+    }
+    final duplicates = counts.entries
+        .where((e) => e.value > 1)
+        .map((e) => e.key)
+        .toSet();
+
+    for (final b in busNodes) {
+      final num = b.busNumber;
+      final status = (b.busNumberStatus ?? '').toUpperCase();
+      final reasons = b.busNumberReasons;
+      final hasActiveDupReason = reasons.any(
+        (r) => r.startsWith('DUPLICATE_BUS_NUMBER_'),
+      );
+
+      if (num == null ||
+          num <= 0 ||
+          duplicates.contains(num) ||
+          status == 'UNCERTAIN' ||
+          hasActiveDupReason) {
+        ids.add(b.id);
+      }
+    }
+
+    if (focusTargets != null) {
+      final nodeMap = {for (final n in workingNodes) n.id: n};
+      for (final target in focusTargets) {
+        final type = target['type']?.toString().toUpperCase();
+        final id = target['id']?.toString();
+        // Canonical focus target type is 'OBJECT'. Legacy 'BUS' is disallowed.
+        if (type == 'OBJECT' && id != null) {
+          final node = nodeMap[id];
+          if (node != null &&
+              node.className.toLowerCase() == 'bus' &&
+              node.reviewStatus != 'REJECTED') {
+            ids.add(id);
+          }
+        }
+      }
+    }
+
+    return ids;
+  }
+
+  static String getSpeechBubbleText({
+    required List<ReviewNodeItem> workingNodes,
+    String? selectedLabel,
+  }) {
+    final issueIds = computeGuideBusIds(workingNodes: workingNodes);
+    final issueCount = issueIds.length;
+
+    if (issueCount > 0) {
+      return "모선 번호를 전체 확인했어요.\n"
+          "다시 확인하면 좋은 모선이 ${issueCount}개 있어요.\n"
+          "도면에 표시해둘게요.";
+    }
+
+    return "제가 다시 확인할 모선은 이제 없어요.\n"
+        "전체 번호를 한번 확인한 뒤\n"
+        "[모선 검수 완료]를 눌러주세요.";
   }
 }
 

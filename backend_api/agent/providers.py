@@ -435,30 +435,56 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
 
             summary_text = "\n".join(lines)
 
-        elif stage_upper == "BUS_MAPPING":
-            uncertain_buses = [n for n in w_nodes if (n.get("class") or n.get("className")) == "bus" and (n.get("bus_number") is None or n.get("bus_number_status") == "UNCERTAIN")]
-            if uncertain_buses:
+        elif stage_upper in ("BUS_MAPPING", "BUS_MAPPING_REVIEW"):
+            all_buses = [n for n in w_nodes if (n.get("class") or n.get("className") or "").lower() == "bus"]
+            total_buses = len(all_buses)
+            num_counts = {}
+            for b in all_buses:
+                num = b.get("bus_number")
+                if num is not None and isinstance(num, int) and num > 0:
+                    num_counts[num] = num_counts.get(num, 0) + 1
+            duplicates = {num for num, cnt in num_counts.items() if cnt > 1}
+
+            issue_buses = []
+            for b in all_buses:
+                num = b.get("bus_number")
+                status = str(b.get("bus_number_status", "")).upper()
+                reasons = b.get("bus_number_reasons") or []
+                has_active_dup_reason = any(str(r).startswith("DUPLICATE_BUS_NUMBER_") for r in reasons)
+                if num is None or not (isinstance(num, int) and num > 0) or num in duplicates or status == "UNCERTAIN" or has_active_dup_reason:
+                    issue_buses.append(b)
+
+            issue_count = len(issue_buses)
+            clean_count = total_buses - issue_count
+
+            if issue_buses:
                 decision = "HUMAN_CHECK"
-                target = "bus_input"
-                reply_ko = f"모선 번호 확인 단계입니다. 번호 확인이 필요한 모선이 {len(uncertain_buses)}개 있습니다."
-                for b in uncertain_buses:
+                action_mode = "GUIDE"
+                target = None
+                reply_ko = f"총 {total_buses}개 모선 번호를 확인했어요. {clean_count}개는 명확하고, {issue_count}개는 다시 확인하는 게 좋아요. 표시해둘게요."
+                for b in issue_buses:
+                    num = b.get("bus_number")
+                    b_id = str(b.get("id", ""))
+                    reason = "모선 번호 미할당" if num is None else ("중복 모선 번호" if num in duplicates else "모선 번호 확인 필요")
                     focus_targets.append({
-                        "type": "BUS",
-                        "id": b.get("id", ""),
-                        "reason": "모선 번호 미할당 또는 불확실",
-                        "severity": "REVIEW",
+                        "type": "OBJECT",
+                        "id": b_id,
+                        "reason": reason,
+                        "severity": "WARNING",
                     })
             else:
                 decision = "PROCEED"
-                target = "bus_gate"
-                reply_ko = "모든 모선에 고유 번호가 바르게 부여되었습니다. 결선 검수 단계로 진행할 수 있습니다."
+                action_mode = "NONE"
+                target = None
+                reply_ko = "제가 다시 확인할 모선은 이제 없어요. 전체 번호를 한번 확인한 뒤 [모선 검수 완료]를 눌러주세요."
 
             summary_text = (
                 "📊 **[AI 검토 우선순위 요약 - 모선 번호 매핑]**\n\n"
-                "도면에서 인식된 각 모선에 고유한 번호(예: Bus 1~24)가 바르게 부여되었는지 확인합니다.\n\n"
-                "💡 **확인 사항:**\n"
-                "• 번호가 지정되지 않은 미할당 모선이나 중복된 번호가 있는지 확인하세요.\n"
-                "• 번호 부여가 끝나면 상단 **[다음: 결선 검수]** 단계로 이동하세요."
+                f"• **총 모선 수**: {total_buses}개 (정상/확인 대상: **{clean_count}개**)\n"
+                f"• **확인 필요 모선**: **{issue_count}건**\n\n"
+                "💡 **안내:**\n"
+                "도면에 표시된 확인 필요 모선을 클릭하여 번호와 근거를 확인하고 틀린 경우에만 수정한 뒤, "
+                "하단 **[모선 검수 완료]**를 눌러주세요."
             )
 
         elif stage_upper in ("CONNECTION_REVIEW", "LINE_REVIEW"):
@@ -885,18 +911,25 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                     "• 전체 도면을 한 번 확인한 뒤 하단의 파란색 **[객체 검수 완료]**(Gate 통과) 버튼을 눌러주세요."
                 )
         elif stage_upper in ("BUS_MAPPING_REVIEW", "BUS_MAPPING"):
-            uncertain_buses = len([n for n in w_nodes if (n.get("class") or n.get("className")) == "bus" and (n.get("bus_number") is None or n.get("bus_number_status") == "UNCERTAIN")])
+            all_buses = [n for n in w_nodes if (n.get("class") or n.get("className") or "").lower() == "bus"]
+            num_counts = {}
+            for b in all_buses:
+                num = b.get("bus_number")
+                if num is not None and isinstance(num, int) and num > 0:
+                    num_counts[num] = num_counts.get(num, 0) + 1
+            dups = {num for num, cnt in num_counts.items() if cnt > 1}
+            issue_count = sum(1 for b in all_buses if b.get("bus_number") is None or b.get("bus_number") in dups or b.get("bus_number_status") == "UNCERTAIN" or (isinstance(b.get("bus_number"), int) and b.get("bus_number") <= 0))
             reply = "🧭 **[다음 단계 진행 가이드 - ② 모선 번호 매핑]:**\n"
-            if uncertain_buses == 0:
+            if issue_count == 0 and len(all_buses) > 0:
                 target = "bus_gate"
                 reply += "✓ 모든 모선 번호가 확인되었습니다!\n"
-                reply += "• 하단 **[모선 번호 승인 (Gate 2 통과)]** 버튼을 눌러 **[다음: ③ 선로 결선 검수]** 단계로 이동하세요."
+                reply += "• 전체 번호를 확인한 뒤 하단 **[모선 검수 완료]** 버튼을 눌러 다음 단계로 이동하세요."
             else:
-                target = "bus_input"
+                target = None
                 dec = "HUMAN_CHECK"
-                reply += f"1. 도면 OCR 및 공간 좌표 기반 모선 번호 부여 상태 점검 (미해결/불확실: **{uncertain_buses}개**)\n"
-                reply += "2. 우측 입력창에서 모선 번호 입력 후 **[승인하고 다음 모선으로 (Enter)]** 클릭\n"
-                reply += "3. 모든 모선 번호 입력 후 하단 **[모선 번호 승인]** 클릭 ➔ **[다음: ③ 선로 결선 검수]** 단계로 이동"
+                reply += f"1. 모선 번호 확인 필요: **{issue_count}개**\n"
+                reply += "2. 도면에 표시된 확인 필요 모선을 클릭하여 번호와 근거를 확인하고 틀린 경우에만 수정하세요.\n"
+                reply += "3. 모든 확인이 끝나면 하단 **[모선 검수 완료]**를 눌러주세요."
         elif stage_upper in ("CONNECTION_REVIEW", "CONNECTION", "LINE_REVIEW"):
             ambiguous_count = len([l for l in w_lines if (l.get("review_status") or l.get("status")) == "AMBIGUOUS"])
             error_count = len([i for i in issues if i.get("severity") in ("error", "ERROR")])

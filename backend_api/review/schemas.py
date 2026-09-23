@@ -76,6 +76,10 @@ try:
         missing_candidates: List[Dict[str, Any]] = Field(default_factory=list)
         human_completeness_confirmed: bool = False
 
+    class VerifyBusGateRequest(BaseModel):
+        document_id: str
+        working_nodes: List[Dict[str, Any]]
+
     class AgentReviewConnectionRequest(BaseModel):
         document_id: str
         line: Dict[str, Any]
@@ -217,6 +221,11 @@ except ImportError:
         working_nodes: List[Dict[str, Any]]
         missing_candidates: List[Dict[str, Any]] = field(default_factory=list)
         human_completeness_confirmed: bool = False
+
+    @dataclass
+    class VerifyBusGateRequest:
+        document_id: str
+        working_nodes: List[Dict[str, Any]]
 
     @dataclass
     class AgentReviewConnectionRequest:

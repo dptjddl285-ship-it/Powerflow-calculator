@@ -16,6 +16,7 @@ import '../widgets/powerlens_ai/powerlens_ai_button.dart';
 import '../widgets/powerlens_ai/powerlens_ai_panel.dart';
 import '../widgets/powerlens_ai/glowing_target_wrapper.dart';
 import '../widgets/object_inspector_view.dart';
+import '../widgets/bus_inspector_view.dart';
 
 enum ReviewPhase {
   objectReview,
@@ -136,6 +137,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
 
   Set<String> _calculateGuideNodeIds(List<Map<String, dynamic>> focusTargets) {
+    if (_currentPhase == ReviewPhase.busMappingReview) {
+      return BusReviewGateEvaluator.computeGuideBusIds(
+        workingNodes: _workingNodes,
+        focusTargets: focusTargets,
+      );
+    }
     return ObjectReviewGateEvaluator.computeGuideNodeIds(
       workingNodes: _workingNodes,
       focusTargets: focusTargets,
@@ -171,93 +178,42 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   List<int> get _duplicateBusNumbers {
     final counts = <int, int>{};
     for (final b in _busNodes) {
-      if (b.busNumber != null) {
+      if (b.busNumber != null && b.busNumber! > 0) {
         counts[b.busNumber!] = (counts[b.busNumber!] ?? 0) + 1;
       }
     }
     return counts.entries.where((e) => e.value > 1).map((e) => e.key).toList();
   }
 
-  int get _busUncertainCount {
-    final dups = _duplicateBusNumbers;
-    return _busNodes
-        .where(
-          (n) =>
-              n.busNumberStatus != 'VERIFIED' ||
-              n.busNumber == null ||
-              dups.contains(n.busNumber),
-        )
-        .length;
-  }
+  int get _busUncertainCount => BusReviewGateEvaluator.computeGuideBusIds(
+        workingNodes: _workingNodes,
+      ).length;
 
-  int get _busVerifiedCount {
-    final dups = _duplicateBusNumbers;
-    return _busNodes
-        .where(
-          (n) =>
-              n.busNumberStatus == 'VERIFIED' &&
-              n.busNumber != null &&
-              !dups.contains(n.busNumber),
-        )
-        .length;
-  }
+  int get _busVerifiedCount => _busNodes.length - _busUncertainCount;
 
-  bool get _canVerifyBusGate =>
-      _busUncertainCount == 0 &&
-      _busNodes.isNotEmpty &&
-      _duplicateBusNumbers.isEmpty;
-
-  List<String> get _busGateBlockers {
-    final blockers = <String>[];
-    final dups = _duplicateBusNumbers;
-    if (dups.isNotEmpty) {
-      blockers.add(
-        '중복된 모선 번호(${dups.map((n) => "#$n").join(", ")})가 존재합니다. 각각 고유한 번호로 수정해 주세요.',
+  bool get _canVerifyBusGate => BusReviewGateEvaluator.canVerifyGate(
+        workingNodes: _workingNodes,
       );
-    }
-    final missingCount = _busNodes.where((n) => n.busNumber == null).length;
-    if (missingCount > 0) {
-      blockers.add('미지정 모선 $missingCount개 번호 입력 필요');
-    }
-    if (_busNodes.isEmpty) {
-      blockers.add('도면에 유효한 모선(Bus)이 없음');
-    }
-    return blockers;
-  }
+
+  List<String> get _busGateBlockers => BusReviewGateEvaluator.getBlockers(
+        workingNodes: _workingNodes,
+      );
 
   List<ReviewNodeItem> get _filteredAndSortedBusNodes {
-    final dups = _duplicateBusNumbers;
+    final guideIds = BusReviewGateEvaluator.computeGuideBusIds(
+      workingNodes: _workingNodes,
+    );
     List<ReviewNodeItem> list = List.from(_busNodes);
     if (_busFilterStatus == 'UNCERTAIN') {
-      list = list
-          .where(
-            (n) =>
-                n.busNumberStatus != 'VERIFIED' ||
-                n.busNumber == null ||
-                dups.contains(n.busNumber),
-          )
-          .toList();
+      list = list.where((n) => guideIds.contains(n.id)).toList();
     } else if (_busFilterStatus == 'VERIFIED') {
-      list = list
-          .where(
-            (n) =>
-                n.busNumberStatus == 'VERIFIED' &&
-                n.busNumber != null &&
-                !dups.contains(n.busNumber),
-          )
-          .toList();
+      list = list.where((n) => !guideIds.contains(n.id)).toList();
     }
     list.sort((a, b) {
-      final aIsUncertain =
-          a.busNumberStatus != 'VERIFIED' ||
-          a.busNumber == null ||
-          dups.contains(a.busNumber);
-      final bIsUncertain =
-          b.busNumberStatus != 'VERIFIED' ||
-          b.busNumber == null ||
-          dups.contains(b.busNumber);
-      if (aIsUncertain && !bIsUncertain) return -1;
-      if (!aIsUncertain && bIsUncertain) return 1;
+      final aIsIssue = guideIds.contains(a.id);
+      final bIsIssue = guideIds.contains(b.id);
+      if (aIsIssue && !bIsIssue) return -1;
+      if (!aIsIssue && bIsIssue) return 1;
       final na = a.busNumber ?? 9999;
       final nb = b.busNumber ?? 9999;
       return na.compareTo(nb);
@@ -418,15 +374,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   bool _isAiPanelOpen = false;
-  bool _busCompletionPromptVisible = false;
   bool _connectionFastMode = false;
   bool _connectionFullOverview = false;
   bool _connectionLinesOnlyMode = false;
   final GlobalKey _reviewStackKey = GlobalKey();
   final GlobalKey _reviewFocusTargetKey = GlobalKey();
   final GlobalKey _objectFilterKey = GlobalKey();
-  final GlobalKey _busPrimaryActionKey = GlobalKey();
-  final GlobalKey _busWholeApproveKey = GlobalKey();
   final GlobalKey _connectionMissionKey = GlobalKey();
   final GlobalKey _connectionPrimaryActionKey = GlobalKey();
   final GlobalKey _connectionGateKey = GlobalKey();
@@ -449,7 +402,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             ? 'object_bbox'
             : 'object_gate';
       case ReviewPhase.busMappingReview:
-        return 'bus_input';
+        return 'bus_gate';
       case ReviewPhase.connectionReview:
         return _connectionMissionComplete
             ? 'connection_gate'
@@ -730,9 +683,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         // Object Review V2: sequential approveCurrentAndNext does not exist
         return false;
       case ReviewPhase.busMappingReview:
-        if (_selectedNode == null) return false;
-        _approveAndNextBus(_selectedNode!);
-        return true;
+        // Bus Mapping V2: sequential approveCurrentAndNext does not exist
+        return false;
       case ReviewPhase.connectionReview:
         if (_selectedLine == null) return false;
         _confirmLineAndNext(_selectedLine!);
@@ -750,7 +702,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         await _completeObjectReview();
         return _currentPhase == ReviewPhase.busMappingReview;
       case ReviewPhase.busMappingReview:
-        await _proceedToConnectionReview();
+        await _completeBusReview();
         return _currentPhase == ReviewPhase.connectionReview;
       case ReviewPhase.connectionReview:
         await _verifyFinalGate();
@@ -1252,176 +1204,113 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     _triggerTopologyValidation();
   }
 
-  // --- Sequential Bus Review Methods ---
-  void _selectPreviousBus() {
-    var buses = _filteredAndSortedBusNodes;
-    if (buses.isEmpty || (_selectedNode != null && !buses.any((b) => b.id == _selectedNode!.id))) {
-      _busFilterStatus = 'ALL';
-      buses = _filteredAndSortedBusNodes;
-      if (buses.isEmpty) {
-        buses = _busNodes;
-      }
-    }
-    if (buses.isEmpty) return;
+  // --- Bus Mapping V2 Methods ---
+  void _handleApplyBusNumber(ReviewNodeItem busNode, int num) {
+    if (num <= 0) return;
 
-    int currentIdx = _selectedNode != null
-        ? buses.indexWhere((b) => b.id == _selectedNode!.id)
-        : 0;
-    if (currentIdx < 0) currentIdx = 0;
-    int prevIdx = (currentIdx - 1 + buses.length) % buses.length;
+    // A human edit resolves the current agent focus for this node. The
+    // deterministic Bus evaluator will add it back only if the edit leaves a
+    // real issue, such as a duplicate number.
+    PowerLensAIService.instance.removeFocusTarget(busNode.id);
+
     setState(() {
-      _selectedNode = buses[prevIdx];
-      if (_selectedNode!.busNumber != null) {
-        _busNumberEditController.text = _selectedNode!.busNumber.toString();
-      } else {
-        _busNumberEditController.clear();
-      }
-      _busPage = prevIdx ~/ _busPageSize;
-    });
-  }
+      final oldNum = busNode.busNumber;
+      busNode.busNumber = num;
+      busNode.source = busNode.source.contains('human') ? busNode.source : '${busNode.source}_human_modified';
 
-  void _selectNextBus() {
-    var buses = _filteredAndSortedBusNodes;
-    if (buses.isEmpty || (_selectedNode != null && !buses.any((b) => b.id == _selectedNode!.id))) {
-      _busFilterStatus = 'ALL';
-      buses = _filteredAndSortedBusNodes;
-      if (buses.isEmpty) {
-        buses = _busNodes;
-      }
-    }
-    if (buses.isEmpty) return;
-
-    int currentIdx = _selectedNode != null
-        ? buses.indexWhere((b) => b.id == _selectedNode!.id)
-        : -1;
-    int nextIdx = currentIdx + 1;
-    if (nextIdx >= buses.length) {
-      nextIdx = 0;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("✓ 모든 모선을 한 바퀴 확인했습니다."),
-          duration: Duration(seconds: 2),
-        ),
-      );
-    }
-    setState(() {
-      _selectedNode = buses[nextIdx];
-      if (_selectedNode!.busNumber != null) {
-        _busNumberEditController.text = _selectedNode!.busNumber.toString();
-      } else {
-        _busNumberEditController.clear();
-      }
-      _busPage = nextIdx ~/ _busPageSize;
-    });
-  }
-
-  void _skipAndNextBus() {
-    _selectNextBus();
-  }
-
-  void _approveAndNextBus(ReviewNodeItem busNode) {
-    final text = _busNumberEditController.text.trim();
-    int? num = int.tryParse(text);
-    if (num == null || num <= 0) {
-      num = busNode.busNumber;
-    }
-    if (num == null || num <= 0) {
-      final match = RegExp(r'\d+').firstMatch(busNode.id);
-      if (match != null) num = int.tryParse(match.group(0)!);
-    }
-
-    if (num != null && num > 0) {
-      final conflictBuses = _busNodes
-          .where((b) => b != busNode && b.busNumber == num)
+      // Check conflict with other buses
+      final otherBusesWithNum = _busNodes
+          .where((b) => b.id != busNode.id && b.busNumber == num)
           .toList();
-      if (conflictBuses.isNotEmpty) {
-        for (final cb in conflictBuses) {
-          cb.busNumberStatus = 'UNCERTAIN';
-          cb.displayLabel = "Bus $num (중복)";
-          if (!cb.busNumberReasons.contains('DUPLICATE_BUS_NUMBER_$num')) {
-            cb.busNumberReasons.add('DUPLICATE_BUS_NUMBER_$num');
-          }
-        }
+
+      if (otherBusesWithNum.isNotEmpty) {
+        // Both current and existing buses become UNCERTAIN
         busNode.busNumberStatus = 'UNCERTAIN';
+        busNode.displayLabel = "Bus $num (중복)";
         if (!busNode.busNumberReasons.contains('DUPLICATE_BUS_NUMBER_$num')) {
           busNode.busNumberReasons.add('DUPLICATE_BUS_NUMBER_$num');
         }
+
+        for (final ob in otherBusesWithNum) {
+          ob.busNumberStatus = 'UNCERTAIN';
+          ob.displayLabel = "Bus $num (중복)";
+          if (!ob.busNumberReasons.contains('DUPLICATE_BUS_NUMBER_$num')) {
+            ob.busNumberReasons.add('DUPLICATE_BUS_NUMBER_$num');
+          }
+          _propagateBusNumber(ob, num, isDuplicate: true);
+        }
         _propagateBusNumber(busNode, num, isDuplicate: true);
       } else {
+        // Unique and valid
         busNode.busNumberStatus = 'VERIFIED';
+        busNode.displayLabel = "Bus $num";
         busNode.busNumberReasons.removeWhere(
-          (r) => r.startsWith('DUPLICATE_BUS_NUMBER_'),
+          (r) =>
+              r.startsWith('DUPLICATE_BUS_NUMBER_') ||
+              r == 'NO_BUS_NUMBER_FOUND' ||
+              r.startsWith('INVALID_BUS_NUMBER_'),
         );
         _propagateBusNumber(busNode, num, isDuplicate: false);
       }
-    } else {
-      busNode.busNumberStatus = 'VERIFIED';
-    }
 
-    final completedAllBuses = _canVerifyBusGate;
-    _selectNextBus();
-    if (completedAllBuses) _showBusCompletionPrompt();
+      // Check if previous duplicate for oldNum got resolved
+      if (oldNum != null && oldNum != num) {
+        final remainingWithOld = _busNodes.where((b) => b.busNumber == oldNum).toList();
+        if (remainingWithOld.length == 1) {
+          final solo = remainingWithOld.first;
+          solo.busNumberReasons.removeWhere((r) => r == 'DUPLICATE_BUS_NUMBER_$oldNum');
+          if (solo.busNumberReasons.isEmpty) {
+            solo.busNumberStatus = 'VERIFIED';
+            solo.displayLabel = "Bus $oldNum";
+            _propagateBusNumber(solo, oldNum, isDuplicate: false);
+          }
+        }
+      }
+    });
   }
 
-  void _showBusCompletionPrompt() {
-    if (!mounted || _busCompletionPromptVisible) return;
-    _busCompletionPromptVisible = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (dialogContext) => AlertDialog(
-          backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          title: const Row(
-            children: [
-              Icon(Icons.check_circle, color: Color(0xFF16A34A), size: 24),
-              SizedBox(width: 8),
-              Text(
-                '모선 번호 매핑 완료',
-                style: TextStyle(
-                  color: Color(0xFF0F172A),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ],
-          ),
-          content: const Text(
-            '모든 모선 번호가 고유하게 확인되었습니다.\n이제 선로 결선을 우선순위대로 검수할까요?',
-            style: TextStyle(
-              color: Color(0xFF475569),
-              fontSize: 13,
-              height: 1.45,
-            ),
-          ),
-          actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
-          actions: [
-            OutlinedButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('한 번 더 보기'),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF2563EB),
-                foregroundColor: Colors.white,
-              ),
-              child: const Text('다음 단계로 이동'),
-            ),
-          ],
-        ),
-      ).then((goNext) {
-        if (!mounted) return;
-        _busCompletionPromptVisible = false;
-        if (goNext == true && _currentPhase == ReviewPhase.busMappingReview) {
-          _proceedToConnectionReview();
+  List<ReviewNodeItem> _getConnectedGensForBus(ReviewNodeItem busNode) {
+    final gens = <ReviewNodeItem>[];
+    for (final line in _workingLines) {
+      if (line.connectedTo.contains(busNode.id)) {
+        final otherId = line.connectedTo.first == busNode.id
+            ? (line.connectedTo.length > 1 ? line.connectedTo[1] : null)
+            : line.connectedTo.first;
+        if (otherId != null) {
+          final other = _workingNodes.firstWhere(
+            (n) => n.id == otherId,
+            orElse: () => busNode,
+          );
+          if (other.id != busNode.id &&
+              other.className.toLowerCase().contains('gen')) {
+            gens.add(other);
+          }
         }
-      });
-    });
+      }
+    }
+    return gens;
+  }
+
+  List<ReviewNodeItem> _getConnectedLoadsForBus(ReviewNodeItem busNode) {
+    final loads = <ReviewNodeItem>[];
+    for (final line in _workingLines) {
+      if (line.connectedTo.contains(busNode.id)) {
+        final otherId = line.connectedTo.first == busNode.id
+            ? (line.connectedTo.length > 1 ? line.connectedTo[1] : null)
+            : line.connectedTo.first;
+        if (otherId != null) {
+          final other = _workingNodes.firstWhere(
+            (n) => n.id == otherId,
+            orElse: () => busNode,
+          );
+          if (other.id != busNode.id &&
+              other.className.toLowerCase().contains('load')) {
+            loads.add(other);
+          }
+        }
+      }
+    }
+    return loads;
   }
 
   String _getReviewStageSpeechBubbleText() {
@@ -1436,13 +1325,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           selectedLabel: _selectedNode?.effectiveDisplayLabel,
         );
       case ReviewPhase.busMappingReview:
-        final hasBusIssues = _busUncertainCount > 0 || _duplicateBusNumbers.isNotEmpty;
-        if (!hasBusIssues) {
-          return "모든 모선에 고유 번호가 정상적으로 지정되었습니다!\n"
-              "오른쪽 하단의 [모선 번호 승인]을 눌러 결선 검수로 넘어가시면 돼요.";
-        }
-        return "이번에는 모선 번호만 확인하면 돼요. 전체 승인하거나, 하나씩 넘겨보면서 확인할 수 있어요.\n"
-            "추천하는 방법은 오른쪽의 번호 입력 후 [승인하고 다음 모선으로]를 누르는 거예요.";
+        return BusReviewGateEvaluator.getSpeechBubbleText(
+          workingNodes: _workingNodes,
+          selectedLabel: _selectedNode?.effectiveDisplayLabel,
+        );
       case ReviewPhase.connectionReview:
         if (_connectionMissionComplete || (_lineAmbiguousCount == 0 && _topologyIssues.isEmpty)) {
           return "모든 선로와 결선 연결이 정상적으로 검증되었습니다!\n"
@@ -1472,24 +1358,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
          focusedWidget.toString().contains('TextField'));
 
     if (isTyping) {
-      if (event.logicalKey == LogicalKeyboardKey.enter ||
-          event.logicalKey == LogicalKeyboardKey.numpadEnter) {
-        if (_currentPhase == ReviewPhase.busMappingReview &&
-            _selectedNode != null) {
-          _approveAndNextBus(_selectedNode!);
-          return true;
-        }
-      }
       return false;
     }
 
     // Arrow Right or Down: Navigate to Next
     if (event.logicalKey == LogicalKeyboardKey.arrowRight ||
         event.logicalKey == LogicalKeyboardKey.arrowDown) {
-      if (_currentPhase == ReviewPhase.busMappingReview) {
-        _selectNextBus();
-        return true;
-      } else if (_currentPhase == ReviewPhase.connectionReview) {
+      if (_currentPhase == ReviewPhase.connectionReview) {
         _selectNextLine();
         return true;
       }
@@ -1498,10 +1373,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     // Arrow Left or Up: Navigate to Previous
     if (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
         event.logicalKey == LogicalKeyboardKey.arrowUp) {
-      if (_currentPhase == ReviewPhase.busMappingReview) {
-        _selectPreviousBus();
-        return true;
-      } else if (_currentPhase == ReviewPhase.connectionReview) {
+      if (_currentPhase == ReviewPhase.connectionReview) {
         _selectPreviousLine();
         return true;
       }
@@ -1510,11 +1382,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     // Enter: Confirm and Next
     if (event.logicalKey == LogicalKeyboardKey.enter ||
         event.logicalKey == LogicalKeyboardKey.numpadEnter) {
-      if (_currentPhase == ReviewPhase.busMappingReview &&
-          _selectedNode != null) {
-        _approveAndNextBus(_selectedNode!);
-        return true;
-      } else if (_currentPhase == ReviewPhase.connectionReview &&
+      if (_currentPhase == ReviewPhase.connectionReview &&
           _selectedLine != null) {
         _confirmLineAndNext(_selectedLine!);
         return true;
@@ -1756,6 +1624,96 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _stageGateMessage = '객체 마지막 확인에 실패했어요. 잠시 후 다시 시도해주세요.';
       });
       if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("단계 검증 실패: $e"), backgroundColor: Colors.red),
+        );
+      }
+    }
+  }
+
+  // --- Step 4: Bus Gate Verification & Unified Completion ---
+
+  Future<void> _completeBusReview() async {
+    if (_document == null || _isLoading) return;
+
+    if (!_canVerifyBusGate) {
+      final blockers = _busGateBlockers;
+      final issueCount = BusReviewGateEvaluator.computeGuideBusIds(
+        workingNodes: _workingNodes,
+      ).length;
+      setState(() {
+        _stageGateMessage = issueCount > 0
+            ? "아직 번호 확인이 필요한 모선이 ${issueCount}개 있어요. 표시해드릴게요."
+            : (blockers.isNotEmpty ? blockers.first : "확인이 필요한 항목이 남아있습니다.");
+      });
+      _focusNextReviewTask();
+      return;
+    }
+
+    await _verifyBusGate();
+  }
+
+  Future<void> _verifyBusGate() async {
+    if (_document == null) return;
+
+    final gateReady = await _runReviewStageGate(
+      canProceed: () => _canVerifyBusGate,
+      blockers: () => _busGateBlockers,
+    );
+    if (!gateReady) {
+      _focusNextReviewTask();
+      if (mounted) {
+        setState(() {
+          _stageGateMessage = _busGateBlockers.isEmpty
+              ? '마지막 확인에서 다시 볼 모선을 찾았어요. 제가 첫 번째 항목을 가리켰습니다.'
+              : '마지막 확인에서 다음 항목이 남아 있어요:\n• ${_busGateBlockers.join('\n• ')}';
+        });
+      }
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+      _loadingMessage = "모선 번호 Gate 검증 중... 🚪";
+      _stageGateMessage = null;
+    });
+
+    try {
+      final res = await _apiService.verifyBusGate(
+        documentId: _document!.documentId,
+        workingNodes: _workingNodes,
+      );
+
+      final isBusVerified = res['gate_status'] == 'BUS_VERIFIED';
+      final gateMsg = res['message']?.toString();
+
+      setState(() {
+        _isLoading = false;
+        _stageGateMessage = isBusVerified
+            ? null
+            : (gateMsg ?? '모선 Gate에서 다시 확인이 필요해요.');
+      });
+
+      if (mounted) {
+        if (isBusVerified) {
+          PowerLensAIService.instance.clearFocusTargets();
+          await _proceedToConnectionReview();
+        } else {
+          _focusNextReviewTask();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(gateMsg ?? "모선 Gate 차단됨"),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _stageGateMessage = '모선 마지막 확인에 실패했어요. 잠시 후 다시 시도해주세요.';
+        });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("단계 검증 실패: $e"), backgroundColor: Colors.red),
         );
@@ -3278,7 +3236,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                         : _workingNodes,
                                     selectedNode: _selectedNode,
                                     guideNodeIds:
-                                        (_currentPhase == ReviewPhase.objectReview)
+                                        (_currentPhase == ReviewPhase.objectReview ||
+                                            _currentPhase == ReviewPhase.busMappingReview)
                                         ? _calculateGuideNodeIds(focusTargets)
                                         : const {},
                                     openMissingCandidates:
@@ -6334,6 +6293,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             node.busNumber = (raw['bus_number'] as num?)?.toInt();
             node.busNumberStatus =
                 raw['bus_number_status']?.toString() ?? 'UNCERTAIN';
+            node.busNumberReasons = raw['bus_number_reasons'] is List
+                ? (raw['bus_number_reasons'] as List)
+                    .map((reason) => reason.toString())
+                    .toList()
+                : <String>[];
             node.displayLabel =
                 raw['display_name']?.toString() ??
                 raw['display_label']?.toString() ??
@@ -6341,9 +6305,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             node.connectedBusNumber = (raw['connected_bus_number'] as num?)
                 ?.toInt();
             node.connectedBusId = raw['connected_bus_id']?.toString();
-            if (raw['id'] != null) {
-              node.id = raw['id'].toString();
-            }
           }
           final buses = _filteredAndSortedBusNodes;
           _selectedNode = buses.isNotEmpty ? buses.first : null;
@@ -6403,89 +6364,44 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     int newBusNo, {
     bool isDuplicate = false,
   }) {
-    setState(() {
-      final oldBusId = busNode.id;
-      final existingWithSameId = _workingNodes.where(
-        (n) => n.id == "bus_$newBusNo" && n != busNode,
-      );
-      final newBusId = existingWithSameId.isNotEmpty
-          ? "bus_${newBusNo}_${busNode.displayNumber ?? (busNode.hashCode.abs() % 1000)}"
-          : "bus_$newBusNo";
+    // Internal IDs are evidence identifiers. Keep them stable and never derive
+    // them from the human-entered Bus number.
+    final busId = busNode.id;
+    busNode.busNumber = newBusNo;
+    busNode.busNumberStatus = isDuplicate ? 'UNCERTAIN' : 'VERIFIED';
+    busNode.displayLabel = isDuplicate
+        ? "Bus $newBusNo (중복)"
+        : "Bus $newBusNo";
 
-      busNode.id = newBusId;
-      busNode.busNumber = newBusNo;
-      busNode.busNumberStatus = isDuplicate ? 'UNCERTAIN' : 'VERIFIED';
-      busNode.displayLabel = isDuplicate
-          ? "Bus $newBusNo (중복)"
-          : "Bus $newBusNo";
+    // Propagate the number to directly connected generators and loads without
+    // changing any node or line IDs.
+    for (final line in _workingLines) {
+      if (!line.connectedTo.contains(busId)) continue;
 
-      // 1. Update line connections referencing the old bus ID
-      for (final line in _workingLines) {
-        for (int i = 0; i < line.connectedTo.length; i++) {
-          if (line.connectedTo[i] == oldBusId) {
-            line.connectedTo[i] = newBusId;
-          }
+      final otherId = line.connectedTo.first == busId
+          ? (line.connectedTo.length > 1 ? line.connectedTo[1] : null)
+          : line.connectedTo.first;
+      if (otherId == null) continue;
+
+      ReviewNodeItem? otherNode;
+      for (final node in _workingNodes) {
+        if (node.id == otherId) {
+          otherNode = node;
+          break;
         }
       }
+      if (otherNode == null || otherNode.id == busId) continue;
 
-      // 2. Propagate to all connected generators and loads via workingLines
-      for (final line in _workingLines) {
-        if (line.connectedTo.contains(newBusId)) {
-          final otherId = line.connectedTo.first == newBusId
-              ? (line.connectedTo.length > 1 ? line.connectedTo[1] : null)
-              : line.connectedTo.first;
-          if (otherId != null) {
-            final otherNode = _workingNodes.firstWhere(
-              (n) => n.id == otherId,
-              orElse: () => busNode,
-            );
-            if (otherNode.id != busNode.id) {
-              final cls = otherNode.className.toLowerCase();
-              final oldOtherId = otherNode.id;
-              if (cls.contains('gen')) {
-                final newGenId = "gen_$newBusNo";
-                otherNode.id = newGenId;
-                otherNode.busNumber = newBusNo;
-                otherNode.connectedBusNumber = newBusNo;
-                otherNode.connectedBusId = newBusId;
-                otherNode.displayLabel = "G_$newBusNo";
-
-                for (final l in _workingLines) {
-                  for (int i = 0; i < l.connectedTo.length; i++) {
-                    if (l.connectedTo[i] == oldOtherId)
-                      l.connectedTo[i] = newGenId;
-                  }
-                  if (l.connectedTo.contains(newBusId) &&
-                      l.connectedTo.contains(newGenId)) {
-                    l.lineId = "lead_${newBusId}_$newGenId";
-                    l.displayLabel = "Line Bus $newBusNo ↔ G_$newBusNo";
-                  }
-                }
-              } else if (cls.contains('load')) {
-                final newLoadId = "load_$newBusNo";
-                otherNode.id = newLoadId;
-                otherNode.busNumber = newBusNo;
-                otherNode.connectedBusNumber = newBusNo;
-                otherNode.connectedBusId = newBusId;
-                otherNode.displayLabel = "Load_$newBusNo";
-
-                for (final l in _workingLines) {
-                  for (int i = 0; i < l.connectedTo.length; i++) {
-                    if (l.connectedTo[i] == oldOtherId)
-                      l.connectedTo[i] = newLoadId;
-                  }
-                  if (l.connectedTo.contains(newBusId) &&
-                      l.connectedTo.contains(newLoadId)) {
-                    l.lineId = "lead_${newBusId}_$newLoadId";
-                    l.displayLabel = "Line Bus $newBusNo ↔ Load_$newBusNo";
-                  }
-                }
-              }
-            }
-          }
-        }
+      final cls = otherNode.className.toLowerCase();
+      if (cls.contains('gen') || cls.contains('load')) {
+        otherNode.busNumber = newBusNo;
+        otherNode.connectedBusNumber = newBusNo;
+        otherNode.connectedBusId = busId;
+        otherNode.displayLabel = cls.contains('gen')
+            ? "G_$newBusNo"
+            : "Load_$newBusNo";
       }
-    });
+    }
   }
 
   Widget _buildBusMappingReviewSidePanel() {
@@ -6504,12 +6420,26 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _buildBusMappingQueueHeader(),
         const SizedBox(height: 12),
 
-        // 2. Selected Bus Detail Editor (Sequential 1-by-1 Focus Card)
+        // 2. Selected Bus Detail Editor (Bus Inspector V2)
         if (_selectedNode != null &&
             _selectedNode!.className.toLowerCase() == 'bus')
-          _buildSelectedBusMappingCard(_selectedNode!)
+          BusInspectorView(
+            key: ValueKey('BusInspector_${_selectedNode!.id}'),
+            node: _selectedNode!,
+            allBuses: _busNodes,
+            connectedGens: _getConnectedGensForBus(_selectedNode!),
+            connectedLoads: _getConnectedLoadsForBus(_selectedNode!),
+            onApplyNumber: (num) => _handleApplyBusNumber(_selectedNode!, num),
+          )
         else if (buses.isNotEmpty)
-          _buildSelectedBusMappingCard(buses.first)
+          BusInspectorView(
+            key: ValueKey('BusInspector_${buses.first.id}'),
+            node: buses.first,
+            allBuses: _busNodes,
+            connectedGens: _getConnectedGensForBus(buses.first),
+            connectedLoads: _getConnectedLoadsForBus(buses.first),
+            onApplyNumber: (num) => _handleApplyBusNumber(buses.first, num),
+          )
         else
           _buildNoSelectionPrompt("모선(Bus)"),
 
@@ -6640,65 +6570,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     visualDensity: VisualDensity.compact,
                   ),
                 ),
-                const SizedBox(width: 4),
-                OutlinedButton.icon(
-                  key: _busWholeApproveKey,
-                  onPressed: () {
-                    setState(() {
-                      final counts = <int, int>{};
-                      for (var b in _busNodes) {
-                        if (b.busNumber != null) {
-                          counts[b.busNumber!] =
-                              (counts[b.busNumber!] ?? 0) + 1;
-                        }
-                      }
-                      int approvedCount = 0;
-                      int skippedDups = 0;
-                      for (var b in _busNodes) {
-                        if (b.busNumber != null) {
-                          if ((counts[b.busNumber!] ?? 0) == 1) {
-                            b.busNumberStatus = 'VERIFIED';
-                            _propagateBusNumber(b, b.busNumber!);
-                            approvedCount++;
-                          } else {
-                            b.busNumberStatus = 'UNCERTAIN';
-                            skippedDups++;
-                          }
-                        }
-                      }
-                      if (skippedDups > 0) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              "중복 번호($skippedDups개)는 일괄 승인에서 제외되었습니다. 각각 고유 번호로 지정해 주세요.",
-                            ),
-                            backgroundColor: Colors.orange,
-                          ),
-                        );
-                      } else {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              "✓ $approvedCount개 모선 번호가 모두 승인되었습니다.",
-                            ),
-                            backgroundColor: Colors.green,
-                          ),
-                        );
-                      }
-                    });
-                  },
-                  icon: const Icon(Icons.done_all, size: 12),
-                  label: const Text("전체 승인", style: TextStyle(fontSize: 10)),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: const Color(0xFF2563EB),
-                    side: const BorderSide(color: Color(0xFF93C5FD)),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 6,
-                      vertical: 4,
-                    ),
-                    visualDensity: VisualDensity.compact,
-                  ),
-                ),
               ],
             ),
           ],
@@ -6714,14 +6585,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             ),
             const SizedBox(width: 6),
             _buildBusFilterBadge(
-              "검토 필요",
+              "확인 필요",
               _busUncertainCount,
               const Color(0xFFD97706),
               'UNCERTAIN',
             ),
             const SizedBox(width: 6),
             _buildBusFilterBadge(
-              "승인 완료",
+              "확인됨",
               _busVerifiedCount,
               const Color(0xFF16A34A),
               'VERIFIED',
@@ -6794,370 +6665,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildSelectedBusMappingCard(ReviewNodeItem busNode) {
-    final isVerified = busNode.busNumberStatus == 'VERIFIED';
-    final buses = _filteredAndSortedBusNodes;
-    final currentIndex = buses.indexOf(busNode);
-    final totalCount = buses.length;
-
-    final connectedGens = <ReviewNodeItem>[];
-    final connectedLoads = <ReviewNodeItem>[];
-
-    for (final line in _workingLines) {
-      if (line.connectedTo.contains(busNode.id)) {
-        final otherId = line.connectedTo.first == busNode.id
-            ? (line.connectedTo.length > 1 ? line.connectedTo[1] : null)
-            : line.connectedTo.first;
-        if (otherId != null) {
-          final other = _workingNodes.firstWhere(
-            (n) => n.id == otherId,
-            orElse: () => busNode,
-          );
-          if (other.id != busNode.id) {
-            if (other.className.toLowerCase().contains('gen'))
-              connectedGens.add(other);
-            if (other.className.toLowerCase().contains('load'))
-              connectedLoads.add(other);
-          }
-        }
-      }
-    }
-
-    final candidates = <int>{};
-    if (busNode.suggestedBusNumber != null)
-      candidates.add(busNode.suggestedBusNumber!);
-    if (busNode.busNumber != null) candidates.add(busNode.busNumber!);
-    if (busNode.displayNumber != null) candidates.add(busNode.displayNumber!);
-    final idDigits = RegExp(r'\d+')
-        .allMatches(busNode.id)
-        .map((m) => int.tryParse(m.group(0)!))
-        .whereType<int>();
-    candidates.addAll(idDigits);
-
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: isVerified ? const Color(0xFF86EFAC) : const Color(0xFFBFDBFE),
-          width: 1.5,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 1. Sequential Progress Bar & Indicator
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                "⚡ 모선 번호 확인 (순차 집중 모드)",
-                style: TextStyle(
-                  color: Color(0xFF334155),
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              Text(
-                totalCount > 0 ? "$totalCount개 중 ${currentIndex + 1}번째" : "",
-                style: const TextStyle(
-                  color: Color(0xFF2563EB),
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(3),
-            child: LinearProgressIndicator(
-              value: totalCount > 0
-                  ? ((currentIndex + 1) / totalCount).clamp(0.0, 1.0)
-                  : 1.0,
-              minHeight: 5,
-              backgroundColor: const Color(0xFFE2E8F0),
-              valueColor: const AlwaysStoppedAnimation(Color(0xFF2563EB)),
-            ),
-          ),
-          const SizedBox(height: 12),
-
-          // 2. Hero Bus Banner
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(
-                color: isVerified
-                    ? const Color(0xFF86EFAC)
-                    : const Color(0xFFBFDBFE),
-                width: 1.5,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color:
-                      (isVerified
-                              ? const Color(0xFF16A34A)
-                              : const Color(0xFF2563EB))
-                          .withValues(alpha: 0.08),
-                  blurRadius: 6,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: isVerified
-                        ? const Color(0xFFDCFCE7)
-                        : const Color(0xFFEFF6FF),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Icon(
-                    Icons.numbers_rounded,
-                    color: isVerified
-                        ? const Color(0xFF16A34A)
-                        : const Color(0xFF2563EB),
-                    size: 24,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        busNode.busNumber != null
-                            ? "Bus #${busNode.busNumber}"
-                            : "Bus 번호 미지정",
-                        style: const TextStyle(
-                          color: Color(0xFF0F172A),
-                          fontSize: 20,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: -0.5,
-                        ),
-                      ),
-                      Text(
-                        "도면 객체 ID: ${busNode.id} · ${isVerified ? '✓ 승인 완료' : '⚠️ 확인 필요'}",
-                        style: TextStyle(
-                          color: isVerified
-                              ? const Color(0xFF16A34A)
-                              : const Color(0xFFD97706),
-                          fontSize: 10.5,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 10),
-
-          // 3. OCR Candidates Chips
-          if (candidates.isNotEmpty) ...[
-            Wrap(
-              spacing: 6,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              children: [
-                const Text(
-                  "추천 번호: ",
-                  style: TextStyle(
-                    color: Color(0xFF64748B),
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                ...candidates.map(
-                  (cand) => ActionChip(
-                    visualDensity: VisualDensity.compact,
-                    label: Text(
-                      "#$cand",
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    backgroundColor: const Color(0xFFEFF6FF),
-                    side: const BorderSide(color: Color(0xFF93C5FD)),
-                    onPressed: () {
-                      _busNumberEditController.text = cand.toString();
-                      setState(() {});
-                    },
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-          ],
-
-          // 4. Bus Number Input Field
-          SizedBox(
-            height: 38,
-            child: TextField(
-              controller: _busNumberEditController,
-              keyboardType: TextInputType.number,
-              style: const TextStyle(
-                color: Color(0xFF0F172A),
-                fontSize: 13,
-                fontWeight: FontWeight.bold,
-              ),
-              decoration: InputDecoration(
-                labelText: "모선 번호 (Bus Number)",
-                labelStyle: const TextStyle(
-                  color: Color(0xFF64748B),
-                  fontSize: 11,
-                ),
-                filled: true,
-                fillColor: Colors.white,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 8,
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(6),
-                  borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(6),
-                  borderSide: const BorderSide(
-                    color: Color(0xFF2563EB),
-                    width: 1.5,
-                  ),
-                ),
-              ),
-              onSubmitted: (_) => _approveAndNextBus(busNode),
-            ),
-          ),
-          const SizedBox(height: 10),
-
-          // 5. Big Primary Action CTA
-          GlowingTargetWrapper(
-            targetId: 'bus_input',
-            borderRadius: BorderRadius.circular(8),
-            guideLabel: "✨ 승인하고 다음 모선으로",
-            child: ElevatedButton.icon(
-              key: _busPrimaryActionKey,
-              onPressed: () => _approveAndNextBus(busNode),
-              icon: const Icon(Icons.check_circle_outline, size: 18),
-              label: const Text(
-                "승인하고 다음 모선으로 (Enter ➔)",
-                style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
-              ),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF2563EB),
-                foregroundColor: Colors.white,
-                minimumSize: const Size(double.infinity, 40),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-
-          // 6. Secondary Navigation Row
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _selectPreviousBus,
-                  icon: const Icon(Icons.arrow_back, size: 13),
-                  label: const Text("이전 (◀)", style: TextStyle(fontSize: 11)),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    side: const BorderSide(color: Color(0xFFCBD5E1)),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: _skipAndNextBus,
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    side: const BorderSide(color: Color(0xFFCBD5E1)),
-                  ),
-                  child: const Text(
-                    "건너뛰기",
-                    style: TextStyle(fontSize: 11, color: Color(0xFF64748B)),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _selectNextBus,
-                  icon: const Icon(Icons.arrow_forward, size: 13),
-                  label: const Text("다음 (▶)", style: TextStyle(fontSize: 11)),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    side: const BorderSide(color: Color(0xFFCBD5E1)),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-
-          // 7. Connected Devices Summary
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: const Color(0xFFE2E8F0)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  "⚡ 직결된 발전기/부하 명명 현황:",
-                  style: TextStyle(
-                    color: Color(0xFF334155),
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                if (connectedGens.isEmpty && connectedLoads.isEmpty)
-                  const Text(
-                    "• 직결된 발전기/부하 없음 (단독 모선)",
-                    style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10),
-                  )
-                else ...[
-                  if (connectedGens.isNotEmpty)
-                    Text(
-                      "• 발전기: ${connectedGens.map((g) => g.effectiveDisplayLabel).join(', ')}",
-                      style: const TextStyle(
-                        color: Color(0xFF16A34A),
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  if (connectedLoads.isNotEmpty)
-                    Text(
-                      "• 부하: ${connectedLoads.map((l) => l.effectiveDisplayLabel).join(', ')}",
-                      style: const TextStyle(
-                        color: Color(0xFF0284C7),
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                ],
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -7676,13 +7183,16 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   child: GlowingTargetWrapper(
                     targetId: 'bus_gate',
                     borderRadius: BorderRadius.circular(8),
-                    guideLabel: "✨ 모선 번호 승인",
+                    guideLabel: "✨ 모선 검수 완료",
                     child: ElevatedButton.icon(
-                      onPressed: _canVerifyBusGate ? _proceedToConnectionReview : null,
-                      icon: const Icon(Icons.arrow_forward, size: 16),
-                      label: const Text("모선 번호 승인 ➔ 다음: 선로 결선 인식 및 검수"),
+                      key: const ValueKey('BusCompleteButton'),
+                      onPressed: _completeBusReview,
+                      icon: const Icon(Icons.check_circle_outline, size: 16),
+                      label: const Text("모선 검수 완료"),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF2563EB),
+                        backgroundColor: _canVerifyBusGate
+                            ? const Color(0xFF16A34A)
+                            : const Color(0xFF2563EB),
                         foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 12),
                       ),

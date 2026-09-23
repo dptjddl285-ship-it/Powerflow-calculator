@@ -574,30 +574,33 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
       case 'HOME':
         return ['샘플 도면 불러줘', '사진 다시 넣을래', '이 단계에서 뭘 해야 해?'];
       case 'OBJECT_REVIEW':
-        final hasIssues = widget.assistantContext.suspiciousObjects > 0 ||
+        final hasIssues =
+            widget.assistantContext.suspiciousObjects > 0 ||
             widget.assistantContext.unresolvedMissingCandidates > 0;
         return [
           hasIssues
               ? '검토 필요 항목 (${widget.assistantContext.suspiciousObjects})'
               : '객체 검수 완료하기',
           '다음 단계로 넘어가',
-          '이 단계에서 뭘 해야 해?'
+          '이 단계에서 뭘 해야 해?',
         ];
       case 'BUS_MAPPING':
-        final hasBusIssues = widget.assistantContext.unresolvedBusNumbers > 0 ||
+        final hasBusIssues =
+            widget.assistantContext.unresolvedBusNumbers > 0 ||
             widget.assistantContext.duplicateBusNumbers > 0;
         return [
-          hasBusIssues ? '미지정 모선 확인' : '모선 번호 승인하기',
+          hasBusIssues ? '미지정 모선 확인' : '모선 검수 완료하기',
           '다음 단계로 넘어가',
-          '이 단계에서 뭘 해야 해?'
+          '이 단계에서 뭘 해야 해?',
         ];
       case 'CONNECTION_REVIEW':
-        final hasConnIssues = widget.assistantContext.ambiguousConnections > 0 ||
+        final hasConnIssues =
+            widget.assistantContext.ambiguousConnections > 0 ||
             widget.assistantContext.topologyIssueCount > 0;
         return [
           hasConnIssues ? '연결 오류 점검' : '결선 검수 완료하기',
           '다음 단계로 넘어가',
-          '이 단계에서 뭘 해야 해?'
+          '이 단계에서 뭘 해야 해?',
         ];
       case 'FINAL':
       case 'FINAL_CAD':

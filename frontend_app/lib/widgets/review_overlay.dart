@@ -581,6 +581,9 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                 width: guideW,
                                 height: guideH,
                                 child: GestureDetector(
+                                  key: isBus
+                                      ? ValueKey('BusGuideBox_${node.id}')
+                                      : null,
                                   onTap: () => widget.onSelectNode(node),
                                   child: Container(
                                     decoration: BoxDecoration(
@@ -619,20 +622,20 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                               .withValues(alpha: 0.95),
                                           borderRadius: BorderRadius.circular(2),
                                         ),
-                                        child: const FittedBox(
+                                        child: FittedBox(
                                           fit: BoxFit.scaleDown,
                                           child: Row(
                                             mainAxisSize: MainAxisSize.min,
                                             children: [
-                                              Icon(
+                                              const Icon(
                                                 Icons.help_outline,
                                                 size: 7.5,
                                                 color: Colors.white,
                                               ),
-                                              SizedBox(width: 1.5),
+                                              const SizedBox(width: 1.5),
                                               Text(
-                                                '확인 필요',
-                                                style: TextStyle(
+                                                isBus ? '번호 확인 필요' : '확인 필요',
+                                                style: const TextStyle(
                                                   color: Colors.white,
                                                   fontSize: 6.8,
                                                   fontWeight: FontWeight.bold,

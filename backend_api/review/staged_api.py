@@ -35,6 +35,7 @@ from review.schemas import (
     ValidateTopologyRequest,
     VerifyFinalGateRequest,
     VerifyObjectsGateRequest,
+    VerifyBusGateRequest,
 )
 from agent import (
     chat_reviewer,
@@ -272,6 +273,123 @@ async def review_verify_objects_gate(request: VerifyObjectsGateRequest):
             "unconfirmed_count": 0,
             "human_completeness_confirmed": True,
             "message": "모든 객체 검수 및 도면 완결성 검증이 완료되었습니다. (OBJECT VERIFIED)",
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ==========================================
+# 🚪 [Review API 4-B] Bus Gate 검증 (Bus Mapping V2)
+# ==========================================
+@router.post("/review/verify_bus_gate")
+async def review_verify_bus_gate(request: VerifyBusGateRequest):
+    print(
+        f"\n🚪 [Bus Gate 검증 요청] Document: {request.document_id}, "
+        f"Working nodes: {len(request.working_nodes)}"
+    )
+    try:
+        bus_nodes = [
+            n for n in request.working_nodes
+            if (n.get("class") or n.get("className") or "").lower() == "bus"
+            and str(n.get("review_status", n.get("reviewStatus", ""))).upper() != "REJECTED"
+        ]
+
+        blockers = []
+        focus_node_ids = []
+
+        if len(bus_nodes) == 0:
+            blockers.append("도면 내 유효한 모선(Bus) 객체가 없습니다.")
+            return {
+                "status": "success",
+                "gate_status": "BLOCKED",
+                "message": "도면 내 유효한 모선(Bus) 객체가 없습니다.",
+                "blockers": blockers,
+                "focus_node_ids": focus_node_ids,
+                "bus_summary": {
+                    "total_buses": 0,
+                    "verified_buses": 0,
+                    "issue_buses": 0,
+                    "duplicates": [],
+                },
+            }
+
+        # Check duplicates
+        num_counts = {}
+        for b in bus_nodes:
+            num = b.get("bus_number", b.get("busNumber"))
+            if num is not None and isinstance(num, int) and num > 0:
+                num_counts[num] = num_counts.get(num, 0) + 1
+        duplicates = [num for num, cnt in num_counts.items() if cnt > 1]
+
+        missing_number_buses = []
+        invalid_number_buses = []
+        duplicate_buses = []
+        uncertain_status_buses = []
+
+        for b in bus_nodes:
+            bid = b.get("id", "")
+            num = b.get("bus_number", b.get("busNumber"))
+            status = str(
+                b.get("bus_number_status", b.get("busNumberStatus", ""))
+            ).upper()
+            reasons = b.get("bus_number_reasons", b.get("busNumberReasons")) or []
+            has_active_dup_reason = any(str(r).startswith("DUPLICATE_BUS_NUMBER_") for r in reasons)
+
+            is_issue = False
+            if num is None:
+                missing_number_buses.append(bid)
+                is_issue = True
+            elif not isinstance(num, int) or num <= 0:
+                invalid_number_buses.append(bid)
+                is_issue = True
+            elif num in duplicates or has_active_dup_reason:
+                duplicate_buses.append(bid)
+                is_issue = True
+            elif status == "UNCERTAIN":
+                uncertain_status_buses.append(bid)
+                is_issue = True
+
+            if is_issue and bid not in focus_node_ids:
+                focus_node_ids.append(bid)
+
+        if duplicates or duplicate_buses:
+            dup_nums_str = ", ".join(f"#{d}" for d in duplicates) if duplicates else "확인 필요"
+            blockers.append(f"중복된 모선 번호({dup_nums_str})가 존재합니다. 각각 고유한 번호로 수정해 주세요.")
+        if missing_number_buses:
+            blockers.append(f"번호가 미지정된 모선({len(missing_number_buses)}개)이 있습니다.")
+        if invalid_number_buses:
+            blockers.append(f"유효하지 않은 번호(0 이하)를 가진 모선({len(invalid_number_buses)}개)이 있습니다.")
+        if uncertain_status_buses:
+            blockers.append(f"판독 상태가 불확실(UNCERTAIN)한 모선({len(uncertain_status_buses)}개)이 있습니다.")
+
+        total_buses = len(bus_nodes)
+        issue_count = len(focus_node_ids)
+        verified_count = total_buses - issue_count
+
+        bus_summary = {
+            "total_buses": total_buses,
+            "verified_buses": verified_count,
+            "issue_buses": issue_count,
+            "duplicates": duplicates,
+        }
+
+        if blockers:
+            return {
+                "status": "success",
+                "gate_status": "BLOCKED",
+                "message": blockers[0] if len(blockers) == 1 else f"모선 확인 필요 항목 {issue_count}건이 남아있어 결선 단계로 진행할 수 없습니다.",
+                "blockers": blockers,
+                "focus_node_ids": focus_node_ids,
+                "bus_summary": bus_summary,
+            }
+
+        return {
+            "status": "success",
+            "gate_status": "BUS_VERIFIED",
+            "message": "모든 모선 번호가 유효하고 고유하게 확인되었습니다. (BUS VERIFIED)",
+            "blockers": [],
+            "focus_node_ids": [],
+            "bus_summary": bus_summary,
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
