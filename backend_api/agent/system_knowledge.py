@@ -122,7 +122,7 @@ Lensy가 반환할 수 있는 action_id는 오직 다음으로 한정됩니다:
   - LINE: working_lines에 존재하는 선로 ID
   - CANDIDATE: missing_candidates에 존재하는 누락 후보 ID
   - ISSUE: topology_issues에 존재하는 결선 이슈 ID
-  - UI: 허용된 highlight UI 타깃 ID (예: object_approve, final_powerflow 등)
+  - UI: 허용된 highlight UI 타깃 ID (예: final_powerflow, object_gate 등)
   - 반드시 현재 context의 working_nodes, working_lines, missing_candidates, topology_issues에 실제로 존재하는 ID만 매핑해야 하며, 가상의 ID(node_999 등)를 절대 만들어내지 마세요.
 """
 
@@ -150,9 +150,7 @@ VALID_HIGHLIGHT_TARGETS = {
     # Home & Shared
     "home_upload",
     "sample_diagram",
-    # Object Review
-    "object_approve",
-    "object_batch_approve",
+    # Object Review (V2: only missing_candidates and object_gate; suspicious nodes handled by visual guide box)
     "missing_candidates",
     "object_gate",
     # Bus Mapping

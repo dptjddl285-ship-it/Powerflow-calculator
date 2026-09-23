@@ -575,6 +575,7 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                             // AI Guide Box (Padded soft glowing highlight for suspicious / focus targets)
                             if (isGuide)
                               Positioned(
+                                key: ValueKey('ObjectGuideBox_${node.id}'),
                                 left: guideLeft,
                                 top: guideTop,
                                 width: guideW,
@@ -618,24 +619,27 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                               .withValues(alpha: 0.95),
                                           borderRadius: BorderRadius.circular(2),
                                         ),
-                                        child: Row(
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: const [
-                                            Icon(
-                                              Icons.help_outline,
-                                              size: 7.5,
-                                              color: Colors.white,
-                                            ),
-                                            SizedBox(width: 1.5),
-                                            Text(
-                                              '확인 필요',
-                                              style: TextStyle(
+                                        child: const FittedBox(
+                                          fit: BoxFit.scaleDown,
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(
+                                                Icons.help_outline,
+                                                size: 7.5,
                                                 color: Colors.white,
-                                                fontSize: 6.8,
-                                                fontWeight: FontWeight.bold,
                                               ),
-                                            ),
-                                          ],
+                                              SizedBox(width: 1.5),
+                                              Text(
+                                                '확인 필요',
+                                                style: TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 6.8,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
                                         ),
                                       ),
                                     ),

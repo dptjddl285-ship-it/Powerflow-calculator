@@ -278,6 +278,71 @@ class MissingCandidateItem {
   }
 }
 
+class ObjectReviewGateEvaluator {
+  static List<String> getBlockers({
+    required List<ReviewNodeItem> workingNodes,
+    required List<MissingCandidateItem> missingCandidates,
+  }) {
+    final blockers = <String>[];
+    final validNodes =
+        workingNodes.where((n) => n.reviewStatus != 'REJECTED').toList();
+    if (validNodes.isEmpty) {
+      blockers.add("유효한 전력 설비 심볼이 없습니다.");
+    }
+    final suspiciousNodes =
+        validNodes.where((n) => n.reviewStatus == 'SUSPICIOUS').toList();
+    if (suspiciousNodes.isNotEmpty) {
+      blockers.add("확인이 필요한 의심 객체(${suspiciousNodes.length}개)가 남아 있습니다.");
+    }
+    final unresolvedCands =
+        missingCandidates.where((c) => c.status == 'OPEN').toList();
+    if (unresolvedCands.isNotEmpty) {
+      blockers.add("미해결된 누락 의심 영역(${unresolvedCands.length}개)이 있습니다.");
+    }
+    return blockers;
+  }
+
+  static bool canVerifyGate({
+    required List<ReviewNodeItem> workingNodes,
+    required List<MissingCandidateItem> missingCandidates,
+  }) {
+    return getBlockers(
+      workingNodes: workingNodes,
+      missingCandidates: missingCandidates,
+    ).isEmpty;
+  }
+
+  static Set<String> computeGuideNodeIds({
+    required List<ReviewNodeItem> workingNodes,
+    List<Map<String, dynamic>>? focusTargets,
+  }) {
+    final ids = <String>{};
+    for (final node in workingNodes) {
+      if (node.reviewStatus == 'SUSPICIOUS') {
+        ids.add(node.id);
+      }
+    }
+    if (focusTargets != null) {
+      final nodeMap = {for (final n in workingNodes) n.id: n};
+      for (final target in focusTargets) {
+        final type = target['type']?.toString().toUpperCase();
+        final id = target['id']?.toString();
+        if (type == 'OBJECT' && id != null) {
+          final node = nodeMap[id];
+          // Fabricated ID protection: node must actually exist in workingNodes
+          // Resolved protection: if node is already CONFIRMED or REJECTED, do not retain review warning guide
+          if (node != null &&
+              node.reviewStatus != 'REJECTED' &&
+              node.reviewStatus != 'CONFIRMED') {
+            ids.add(id);
+          }
+        }
+      }
+    }
+    return ids;
+  }
+}
+
 class CompletenessReviewResult {
   final String assessment;
   final String messageKo;

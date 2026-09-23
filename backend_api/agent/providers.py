@@ -213,8 +213,8 @@ def sanitize_and_validate_agent_response(
     else:
         res["highlight_target"] = None
 
-    # In OBJECT_REVIEW stage, suppress legacy object_approve highlight target
-    if (stage or "").upper() == "OBJECT_REVIEW" and res.get("highlight_target") == "object_approve":
+    # In OBJECT_REVIEW stage, suppress legacy object_approve / object_batch_approve highlight targets
+    if (stage or "").upper() == "OBJECT_REVIEW" and res.get("highlight_target") in ("object_approve", "object_batch_approve"):
         res["highlight_target"] = None
 
     if res.get("action_id") == "RUN_POWER_FLOW" and not res.get("highlight_target"):
@@ -864,33 +864,30 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
         elif stage_upper == "OBJECT_REVIEW":
             suspicious_count = len([n for n in w_nodes if (n.get("review_status") or n.get("status")) == "SUSPICIOUS"])
             open_cand_count = len([c for c in cands if c.get("status") == "OPEN"])
-            unconfirmed_count = len([n for n in w_nodes if (n.get("review_status") or n.get("status")) not in ("CONFIRMED", "REJECTED")])
             reply = "🧭 **[다음 단계 진행 가이드 - ① 객체 검수]:**\n"
-            if suspicious_count == 0 and open_cand_count == 0:
-                if unconfirmed_count > 0:
-                    target = "object_batch_approve"
-                    reply += "✓ 모든 인식된 객체가 정상 기호로 판정되었습니다 (검토 필요 0건)!\n"
-                    reply += "• 모든 객체 인식이 다 잘 되었을 경우 우측 사이드바의 **[정상 객체 일괄 승인]** (또는 [정상 객체 전체 승인]) 버튼을 누르면 됩니다.\n"
-                    reply += "• 일괄 승인 확정 후, 하단의 파란색 **[객체 검수 완료 (Gate 통과)]** 버튼을 눌러 바로 **[다음: ② 모선 번호 매핑]** 단계로 진행하세요."
-                else:
-                    target = "object_gate"
-                    reply += "✓ 모든 객체 검수가 완료되었습니다!\n"
-                    reply += "• 하단의 파란색 **[객체 검수 완료 (Gate 통과)]** 버튼을 눌러 **[다음: ② 모선 번호 매핑]** 단계로 진행하세요."
-            elif suspicious_count == 0 and open_cand_count > 0:
+            if suspicious_count > 0:
+                target = None
+                dec = "HUMAN_CHECK"
+                reply += (
+                    f"⚠️ 도면에 확인이 필요한 의심 객체가 **{suspicious_count}건** 표시되어 있습니다.\n"
+                    "• 도면에 표시된 확인 필요 객체를 클릭해 **[맞음]** 또는 **[수정]**으로 확인해주세요.\n"
+                    "• 모든 의심 객체 확인 후 하단의 **[객체 검수 완료]**(Gate 통과)를 눌러 다음 단계로 진행하세요."
+                )
+            elif open_cand_count > 0:
                 target = "missing_candidates"
                 dec = "HUMAN_CHECK"
-                reply += f"⚠️ 의심 객체는 없으나, AI가 단선도 분석 중 누락 가능성이 있는 설비 후보가 **{open_cand_count}건**(예: 변압기 등) 감지되어 있습니다.\n"
-                reply += "• **도면에 원래 해당 설비가 없는 경우**: 화면 상단의 보라색 **[누락 후보]** 배지나 좌측 카드의 **[문제 없음]** 버튼을 누르시면 즉시 통과됩니다.\n"
-                reply += "• **실제 존재하는 경우**: **[수동 추가]**를 눌러 도면에서 직접 지정하세요.\n"
-                reply += "• 누락 후보 처리가 끝나면 하단 **[객체 검수 완료 (Gate 통과)]**를 눌러 **[다음: ② 모선 번호 매핑]** 단계로 진행하실 수 있습니다."
+                reply += (
+                    f"⚠️ 누락 가능성이 있는 설비 후보가 **{open_cand_count}건** 감지되어 있습니다.\n"
+                    "• 상단 보라색 **[누락 후보]** 배지나 카드를 눌러 **[문제 없음]** 또는 **[수동 추가]**를 진행하세요.\n"
+                    "• 누락 후보 처리가 끝나면 하단 **[객체 검수 완료]**(Gate 통과)를 눌러 다음 단계로 진행하세요."
+                )
             else:
-                target = "object_approve"
-                dec = "HUMAN_CHECK"
-                reply += f"1. 우선 검토 객체 확인 (남은 의심 객체: **{suspicious_count}개**)\n"
-                reply += f"2. 누락 설비 후보 확인 (남은 미확인 후보: **{open_cand_count}개**)\n"
-                reply += "3. 화면 우측에서 의심 객체를 확인하고 **[승인하고 다음 (Enter)]** 또는 [제외]로 검수\n"
-                reply += "4. 정상 객체들은 우측의 **[정상 객체 일괄 승인]** 버튼으로 한 번에 승인할 수 있습니다.\n"
-                reply += "5. 모든 객체 확인 완료 후 하단 **[객체 검수 완료 (Gate 통과)]** 클릭 ➔ **[다음: ② 모선 번호 매핑]** 단계로 이동"
+                target = "object_gate"
+                dec = "PROCEED"
+                reply += (
+                    "✓ 모든 객체 검토가 완료되었습니다!\n"
+                    "• 전체 도면을 한 번 확인한 뒤 하단의 파란색 **[객체 검수 완료]**(Gate 통과) 버튼을 눌러주세요."
+                )
         elif stage_upper in ("BUS_MAPPING_REVIEW", "BUS_MAPPING"):
             uncertain_buses = len([n for n in w_nodes if (n.get("class") or n.get("className")) == "bus" and (n.get("bus_number") is None or n.get("bus_number_status") == "UNCERTAIN")])
             reply = "🧭 **[다음 단계 진행 가이드 - ② 모선 번호 매핑]:**\n"

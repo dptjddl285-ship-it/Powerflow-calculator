@@ -33,7 +33,9 @@ void main() {
           {'id': 'G1', 'status': 'PENDING'},
         ],
       );
-      expect(service.determineTargetForContext(objCtx), 'object_approve');
+      expect(service.determineTargetForContext(objCtx), isNull);
+      expect(service.determineTargetForContext(objCtx), isNot('object_approve'));
+      expect(service.determineTargetForContext(objCtx), isNot('object_batch_approve'));
 
       // Object Review with all confirmed
       const objDoneCtx = PowerLensAssistantContext(
@@ -135,7 +137,7 @@ void main() {
           {'id': 'G1', 'status': 'DETECTED'},
         ],
       );
-      expect(service.determineTargetForContext(cleanObjCtx), 'object_batch_approve');
+      expect(service.determineTargetForContext(cleanObjCtx), 'object_gate');
     });
 
     test('resolveIntentActions handles approveAllClean command vs how-to question', () {
@@ -143,10 +145,17 @@ void main() {
         currentScreen: 'REVIEW_PAGE',
         workflowStage: 'object_review',
       );
-      // Explicit commands trigger execution
-      expect(service.resolveIntentActions('일괄 승인해줘', objCtx), [PowerLensAppAction.approveAllClean]);
-      expect(service.resolveIntentActions('정상 객체 전체 승인', objCtx), [PowerLensAppAction.approveAllClean]);
-      expect(service.resolveIntentActions('한 번에 다 승인', objCtx), [PowerLensAppAction.approveAllClean]);
+      // In Object Review V2, batch approve is suppressed
+      expect(service.resolveIntentActions('일괄 승인해줘', objCtx), isEmpty);
+
+      // In other stages (e.g. Bus Mapping), approveAllClean remains supported
+      const busCtx = PowerLensAssistantContext(
+        currentScreen: 'REVIEW_PAGE',
+        workflowStage: 'bus_mapping',
+      );
+      expect(service.resolveIntentActions('일괄 승인해줘', busCtx), [PowerLensAppAction.approveAllClean]);
+      expect(service.resolveIntentActions('정상 객체 전체 승인', busCtx), [PowerLensAppAction.approveAllClean]);
+      expect(service.resolveIntentActions('한 번에 다 승인', busCtx), [PowerLensAppAction.approveAllClean]);
 
       // How-to / Where questions resolve to explainCurrentStage (guidance + glowing highlight, NO auto execution)
       expect(service.resolveIntentActions('전체 승인할려면 뭐눌러야해??', objCtx), [PowerLensAppAction.explainCurrentStage]);
