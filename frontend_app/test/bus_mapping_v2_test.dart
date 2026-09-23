@@ -722,6 +722,7 @@ void main() {
       const busCtx = PowerLensAssistantContext(
         currentScreen: 'REVIEW_PAGE',
         workflowStage: 'BUS_MAPPING',
+        totalBuses: 1,
         unresolvedBusNumbers: 1,
       );
       final reply = service.generateOfflineFallbackReply('전체 승인해줘', busCtx);
@@ -803,5 +804,107 @@ void main() {
         ['bus_1'],
       );
     });
+
+    test('TEST AA: zero active Bus is a UI blocker, never clean', () {
+      final state = BusReviewUiState.fromNodes(const []);
+
+      expect(state.totalBuses, 0);
+      expect(state.issueBuses, 0);
+      expect(state.isBlocked, isTrue);
+      expect(state.nextActionText, BusReviewUiState.noActiveBusMessage);
+      expect(state.nextActionText, isNot(contains('모선 번호 확인이 완료')));
+    });
+
+    test('TEST AB: zero active Bus offline Lensy guidance is a blocker', () {
+      final service = PowerLensAIService.instance;
+      const zeroBusContext = PowerLensAssistantContext(
+        currentScreen: 'REVIEW_PAGE',
+        workflowStage: 'BUS_MAPPING',
+        workingNodes: [],
+      );
+      final reply = service.generateOfflineFallbackReply(
+        '다음에 뭐 해?',
+        zeroBusContext,
+      );
+
+      expect(reply, contains(BusReviewUiState.noActiveBusMessage));
+      expect(reply, isNot(contains('모선 번호 확인이 완료')));
+      expect(reply, isNot(contains('확인 필요: **0개**')));
+    });
+
+    test('TEST AC: zero active Bus keeps the production Gate blocked', () {
+      expect(BusReviewGateEvaluator.canVerifyGate(workingNodes: []), isFalse);
+      expect(
+        BusReviewGateEvaluator.getSpeechBubbleText(workingNodes: []),
+        contains('유효한 모선'),
+      );
+    });
+
+    test('TEST AD: VERIFIED number 0 remains an issue row', () {
+      final invalid = makeBus(
+        id: 'bus_invalid_verified',
+        busNumber: 0,
+        busNumberStatus: 'VERIFIED',
+      );
+
+      expect(
+        BusReviewUiState.rowBadgeText(node: invalid, workingNodes: [invalid]),
+        '검토필요',
+      );
+      expect(BusReviewUiState.fromNodes([invalid]).issueBuses, 1);
+    });
+
+    test(
+      'TEST AE: unique number with active duplicate reason is an issue row',
+      () {
+        final reasonBus = makeBus(
+          id: 'bus_row_duplicate_reason',
+          busNumber: 5,
+          busNumberStatus: 'VERIFIED',
+          busNumberReasons: ['DUPLICATE_BUS_NUMBER_5'],
+        );
+
+        expect(
+          BusReviewUiState.rowBadgeText(
+            node: reasonBus,
+            workingNodes: [reasonBus],
+          ),
+          '중복 번호',
+        );
+        expect(BusReviewUiState.fromNodes([reasonBus]).issueBuses, 1);
+      },
+    );
+
+    test(
+      'TEST AF: BUS_MAPPING_REVIEW uses the same review-issues Bus branch',
+      () {
+        final service = PowerLensAIService.instance;
+        const baseContext = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'BUS_MAPPING',
+          totalBuses: 1,
+          unresolvedBusNumbers: 1,
+        );
+        const aliasContext = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'BUS_MAPPING_REVIEW',
+          totalBuses: 1,
+          unresolvedBusNumbers: 1,
+        );
+
+        final baseReply = service.generateOfflineFallbackReply(
+          '검토 필요한 항목 보여줘',
+          baseContext,
+        );
+        final aliasReply = service.generateOfflineFallbackReply(
+          '검토 필요한 항목 보여줘',
+          aliasContext,
+        );
+
+        expect(aliasReply, baseReply);
+        expect(aliasReply, contains('확인이 필요한 모선'));
+        expect(aliasReply, isNot(contains('모선 번호 확인이 완료')));
+      },
+    );
   });
 }

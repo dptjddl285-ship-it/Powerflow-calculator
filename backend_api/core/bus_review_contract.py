@@ -10,6 +10,9 @@ from collections import Counter
 from typing import Any, Dict, Iterable, List
 
 
+BUS_NO_ACTIVE_MESSAGE = "유효한 모선(Bus) 객체가 없습니다. 객체 검수를 확인해주세요."
+
+
 def _first_value(node: Dict[str, Any], *keys: str, default: Any = None) -> Any:
     for key in keys:
         if key in node:
@@ -116,4 +119,8 @@ def evaluate_bus_mapping(nodes: Iterable[Dict[str, Any]] | None) -> Dict[str, An
     }
 
 
-__all__ = ["evaluate_bus_mapping", "get_active_bus_nodes"]
+__all__ = [
+    "BUS_NO_ACTIVE_MESSAGE",
+    "evaluate_bus_mapping",
+    "get_active_bus_nodes",
+]

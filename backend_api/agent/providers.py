@@ -48,7 +48,7 @@ from .system_knowledge import (
     VALID_FOCUS_TARGET_TYPES,
     VALID_HIGHLIGHT_TARGETS,
 )
-from core.bus_review_contract import evaluate_bus_mapping
+from core.bus_review_contract import BUS_NO_ACTIVE_MESSAGE, evaluate_bus_mapping
 
 
 def _is_bus_mapping_stage(stage: str) -> bool:
@@ -142,11 +142,13 @@ def sanitize_and_validate_agent_response(
     err_cnt = len([i for i in issues if str(i.get("severity", "")).lower() == "error"])
 
     bus_state = evaluate_bus_mapping(w_nodes) if _is_bus_mapping_stage(stage) else None
+    bus_blocked = bool(bus_state and bus_state["total"] == 0)
     has_issues = (
         susp_cnt > 0
         or miss_cnt > 0
         or amb_cnt > 0
         or err_cnt > 0
+        or bus_blocked
         or bool(bus_state and bus_state["issue_count"] > 0)
     )
 
@@ -277,6 +279,17 @@ def sanitize_and_validate_agent_response(
             # Fabricated targets or type mismatches (e.g. LINE with node ID) are dropped.
 
     res["focus_targets"] = sanitized_focus
+
+    if bus_blocked:
+        # An empty active Bus set is a hard workflow blocker, not a clean
+        # review. Keep the response safe even when an LLM returned PROCEED.
+        res["decision"] = "BLOCKED"
+        res["action_mode"] = "GUIDE"
+        res["action_id"] = None
+        res["highlight_target"] = None
+        res["focus_targets"] = []
+        res["reply_ko"] = BUS_NO_ACTIVE_MESSAGE
+        res["summary_text"] = BUS_NO_ACTIVE_MESSAGE
 
     # 9. Backward compatibility
     if not res.get("summary_text"):
@@ -469,7 +482,12 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                 "duplicates": sorted(bus_state["duplicates"]),
             }
 
-            if issue_buses:
+            if total_buses == 0:
+                decision = "BLOCKED"
+                action_mode = "GUIDE"
+                target = None
+                reply_ko = BUS_NO_ACTIVE_MESSAGE
+            elif issue_buses:
                 decision = "HUMAN_CHECK"
                 action_mode = "GUIDE"
                 target = None
@@ -500,11 +518,18 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
 
             summary_text = (
                 "📊 **[AI 검토 우선순위 요약 - 모선 번호 매핑]**\n\n"
-                f"• **총 모선 수**: {total_buses}개 (정상/확인 대상: **{clean_count}개**)\n"
-                f"• **확인 필요 모선**: **{issue_count}건**\n\n"
-                "💡 **안내:**\n"
-                "도면에 표시된 확인 필요 모선을 클릭하여 번호와 근거를 확인하고 틀린 경우에만 수정한 뒤, "
-                "하단 **[모선 검수 완료]**를 눌러주세요."
+                + (
+                    f"• **총 모선 수**: {total_buses}개\n\n"
+                    f"⚠️ **{BUS_NO_ACTIVE_MESSAGE}**"
+                    if total_buses == 0
+                    else (
+                        f"• **총 모선 수**: {total_buses}개 (정상/확인 대상: **{clean_count}개**)\n"
+                        f"• **확인 필요 모선**: **{issue_count}건**\n\n"
+                        "💡 **안내:**\n"
+                        "도면에 표시된 확인 필요 모선을 클릭하여 번호와 근거를 확인하고 틀린 경우에만 수정한 뒤, "
+                        "하단 **[모선 검수 완료]**를 눌러주세요."
+                    )
+                )
             )
 
         elif stage_upper in ("CONNECTION_REVIEW", "LINE_REVIEW"):
@@ -936,7 +961,12 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
             all_buses = bus_state["buses"]
             issue_count = bus_state["issue_count"]
             reply = "🧭 **[다음 단계 진행 가이드 - ② 모선 번호 매핑]:**\n"
-            if issue_count == 0 and len(all_buses) > 0:
+            if len(all_buses) == 0:
+                target = None
+                dec = "BLOCKED"
+                reply += f"⚠️ {BUS_NO_ACTIVE_MESSAGE}\n"
+                reply += "객체 검수에서 모선 인식을 확인한 뒤 다시 시도해주세요."
+            elif issue_count == 0:
                 target = "bus_gate"
                 reply += "✓ 모든 모선 번호가 확인되었습니다!\n"
                 reply += "• 전체 번호를 확인한 뒤 하단 **[모선 검수 완료]** 버튼을 눌러 다음 단계로 이동하세요."

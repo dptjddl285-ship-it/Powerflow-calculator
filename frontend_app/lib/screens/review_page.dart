@@ -565,7 +565,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           }
         }
       } else if (_currentPhase == ReviewPhase.busMappingReview) {
-        final hasIssues = _busUncertainCount > 0 || _duplicateBusNumbers.isNotEmpty;
+        final hasIssues = _busUiState.isBlocked;
         if (hasIssues) {
           _busFilterStatus = 'UNCERTAIN';
           final uncertain = _filteredAndSortedBusNodes;
@@ -2857,7 +2857,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               _unresolvedCandidatesCount > 0 ||
               !_humanCompletenessConfirmed)
         : isBusPhase
-        ? _busUncertainCount > 0
+        ? busState.isBlocked
         : isConnectionPhase &&
               (_lineAmbiguousCount > 0 || _criticalIssuesCount > 0);
     final autoConfirmedCount = isObjectPhase
@@ -6722,13 +6722,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   Widget _buildBusMappingListItem(ReviewNodeItem busNode) {
     final isSelected = _selectedNode?.id == busNode.id;
-    final isDuplicate =
-        busNode.busNumber != null &&
-        _duplicateBusNumbers.contains(busNode.busNumber);
-    final isVerified =
-        busNode.busNumberStatus == 'VERIFIED' &&
-        busNode.busNumber != null &&
-        !isDuplicate;
+    final rowBadge = BusReviewUiState.rowBadgeText(
+      node: busNode,
+      workingNodes: _busNodes,
+    );
+    final isDuplicate = rowBadge == '중복 번호';
+    final isVerified = rowBadge == '확인됨';
 
     return GestureDetector(
       onTap: () {

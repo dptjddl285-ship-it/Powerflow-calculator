@@ -803,6 +803,61 @@ class AgentCoreV2Test(unittest.TestCase):
         self.assertEqual(proactive["bus_summary"]["issue_buses"], 0)
         self.assertEqual(proactive["focus_targets"], [])
 
+    def test_35_zero_active_bus_blocks_proactive_chat_and_sanitizer(self):
+        """TEST AA/AB: zero active Bus is BLOCKED everywhere, never clean/PROCEED."""
+        nodes = [{"id": "gen_1", "class": "generator", "review_status": "CONFIRMED"}]
+
+        proactive = self.local_prov.generate_proactive_summary(
+            document_id="doc_zero_bus",
+            stage="BUS_MAPPING",
+            working_nodes=nodes,
+        )
+        self.assertEqual(proactive["decision"], "BLOCKED")
+        self.assertEqual(proactive["focus_targets"], [])
+        self.assertEqual(proactive["bus_summary"]["total_buses"], 0)
+        self.assertIn("유효한 모선", proactive["reply_ko"])
+        self.assertNotIn("모선 번호 확인이 완료", proactive["reply_ko"])
+
+        chat = self.local_prov.answer_chat(
+            message="다음에 뭐 해?",
+            document_id="doc_zero_bus",
+            stage="BUS_MAPPING_REVIEW",
+            working_nodes=nodes,
+        )
+        self.assertEqual(chat["decision"], "BLOCKED")
+        self.assertIn("유효한 모선", chat["reply_ko"])
+        self.assertNotIn("확인 필요: **0개**", chat["reply_ko"])
+
+        sanitized = sanitize_and_validate_agent_response(
+            {
+                "reply_ko": "모든 모선 번호가 확인되었습니다.",
+                "decision": "PROCEED",
+                "action_mode": "NONE",
+                "focus_targets": [],
+            },
+            stage="BUS_MAPPING",
+            working_nodes=nodes,
+        )
+        self.assertEqual(sanitized["decision"], "BLOCKED")
+        self.assertEqual(sanitized["focus_targets"], [])
+        self.assertIn("유효한 모선", sanitized["reply_ko"])
+
+    def test_36_zero_active_bus_gate_remains_blocked(self):
+        """TEST AC: the existing Bus Gate has the same zero-Bus blocker meaning."""
+        import asyncio
+        from review.schemas import VerifyBusGateRequest
+        from review.staged_api import review_verify_bus_gate
+
+        gate = asyncio.run(
+            review_verify_bus_gate(
+                VerifyBusGateRequest(document_id="doc_zero_bus_gate", working_nodes=[])
+            )
+        )
+
+        self.assertEqual(gate["gate_status"], "BLOCKED")
+        self.assertEqual(gate["focus_node_ids"], [])
+        self.assertIn("유효한 모선", gate["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

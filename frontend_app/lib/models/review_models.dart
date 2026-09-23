@@ -375,7 +375,7 @@ class BusReviewGateEvaluator {
         .where(
           (n) =>
               n.className.toLowerCase() == 'bus' &&
-              n.reviewStatus != 'REJECTED',
+              n.reviewStatus.toUpperCase() != 'REJECTED',
         )
         .toList();
 
@@ -455,7 +455,7 @@ class BusReviewGateEvaluator {
         .where(
           (n) =>
               n.className.toLowerCase() == 'bus' &&
-              n.reviewStatus != 'REJECTED',
+              n.reviewStatus.toUpperCase() != 'REJECTED',
         )
         .toList();
 
@@ -511,7 +511,19 @@ class BusReviewGateEvaluator {
     required List<ReviewNodeItem> workingNodes,
     String? selectedLabel,
   }) {
-    final issueIds = computeGuideBusIds(workingNodes: workingNodes);
+    final activeBuses = workingNodes
+        .where(
+          (node) =>
+              node.className.toLowerCase() == 'bus' &&
+              node.reviewStatus.toUpperCase() != 'REJECTED',
+        )
+        .toList();
+    if (activeBuses.isEmpty) {
+      return "유효한 모선(Bus) 객체가 없습니다.\n"
+          "객체 검수에서 모선 인식을 확인해주세요.";
+    }
+
+    final issueIds = computeGuideBusIds(workingNodes: activeBuses);
     final issueCount = issueIds.length;
 
     if (issueCount > 0) {
@@ -527,6 +539,8 @@ class BusReviewGateEvaluator {
 }
 
 class BusReviewUiState {
+  static const noActiveBusMessage = '유효한 모선(Bus) 객체가 없습니다. 객체 검수를 확인해주세요.';
+
   final int totalBuses;
   final int verifiedBuses;
   final int issueBuses;
@@ -539,11 +553,15 @@ class BusReviewUiState {
 
   bool get hasIssues => issueBuses > 0;
 
+  bool get isBlocked => totalBuses == 0 || hasIssues;
+
   String get subtitle => '모선 번호 검수';
 
-  String get nextActionText => hasIssues
-      ? '번호 확인이 필요한 모선 ${issueBuses}개를 확인하세요.'
-      : '모선 번호 확인이 완료되었습니다. [모선 검수 완료]를 눌러주세요.';
+  String get nextActionText {
+    if (totalBuses == 0) return noActiveBusMessage;
+    if (hasIssues) return '번호 확인이 필요한 모선 $issueBuses개를 확인하세요.';
+    return '모선 번호 확인이 완료되었습니다. [모선 검수 완료]를 눌러주세요.';
+  }
 
   static List<ReviewNodeItem> activeBusNodes(Iterable<ReviewNodeItem> nodes) {
     return nodes
@@ -565,6 +583,30 @@ class BusReviewUiState {
       verifiedBuses: active.length - issueIds.length,
       issueBuses: issueIds.length,
     );
+  }
+
+  static String rowBadgeText({
+    required ReviewNodeItem node,
+    required List<ReviewNodeItem> workingNodes,
+  }) {
+    final issueIds = BusReviewGateEvaluator.computeGuideBusIds(
+      workingNodes: activeBusNodes(workingNodes),
+    );
+    if (!issueIds.contains(node.id)) return '확인됨';
+
+    final active = activeBusNodes(workingNodes);
+    final counts = <int, int>{};
+    for (final bus in active) {
+      if (bus.busNumber != null && bus.busNumber! > 0) {
+        counts[bus.busNumber!] = (counts[bus.busNumber!] ?? 0) + 1;
+      }
+    }
+    final hasDuplicateReason = node.busNumberReasons.any(
+      (reason) => reason.toUpperCase().startsWith('DUPLICATE_BUS_NUMBER_'),
+    );
+    final hasDuplicateNumber =
+        node.busNumber != null && (counts[node.busNumber!] ?? 0) > 1;
+    return hasDuplicateNumber || hasDuplicateReason ? '중복 번호' : '검토필요';
   }
 
   static List<ReviewNodeItem> filter(

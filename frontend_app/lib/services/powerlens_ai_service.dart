@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../models/powerlens_assistant_context.dart';
+import '../models/review_models.dart';
 import '../widgets/powerlens_ai/powerlens_ai_message.dart';
 
 enum PowerLensAppAction {
@@ -164,15 +165,7 @@ class PowerLensAIService extends ChangeNotifier {
           return 'object_gate';
         case 'bus_mapping':
         case 'bus_mapping_review':
-          final busNodes = context.workingNodes
-              .where(
-                (n) =>
-                    (n['className'] ?? n['class_name'] ?? n['class'])
-                        ?.toString()
-                        .toLowerCase() ==
-                    'bus',
-              )
-              .toList();
+          final busNodes = context.workingNodes.where(_isActiveBusMap).toList();
           final numbers = <int>[];
           final duplicates = <int>{};
           for (final b in busNodes) {
@@ -382,6 +375,25 @@ class PowerLensAIService extends ChangeNotifier {
 
   bool _containsAny(String query, Iterable<String> terms) {
     return terms.any(query.contains);
+  }
+
+  bool _isActiveBusMap(Map<String, dynamic> node) {
+    final className =
+        (node['className'] ?? node['class_name'] ?? node['class'] ?? '')
+            .toString()
+            .toLowerCase();
+    final reviewStatus =
+        (node['reviewStatus'] ?? node['review_status'] ?? node['status'] ?? '')
+            .toString()
+            .toUpperCase();
+    return className == 'bus' && reviewStatus != 'REJECTED';
+  }
+
+  int _activeBusCount(PowerLensAssistantContext context) {
+    if (context.workingNodes.isNotEmpty) {
+      return context.workingNodes.where(_isActiveBusMap).length;
+    }
+    return context.totalBuses;
   }
 
   bool _isReviewStage(PowerLensAssistantContext? context) {
@@ -881,6 +893,7 @@ class PowerLensAIService extends ChangeNotifier {
           proactiveText = "객체 분석이 끝났습니다. 확인이 필요한 항목만 먼저 살펴보세요.";
           break;
         case 'BUS_MAPPING':
+        case 'BUS_MAPPING_REVIEW':
           proactiveText = "이제 모선 번호를 확인합니다.";
           break;
         case 'CONNECTION_REVIEW':
@@ -1258,11 +1271,14 @@ class PowerLensAIService extends ChangeNotifier {
       } else {
         return '현재 검토가 필요한 항목이 없습니다! 도면을 마지막으로 확인하신 후 아래의 [객체 검수 완료]를 눌러 다음 단계(모선 번호 매핑)로 진행하시면 됩니다.';
       }
-    } else if (stage == 'BUS_MAPPING') {
+    } else if (stage == 'BUS_MAPPING' || stage == 'BUS_MAPPING_REVIEW') {
       final uncertain = context.unresolvedBusNumbers;
       final dups = context.duplicateBusNumbers;
+      final totalBuses = _activeBusCount(context);
 
-      if (uncertain > 0 || dups > 0) {
+      if (totalBuses == 0) {
+        return BusReviewUiState.noActiveBusMessage;
+      } else if (uncertain > 0 || dups > 0) {
         final parts = [
           if (uncertain > 0) '미지정 모선 $uncertain개',
           if (dups > 0) '중복 모선 $dups개',
@@ -1337,6 +1353,10 @@ class PowerLensAIService extends ChangeNotifier {
         break;
       case 'BUS_MAPPING':
       case 'BUS_MAPPING_REVIEW':
+        if (_activeBusCount(ctx) == 0) {
+          return "⚠️ ${BusReviewUiState.noActiveBusMessage}\n"
+              "객체 검수에서 모선 인식을 확인한 뒤 다시 시도해주세요.";
+        }
         if (ctx.unresolvedBusNumbers > 0 || ctx.duplicateBusNumbers > 0) {
           return "⚠️ 아직 확정하지 않은 모선 번호가 **${ctx.unresolvedBusNumbers}개**"
               "${ctx.duplicateBusNumbers > 0 ? '이고 중복 번호도 ${ctx.duplicateBusNumbers}개' : ''} 있어요. "
@@ -1370,7 +1390,7 @@ class PowerLensAIService extends ChangeNotifier {
     bool timeout = false,
   }) {
     String reply;
-    final stage = context.workflowStage;
+    final stage = context.workflowStage.toUpperCase();
     final selected = context.selectedElement;
     final normalizedQuery = _normalizeQuery(userQuery);
 
@@ -1383,10 +1403,17 @@ class PowerLensAIService extends ChangeNotifier {
       '일괄',
     ])) {
       if (stage == 'BUS_MAPPING' || stage == 'BUS_MAPPING_REVIEW') {
-        reply =
-            "✨ **모선 번호 검수 안내:**\n"
-            "• 정상 모선은 개별 또는 일괄 승인할 필요가 없습니다.\n"
-            "• 확인 필요로 표시된 모선만 번호를 확인하거나 수정한 뒤 [모선 검수 완료]를 눌러주세요.";
+        if (_activeBusCount(context) == 0) {
+          reply =
+              "✨ **모선 번호 검수 안내:**\n"
+              "• ${BusReviewUiState.noActiveBusMessage}\n"
+              "• 객체 검수에서 모선 인식을 확인해주세요.";
+        } else {
+          reply =
+              "✨ **모선 번호 검수 안내:**\n"
+              "• 정상 모선은 개별 또는 일괄 승인할 필요가 없습니다.\n"
+              "• 확인 필요로 표시된 모선만 번호를 확인하거나 수정한 뒤 [모선 검수 완료]를 눌러주세요.";
+        }
       } else if (stage == 'OBJECT_REVIEW') {
         reply =
             "✨ **객체 검수 안내:**\n"
@@ -1509,7 +1536,11 @@ class PowerLensAIService extends ChangeNotifier {
       return ctx.suspiciousObjects > 0
           ? "⚠️ 검토가 필요한 객체가 **${ctx.suspiciousObjects}건** 남아 있습니다. 화면의 [맞음] 또는 [수정]을 눌러 완료해 주세요."
           : "✅ 모든 객체가 정상 검수 완료되었습니다! 하단 [객체 검수 완료]를 눌러 모선 번호 확인으로 넘어가세요.";
-    } else if (ctx.workflowStage == 'BUS_MAPPING') {
+    } else if (ctx.workflowStage == 'BUS_MAPPING' ||
+        ctx.workflowStage == 'BUS_MAPPING_REVIEW') {
+      if (_activeBusCount(ctx) == 0) {
+        return BusReviewUiState.noActiveBusMessage;
+      }
       return ctx.unresolvedBusNumbers > 0
           ? "⚠️ 아직 확인이 필요한 모선이 **${ctx.unresolvedBusNumbers}개** 있습니다. 번호를 확인하거나 수정한 뒤 [모선 검수 완료]를 눌러주세요."
           : "✅ 모든 모선 번호 확인이 완료되었습니다. [모선 검수 완료]를 눌러주세요.";
@@ -1560,6 +1591,11 @@ class PowerLensAIService extends ChangeNotifier {
             "• 도면에 주황색으로 표시된 의심 객체를 클릭하여 AI 모델 신뢰도와 판단 근거를 확인하고 **[맞음]** 또는 **[수정]**을 선택하세요.";
       case 'BUS_MAPPING':
       case 'BUS_MAPPING_REVIEW':
+        if (_activeBusCount(ctx) == 0) {
+          return "💡 **다음 할 일 (모선 인식 확인):**\n"
+              "• ${BusReviewUiState.noActiveBusMessage}\n"
+              "• 객체 검수에서 모선 인식을 확인한 뒤 다시 시도해주세요.";
+        }
         if (selected != null && selected.isNotEmpty) {
           return "💡 **다음 할 일 (모선 번호 확인):**\n"
               "• 현재 **$selected**를 확인 중입니다.\n"
@@ -1654,15 +1690,23 @@ class PowerLensAIService extends ChangeNotifier {
             "표시된 객체를 클릭하여 AI 판단을 확인하고 **[맞음]** 또는 **[수정]**을 선택해주세요.";
       case 'BUS_MAPPING':
       case 'BUS_MAPPING_REVIEW':
+        if (ctx == null) {
+          return "🔢 **모선 번호 확인 단계입니다.**\n"
+              "${BusReviewUiState.noActiveBusMessage}\n"
+              "객체 검수에서 모선 인식을 확인해주세요.";
+        }
+        if (_activeBusCount(ctx) == 0) {
+          return "🔢 **모선 번호 확인 단계입니다.**\n"
+              "${BusReviewUiState.noActiveBusMessage}\n"
+              "객체 검수에서 모선 인식을 확인해주세요.";
+        }
         final hasBusIssues =
-            (ctx?.unresolvedBusNumbers ?? 0) > 0 ||
-            (ctx?.duplicateBusNumbers ?? 0) > 0;
-        if (!hasBusIssues && ctx != null) {
+            ctx.unresolvedBusNumbers > 0 || ctx.duplicateBusNumbers > 0;
+        if (!hasBusIssues) {
           return "🔢 **모선 번호 확인 단계입니다.**\n"
               "제가 다시 확인할 모선은 이제 없어요. 전체 번호를 한번 확인한 뒤 **[모선 검수 완료]**를 눌러주세요.";
         }
-        final count =
-            (ctx?.unresolvedBusNumbers ?? 0) + (ctx?.duplicateBusNumbers ?? 0);
+        final count = ctx.unresolvedBusNumbers + ctx.duplicateBusNumbers;
         final countStr = count > 0 ? " ${count}개" : "";
         return "🔢 **모선 번호 확인 단계입니다.**\n"
             "모선 번호를 전체 확인했어요. 다시 확인하면 좋은 모선이${countStr} 있어요. 도면에 표시해둘게요.";
@@ -1698,6 +1742,9 @@ class PowerLensAIService extends ChangeNotifier {
             : "제가 따로 의심하는 객체는 없어요. 도면을 확인한 뒤 [객체 검수 완료]를 눌러주세요.";
       case 'BUS_MAPPING':
       case 'BUS_MAPPING_REVIEW':
+        if (_activeBusCount(ctx) == 0) {
+          return "유효한 모선(Bus) 객체가 없어 모선 번호 검수를 진행할 수 없습니다.";
+        }
         final hasBusIssues =
             ctx.unresolvedBusNumbers > 0 || ctx.duplicateBusNumbers > 0;
         final count = ctx.unresolvedBusNumbers + ctx.duplicateBusNumbers;
@@ -1738,9 +1785,14 @@ class PowerLensAIService extends ChangeNotifier {
         return ['객체 검수 완료하기', '다음 단계로 이동', '다음에 뭐 해?'];
       case 'BUS_MAPPING':
       case 'BUS_MAPPING_REVIEW':
+        if (ctx == null) {
+          return ['객체 검수에서 모선 확인', '다음에 뭐 해?', '현재 상태 요약'];
+        }
+        if (_activeBusCount(ctx) == 0) {
+          return ['객체 검수에서 모선 확인', '다음에 뭐 해?', '현재 상태 요약'];
+        }
         final hasBusIssues =
-            (ctx?.unresolvedBusNumbers ?? 0) > 0 ||
-            (ctx?.duplicateBusNumbers ?? 0) > 0;
+            ctx.unresolvedBusNumbers > 0 || ctx.duplicateBusNumbers > 0;
         return [
           hasBusIssues ? '미지정 모선 확인' : '모선 검수 완료',
           '다음에 뭐 해?',
