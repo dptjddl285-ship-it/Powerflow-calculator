@@ -16,6 +16,7 @@
 
 > 👥 **Core Documentation**:
 > - 🤖 **에이전트 상세 구조**: [`../AGENTIC_WORKFLOW.md`](../AGENTIC_WORKFLOW.md) — 결정론적 Supervisor, 로컬 플래닝, 2개 도구, Bounded Retry, PatchPreview, 인간 승인 게이트
+> - 👁️ **비전 파이프라인**: [`../VISION_PIPELINE.md`](../VISION_PIPELINE.md) — YOLO11 + CV 하이브리드 검출, 포트 인식 선로 추적, Set-of-Mark 모선 번호 인식, 객체 검출 F1 98.01% 검증
 > - 🧪 **기술 검증 보고서**: [`../EVALUATION.md`](../EVALUATION.md) — 26장 객체 검출 정밀도(F1 98.01%), AC Newton-Raphson 수렴 및 전력수지 검증, 회귀 테스트
 > - 📐 **시스템 상세 설계**: [`SYSTEM_ARCHITECTURE_AND_TECHNICAL_DOCS.md`](./SYSTEM_ARCHITECTURE_AND_TECHNICAL_DOCS.md) — 모듈별 기술 명세 및 API 규격서
 > - 👥 **팀 인수인계**: [`../TEAM_HANDOFF.md`](../TEAM_HANDOFF.md) • 📜 **특허 출원 명세서**: [`../PowerLens_특허명세서_공식출원용.md`](../PowerLens_특허명세서_공식출원용.md)
@@ -67,7 +68,9 @@
 - **Phase 3 [③ 선로 결선 검수 (Connection Review)]**:
   - 픽셀 스켈레톤화 및 선로 추적(Line Tracing)으로 송전선로(Branch), 변압기, 인입선 결선 검수. 모호 결선(Ambiguous) 수동 교정 및 단선/고립 모선 토폴로지 검증.
 - **Phase 4 [④ 최종 확인 & 엑셀 대조 (Verified Final & Excel Cross-Check)]**:
-  - 무결점 `VerifiedSLD` 확정 요약 확인, 전력계통 엑셀 파일(.xlsx)과 도면 설비 제원(Bus/Branch/Gen/Load) 자동 교차 대조 및 불일치 AI 진단 모달 제공 후 캔버스 전송.
+  - 무결점 `VerifiedSLD` 확정 요약 확인, 전력계통 엑셀 파일(.xlsx, .csv)과 도면 설비 제원(Bus/Branch/Gen/Load) 자동 교차 대조.
+  - 도면-엑셀 간 발전기/부하 불일치 발견 시 캔버스나 솔버를 임의 자동 변경하지 않고, 수리 제안(`repair_proposals`)을 엔지니어에게 표시하여 명시적 승인([Apply]) 시에만 반영. (※ 모선, 송전선로, 변압기는 절대로 자동 생성하지 않음).
+  - 불일치 원인 분석 AI 진단 모달(`excel_discrepancy_agent.py`) 제공 후 캔버스 전송.
 
 ### 3. 🧠 AI Vision 기반 단선도 토폴로지 자동 복원
 - **YOLO11 + OpenCV 하이브리드 객체 인식**: 모선·부하·변압기는 형태와 전기적 연결 조건을 우선 검사하고, YOLO11은 발전기 탐지와 CV 후보 보완에 활용.
@@ -125,8 +128,8 @@ flowchart TB
     end
 
     subgraph Data ["Data Layer"]
-        Excel["PSSE / IEEE Case Files (.xlsx, .raw)"]
-        Diagram["Single-Line Diagram Images (.png, .jpg, .pdf)"]
+        Excel["PSSE / IEEE Case Files (.xlsx, .csv)"]
+        Diagram["Single-Line Diagram Images (.png, .jpg, .jpeg)"]
     end
 
     Diagram --> Review
@@ -202,15 +205,15 @@ PowerLens/
 pip install -r backend_api/requirements.txt
 
 # 2) 원클릭 실행 (백엔드+프론트 동시 구동 & 브라우저 자동 오픈)
-run_powerlens.bat
+run.bat
 # 또는
-python run_powerlens.py
+python scripts/run_powerlens.py
 ```
 
 ### 3. 개별 서버 수동 실행
 ```bash
 # [서버 1] FastAPI 백엔드 서버 실행 (포트 8000)
-python main_server.py
+python backend_api/main_server.py
 ```
 - API 문서(Swagger UI): [http://localhost:8000/docs](http://localhost:8000/docs)
 

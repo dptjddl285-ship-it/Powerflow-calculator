@@ -105,6 +105,7 @@ flowchart TD
 > - **모선 번호 연계 (`link_and_validate_bus_numbers`)**: 2단계 모선 매핑 라우터 및 [`backend_api/core/bus_number_linker.py`](backend_api/core/bus_number_linker.py)에서 별도 실행.
 > - **위상 무결성 검증 (`validate_topology_rules`)**: [`backend_api/core/electrical_topology.py`](backend_api/core/electrical_topology.py) 및 `validate_graph()`에서 독립 검증.
 > - **엑셀 제원 불일치 진단 (`diagnose_excel_discrepancy`)**: 4단계 엑셀 대조 모달 및 [`backend_api/agent/excel_discrepancy_agent.py`](backend_api/agent/excel_discrepancy_agent.py)에서 독립 진단.
+> - **발전기/부하 수리 제안 (`repair_proposals`)**: 4단계 엑셀 교차검증 시 도면 미검출 발전기/부하에 대해 사용자에게 수정 제안을 표시하고, 사용자의 명시적 [Apply/Reject]를 거쳐서만 캔버스 및 솔버에 반영 (모선, 선로, 변압기는 자동 생성 제외).
 
 ### 4) 결과 평가 메커니즘 (Result Evaluation)
 - **코드 위치**: [`backend_api/agent/supervisor.py`](backend_api/agent/supervisor.py) (`ReviewAgentSupervisor._evaluate()`)

@@ -146,7 +146,7 @@ sequenceDiagram
             Server->>Agent: 불일치 원인 분석 및 해결 가이드 요청
             Agent-->>Front: 한글 진단 리포트 및 단계별 조치사항 제시
         end
-        User->>Front: [누락 요소 자동 추가] 또는 [다시 검수 처음으로] 선택
+        User->>Front: [수리 제안 (Repair Proposals)] 확인 후 개별/일괄 [Apply (승인)] 또는 [Reject (거절)] 선택 (※ 발전기/부하 한정, Bus/Line/Tr는 자동 생성 제외)
     else 도면-엑셀 완벽 일치 시
         Server-->>Front: 엑셀 전기 파라미터 주입 완료 (is_matched: true)
     end
@@ -179,14 +179,30 @@ sequenceDiagram
 
 ### 2) 계통 데이터 연동 및 불일치 검증기 (`backend_api/core/excel_case_importer.py`)
 
-* **다양한 계통 포맷 지원**: PSSE 및 MATPOWER 스타일의 BUS, BRANCH, GENERATOR, TRANSFORMER 시트 자동 인식 및 단위(MW, MVAR, pu) 표준화.
-* **슬랙(Slack) 모선 자동 식별**: 엑셀 모선 타입(Type 3 또는 Slack 지정)을 최우선 적용하고, 미지정 시 1번 모선 또는 발전용량이 가장 큰 모선을 슬랙으로 지능형 선정.
+* **다양한 계통 포맷 및 기준 용량(Sbase) 다중 스키마 파싱**:
+  - PSSE 및 MATPOWER 스타일의 BUS, BRANCH, GENERATOR, TRANSFORMER, PARAM 시트 자동 인식.
+  - Base MVA(`Sbase`) 파싱 지원: 헤더 키-값 쌍(`['sbase', '100']`), 2열 키-값 행(`['sbase', 50]`), 컬럼 하위 데이터, 단일 셀 수치 등 다양한 엑셀 서식을 유연하게 지원하며 기본값(100.0 MVA) 폴백을 제공. 단위(MW, MVAR $\rightarrow$ pu) 표준화.
+* **슬랙(Slack) 모선 우선순위 결정**:
+  - 1순위: 명시적 `is_slack: True` 플래그
+  - 2순위: 레이블/ID에 "slack" 또는 "swing" 포함
+  - 3순위: 1번 모선에 발전기 존재 시 1번 모선
+  - 4순위: 1번 모선 존재 시 1번 모선
+  - 5순위: 발전기가 존재하는 첫 번째 모선
+  - 6순위: 전체 모선 중 첫 번째 모선 번호
 * **동기조상기(Synchronous Condenser) 상호 등가 인식**:
   - IEEE 24 RTS 계통의 Bus 14 등 유효전력 출력이 0인 동기조상기($P_g = 0\text{ MW}$)가 도면상 부하(Load) 또는 커패시터 심볼로 작도된 경우, 이를 누락 발전기로 오경보하지 않고 상호 등가 매칭 처리.
   - 중복 기기 자동 생성을 방지하고 `isSynchronousCondenser: True` 플래그 부여.
-* **일반화된 2-Port 변압기 토폴로지 및 파라미터 매핑**:
-  - 변압기를 2-Port 브랜치 요소(`Bus A -> lead line -> Transformer -> lead line -> Bus B`)로 일반화하여 처리하며, 양단 물리 리드선(`is_transformer_lead: True`, $rPu=0, xPu=0$)은 조류계산 시 일반 송전 브랜치에서 제외(Bypass)하여 영임피던스 나눗셈($1/Z$) 발산을 방지.
-  - 도면 토폴로지로부터 인식된 양단 모선과 엑셀의 변압기 제원(`from_bus`, `to_bus`, `tap_ratio`, `tapFromBus`)을 1:1 대조하여 방향성을 보존하고 유일한 변압기 브랜치로 생성. 특정 계통 번호 하드코딩이나 임의의 브랜치 조합 생성을 배제.
+* **발전기/부하 수리 제안(Repair Proposals) 및 사용자 승인(Apply/Reject) 게이트**:
+  - 엑셀에는 존재하지만 도면에서 미검출된 발전기 및 부하 발견 시, **캔버스와 솔버를 절대로 임의 자동 변형하지 않음**.
+  - `summary['repair_proposals']`에 수리 제안(`action: suggest_add`, `reason: EXCEL_EXISTS_VISION_MISSING`)을 생성하여 UI에 전달.
+  - 사용자가 UI 다이얼로그에서 명시적으로 **[Apply]**를 선택한 경우에만 해당 설비 및 리드선(`isEquipmentLead: True`)이 캔버스 요소로 추가되고 솔버에 반영됨.
+  - 사용자가 **[Reject]**를 선택하거나 확인하지 않은 경우 캔버스와 솔버는 100% 도면 원래 상태를 유지.
+  - **엄격한 규칙: 모선(Bus), 송전선로(Line), 변압기(Transformer)는 절대로 자동 생성하거나 보완하지 않음.**
+* **서브스테이션 변압기 토폴로지 매핑 및 리드선 바이패스**:
+  - 도면의 변압기 심볼과 양단 물리 리드선(`is_transformer_lead: True`, $rPu=0, xPu=0$)을 식별하여 `conn_buses`를 추출.
+  - 엑셀 `transformer` 시트의 제원(`from_bus`, `to_bus`, `tap_ratio`, `tapFromBus`, $r_{pu}, x_{pu}, b_{pu}$)과 매칭하여 `electrical_branches` 단위로 매핑 (예: IEEE-24의 3-24, 9-11, 9-12, 10-11, 10-12 총 5개 브랜치).
+  - 리드선은 토폴로지 증거로만 사용되며 조류계산 시 일반 송전선로 브랜치에서 제외(Bypass)하여 영임피던스($1/Z$) 발산을 원천 방지.
+  - *(한계 명시: 현재 개별 심볼의 `conn_buses` 기반 매핑은 도면상 분리된 2-Port 심볼 간의 가상 교차 브랜치 자동 합성을 수행하지 않음)*
 * **비교 분석 리포트 (`compare_elements_with_excel`)**:
   - `missing_buses`, `surplus_buses`, `missing_branches`, `surplus_branches`, `missing_generators`, `missing_loads`를 분리 추출하고 수치 요약 통계 생성.
 
@@ -206,17 +222,24 @@ sequenceDiagram
 
 ### 4) 고정밀 AC Newton-Raphson 조류계산기 (`backend_api/core/power_flow_solver.py`)
 
+* **수치해석 구현 및 배열 아키텍처**:
+  - 고성능 **Dense NumPy 배열(`np.zeros((N, N), dtype=complex)`)** 기반 어드미턴스 행렬($Y_{\text{bus}}$) 및 야코비안 선형 연립방정식 풀이(`np.linalg.solve(J, mismatch)`). SciPy sparse 행렬이 아닌 Dense 배열 구조로 구현.
 * **수학적 모델**:
   - 극좌표계(Polar form) 전압 표현: $V_i = |V_i| \angle \theta_i$
   - 복소 모선 주입 전력 방정식:
     $$P_i = |V_i| \sum_{k=1}^N |V_k| (G_{ik}\cos\theta_{ik} + B_{ik}\sin\theta_{ik})$$
     $$Q_i = |V_i| \sum_{k=1}^N |V_k| (G_{ik}\sin\theta_{ik} - B_{ik}\cos\theta_{ik})$$
   - 4분할 야코비안 행렬(Jacobian Matrix) 구성:
-    $$\begin{bmatrix} \Delta P \\ \Delta Q \end{bmatrix} = \begin{bmatrix} J_{11} & J_{12} \\ J_{21} & J_{22} \end{bmatrix} \begin{bmatrix} \Delta \theta \\ \Delta |V|/|V| \end{bmatrix}$$
-* **선로 모델**: $\pi$-등가 회로 모델 (직렬 저항 $R$, 직렬 리액턴스 $X$, 병렬 대지 충전 서셉턴스 $B/2$), 오프노미널 탭비($a$)를 반영한 변압기 모델.
-* **수렴 판정**: $\max(|\Delta P|, |\Delta Q|) < 10^{-5}\text{ pu}$ (기본 25회 반복).
+    $$\begin{bmatrix} \Delta P \\ \Delta Q \end{bmatrix} = \begin{bmatrix} J_{11} & J_{12} \\ J_{21} & J_{22} \end{bmatrix} \begin{bmatrix} \Delta \theta \\ \Delta |V| \end{bmatrix}$$
+* **선로 및 오프노미널 변압기 모델**:
+  - $\pi$-등가 회로 모델: 직렬 임피던스 $z = r + jx$, 어드미턴스 $y = 1/z$, 대지 충전 서셉턴스 $y_{sh} = j b/2$.
+  - 변압기 오프노미널 탭비($a$) 모델링:
+    $$Y_{ii} \mathrel{+}= \frac{y + y_{sh}}{a^2}, \quad Y_{jj} \mathrel{+}= y + y_{sh}, \quad Y_{ij} = Y_{ji} = -\frac{y}{a}$$
+* **수렴 판정**: $\max(|\Delta P|, |\Delta Q|) < 10^{-4}\text{ pu}$ (기본 25회 반복).
 * **결과 산출**: 각 모선별 전압 크기/위상각, 모선 주입 전력, 선로 양방향 전력 조류($P_{from}, Q_{from}, P_{to}, Q_{to}$), 계통 선로 손실(MW/MVAR), 전체 발전/부하 합계.
 * **출력 포맷**: JSON 응답, 다중 시트 Excel (`Bus Results`, `Line Flows`, `Summary`), CSV 텍스트.
+* **엔지니어링 한계 사항 (Limitations)**:
+  - 현재 솔버는 발전기 무효전력 상하한($Q_{\min}, Q_{\max}$) 초과 감지 시 PV 모선을 PQ 모선으로 동적 전환하는 PV-PQ 버스 스위칭 로직은 미포함 상태입니다.
 
 ### 5) 사용자 인터페이스 (`frontend_app/`)
 
@@ -230,8 +253,9 @@ sequenceDiagram
 * **엑셀 불일치 경고 모달 ([`excel_mismatch_dialog.dart`](../frontend_app/lib/widgets/excel_mismatch_dialog.dart))**:
   - 모선, 선로, 발전기, 부하 4분할 도면 vs 엑셀 수치 비교 카드.
   - 누락/초과 세부 목록 스크롤 뷰.
+  - 도면 미검출 발전기/부하에 대한 **수리 제안(Repair Proposal) 카드** 및 개별/일괄 **[Apply (적용)] / [Reject (거절)]** 버튼 제공.
+  - 모선, 송전선로, 변압기는 자동 생성 불가 안내 및 도면 검수 단계 재진입 가이드 제공.
   - AI 진단 요청 및 진단 결과 카드.
-  - `[다시 검수 처음으로 돌아가기]` 및 `[누락 요소 자동 추가 (동기화)]` 액션 버튼 제공.
 
 ---
 
@@ -316,26 +340,32 @@ sequenceDiagram
 
 | 테스트 스위트 | 테스트 대상 파일 | 주요 검증 항목 | 결과 |
 | :--- | :--- | :--- | :---: |
-| **Excel 불일치 검증기 단위 테스트** | `backend_api/tests/test_excel_discrepancy_checker.py` | 100% 일치 케이스 검증, 모선/선로 누락 감지, 동기조상기 부하 기호 등가 인식, 변압기 다중 포트 브랜치 조합 검증 | **Pass (4/4)** |
-| **E2E 파이프라인 검증** | `scratch/verify_discrepancy_e2e.py` | IEEE 24 RTS 실제 엑셀을 기반으로 불일치 감지, Gemini AI 진단 생성, 수렴성 확인 | **Pass** |
-| **AC Newton-Raphson Solver 검증** | `backend_api/core/power_flow_solver.py` | IEEE 24 RTS 및 3-Bus 테스트 케이스에 대한 유효/무효 전력 수렴성 및 허용오차($10^{-5}$) 달성 확인 | **Pass (수렴)** |
+| **전기 파라미터 무결성 테스트** | `backend_api/tests/test_electrical_parameters_and_fallbacks.py` | 임의의 R/X/B fallback 배제, 제로 임피던스 $1/Z$ 발산 방지, 미정의 선로 사전 차단 | **Pass (12/12)** |
+| **일반화 회로 및 변압기 테스트** | `backend_api/tests/test_generalized_circuits_and_transformers.py` | 복회선 병렬 합성, 변압기 리드선 바이패스, 탭비 방향 보존 | **Pass (8/8)** |
+| **변압기 토폴로지 해석 테스트** | `backend_api/tests/test_transformer_topology_resolution.py` | 5개 변압기 브랜치(3-24, 9-11, 9-12, 10-11, 10-12) 매핑 및 $Y_{\text{bus}}$ 스탬핑 | **Pass (1/1)** |
+| **Excel 케이스 파서 테스트** | `backend_api/tests/test_excel_case_importer.py` | PSSE/Matpower 시트 파싱, 다중 Sbase(100/50/200/KV) 파싱, 슬랙 탐색 | **Pass (9/9)** |
+| **발전기/부하 수리 제안 검증** | `backend_api/tests/test_excel_generator_auto_supplement.py` | 도면 미검출 발전기/부하 수리제안 생성, 사용자 Apply/Reject 게이트, Bus/Line/Tr 자동생성 제외 | **Pass (10/10)** |
+| **Excel 불일치 검증기 단위 테스트** | `backend_api/tests/test_excel_discrepancy_checker.py` | 100% 일치 케이스 검증, 모선/선로 누락 감지, 동기조상기 부하 기호 등가 인식 | **Pass (4/4)** |
+| **AC Newton-Raphson Solver 검증** | `backend_api/tests/test_power_flow_solver.py` | IEEE 24 RTS 및 3-Bus 케이스에 대한 4회 반복 수렴 및 전력수지 보존 검증 | **Pass** |
 | **Flutter Web 프론트엔드 빌드** | `frontend_app/` | 다트 컴파일 오류 없는 프로덕션 웹 빌드 (`flutter build web`) | **Pass (Exit 0)** |
 
 ---
 
 ## 8. 실행 및 구동 가이드
 
-1. **백엔드 서버 구동**:
-   ```bash
-   python scripts/backend_server.py
-   # FastAPI 서버가 http://127.0.0.1:8000 에서 실행됩니다.
-   ```
-2. **프론트엔드 웹 서버 구동**:
-   ```bash
-   python scripts/frontend_server.py
-   # 웹 애플리케이션이 http://localhost:58640 에서 서빙됩니다.
-   ```
-3. **통합 원클릭 실행 (Windows)**:
+1. **원클릭 통합 실행 (가장 쉬운 방법 ⚡)**:
    ```cmd
-   scripts\run_powerlens.bat
+   run.bat
+   # 또는
+   python scripts\run_powerlens.py
+   ```
+2. **개별 백엔드 서버 구동 (포트 8000)**:
+   ```bash
+   python backend_api/main_server.py
+   # FastAPI 서버가 http://127.0.0.1:8000 에서 실행됩니다. (Swagger: /docs)
+   ```
+3. **개별 프론트엔드 프로덕션 웹 서빙 (포트 58640)**:
+   ```bash
+   python -m http.server 58640 --directory frontend_app/build/web
+   # 웹 애플리케이션이 http://localhost:58640 에서 서빙됩니다.
    ```

@@ -31,12 +31,66 @@ class ExcelCaseImporter:
         if 'param' in sheet_names_lower:
             try:
                 df_param = pd.read_excel(xl, sheet_name=sheet_names_lower['param'])
-                for col in df_param.columns:
-                    col_str = str(col).lower()
-                    if 'sbase' in col_str or '100' in col_str:
-                        val = str(df_param.columns[1]) if len(df_param.columns) > 1 else None
-                        if val and val.replace('.', '', 1).isdigit():
-                            sbase = float(val)
+                parsed_sbase = None
+
+                # Check header if it has key-value pair, e.g. ['sbase', '100']
+                if len(df_param.columns) > 1:
+                    col0_str = str(df_param.columns[0]).lower()
+                    if 'sbase' in col0_str or 'base' in col0_str:
+                        try:
+                            v = float(df_param.columns[1])
+                            if v > 0:
+                                parsed_sbase = v
+                        except (ValueError, TypeError):
+                            pass
+
+                # Check table cells for key-value row (e.g. ['sbase', 100])
+                if parsed_sbase is None:
+                    for _, row in df_param.iterrows():
+                        row_vals = [x for x in row.values if pd.notna(x)]
+                        for i, cell in enumerate(row_vals):
+                            cell_lower = str(cell).lower()
+                            if 'sbase' in cell_lower or 'base_mva' in cell_lower or 'basemva' in cell_lower:
+                                for j in range(i + 1, len(row_vals)):
+                                    try:
+                                        v = float(row_vals[j])
+                                        if v > 0:
+                                            parsed_sbase = v
+                                            break
+                                    except (ValueError, TypeError):
+                                        continue
+                            if parsed_sbase is not None:
+                                break
+                        if parsed_sbase is not None:
+                            break
+
+                # Check column data under 'sbase' or 'base' header
+                if parsed_sbase is None:
+                    for col in df_param.columns:
+                        col_str = str(col).lower()
+                        if 'sbase' in col_str or 'base' in col_str:
+                            for val in df_param[col].dropna():
+                                try:
+                                    v = float(val)
+                                    if v > 0:
+                                        parsed_sbase = v
+                                        break
+                                except (ValueError, TypeError):
+                                    continue
+                        if parsed_sbase is not None:
+                            break
+
+                # Fallback: single cell numeric
+                if parsed_sbase is None and not df_param.empty:
+                    try:
+                        v = float(df_param.iloc[0, 0])
+                        if v > 0:
+                            parsed_sbase = v
+                    except (ValueError, TypeError):
+                        pass
+
+                if parsed_sbase is not None and parsed_sbase > 0:
+                    sbase = parsed_sbase
             except Exception:
                 pass
 

@@ -146,6 +146,63 @@ class TestExcelCaseImporter(unittest.TestCase):
         self.assertGreater(line_l2['pPu'], 0.0)
         self.assertIn('Line Bus 2 ↔ Load_2', line_l2['label'])
 
+    def _create_minimal_excel_bytes(self, param_df=None):
+        import io
+        import pandas as pd
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine='openpyxl') as writer:
+            if param_df is not None:
+                param_df.to_excel(writer, sheet_name='param', index=False)
+            bus_df = pd.DataFrame({
+                'bus': [1, 2],
+                'type': ['Swing', 'PQ'],
+                'pload': [100.0, 50.0],
+                'qload': [10.0, 5.0]
+            })
+            bus_df.to_excel(writer, sheet_name='bus', index=False)
+        buf.seek(0)
+        return buf
+
+    def test_sbase_parsing_100(self):
+        import pandas as pd
+        buf = self._create_minimal_excel_bytes(pd.DataFrame({'sbase (MVA)': [100]}))
+        data = self.importer.parse_excel(buf)
+        self.assertEqual(data['sbase_mva'], 100.0)
+        self.assertAlmostEqual(data['buses']['1']['pload_pu'], 1.0)
+        self.assertAlmostEqual(data['buses']['2']['pload_pu'], 0.5)
+
+    def test_sbase_parsing_50(self):
+        import pandas as pd
+        buf = self._create_minimal_excel_bytes(pd.DataFrame({'sbase (MVA)': [50]}))
+        data = self.importer.parse_excel(buf)
+        self.assertEqual(data['sbase_mva'], 50.0)
+        # 100 MW / 50 MVA = 2.0 pu
+        self.assertAlmostEqual(data['buses']['1']['pload_pu'], 2.0)
+        # 50 MW / 50 MVA = 1.0 pu
+        self.assertAlmostEqual(data['buses']['2']['pload_pu'], 1.0)
+
+    def test_sbase_parsing_200(self):
+        import pandas as pd
+        buf = self._create_minimal_excel_bytes(pd.DataFrame({'sbase (MVA)': [200]}))
+        data = self.importer.parse_excel(buf)
+        self.assertEqual(data['sbase_mva'], 200.0)
+        # 100 MW / 200 MVA = 0.5 pu
+        self.assertAlmostEqual(data['buses']['1']['pload_pu'], 0.5)
+        # 50 MW / 200 MVA = 0.25 pu
+        self.assertAlmostEqual(data['buses']['2']['pload_pu'], 0.25)
+
+    def test_sbase_key_value_format(self):
+        import pandas as pd
+        buf = self._create_minimal_excel_bytes(pd.DataFrame({'Parameter': ['sbase'], 'Value': [50]}))
+        data = self.importer.parse_excel(buf)
+        self.assertEqual(data['sbase_mva'], 50.0)
+
+    def test_sbase_parsing_missing_sheet(self):
+        buf = self._create_minimal_excel_bytes(param_df=None)
+        data = self.importer.parse_excel(buf)
+        self.assertEqual(data['sbase_mva'], 100.0)
+
+
 if __name__ == '__main__':
     unittest.main()
 
