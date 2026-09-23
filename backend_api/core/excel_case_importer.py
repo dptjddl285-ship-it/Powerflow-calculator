@@ -302,6 +302,13 @@ class ExcelCaseImporter:
             el_type = get_el_type(el)
             if 'bus' in el_type and not any(k in el_type for k in ('gen', 'load', 'trans')):
                 b_num = el.get('bus_number')
+                if b_num is None:
+                    b_num = el.get('busNumber')
+                if b_num is not None:
+                    try:
+                        b_num = int(b_num)
+                    except (ValueError, TypeError):
+                        b_num = None
                 if b_num is None and el.get('label'):
                     import re
                     m = re.search(r'(\d+)', str(el.get('label')))
@@ -653,7 +660,13 @@ class ExcelCaseImporter:
                     if m:
                         fb, tb = int(m.group(1)), int(m.group(2))
 
-                br_info = branch_dict.get(f"{fb}_{tb}") or branch_dict.get(f"{tb}_{fb}") or branch_dict.get((fb, tb))
+                br_info = branch_dict.get(f"{fb}_{tb}") or branch_dict.get(f"{tb}_{fb}") or branch_dict.get((fb, tb)) or branch_dict.get((tb, fb))
+                if not br_info and (fb is not None and tb is not None):
+                    for br_v in branch_dict.values():
+                        if isinstance(br_v, dict):
+                            if (br_v.get('from_bus') == fb and br_v.get('to_bus') == tb) or (br_v.get('from_bus') == tb and br_v.get('to_bus') == fb):
+                                br_info = br_v
+                                break
                 if br_info and br_info.get('r_pu') is not None and br_info.get('x_pu') is not None:
                     el['parameterStatus'] = 'VALID'
                     el['rPu'] = br_info['r_pu']
@@ -679,76 +692,151 @@ class ExcelCaseImporter:
                     el['tapRatio'] = tr_info['tap']
                     el['tap'] = tr_info['tap']
                     applied_counts['transformer'] += 1
-        # Ensure all generators from Excel exist in elements (e.g. Bus 14 missing on diagram)
+        # =========================================================================
+        # BUS VALIDATION GATEKEEPER (Must execute BEFORE generator auto-supplementation)
+        # =========================================================================
+        diagram_buses = set(el_id_to_bus_num.values())
+        excel_buses = {int(k) for k in bus_dict.keys()}
+        missing_buses = sorted(list(excel_buses - diagram_buses))
+        surplus_buses = sorted(list(diagram_buses - excel_buses))
+        bus_validation_passed = (len(missing_buses) == 0 and len(surplus_buses) == 0)
+
         added_auto_generators = []
-        for b_str, g_info in gen_by_bus.items():
-            b_num = int(b_str)
-            # Generator status check: if status is 0 (out of service), skip
-            if g_info.get('status') == 0:
-                continue
-            if b_num not in applied_gen_buses:
-                target_bus_id = None
-                for bid, bno in el_id_to_bus_num.items():
-                    if bno == b_num:
-                        target_bus_id = bid
-                        break
-                if not target_bus_id:
-                    continue
+        added_auto_leads = []
+        generator_bus_errors = []
 
-                # Duplicate prevention check
-                already_exists = any(
-                    str(e.get('id')) == f"gen_auto_{b_num}" or
-                    (get_el_type(e) in ('generator', 'tool.generator') and (
-                        e.get('bus_number') == b_num or 
-                        str(e.get('parentBusId') or '') == str(target_bus_id)
-                    ))
-                    for e in elements
-                )
-                if already_exists:
+        if not bus_validation_passed:
+            # SAFETY RULE:
+            # When Bus count / numbers / matching fails, NEVER auto-supplement generators or leads!
+            # Never create synthetic buses or attempt to bridge topology defects.
+            # Maintain strict ERROR / REVIEW state.
+            pass
+        else:
+            # Bus validation PASSED: Cross-check generators and auto-supplement if missed by Vision
+            for b_str, g_info in gen_by_bus.items():
+                b_num = int(b_str)
+                # Generator status check: if status is 0 (out of service), skip
+                if g_info.get('status') == 0:
+                    continue
+                if b_num not in applied_gen_buses:
+                    target_bus_id = None
+                    for bid, bno in el_id_to_bus_num.items():
+                        if bno == b_num:
+                            target_bus_id = bid
+                            break
+                    if not target_bus_id:
+                        # Section 13: Do NOT silently ignore! Record explicit validation issue.
+                        generator_bus_errors.append({
+                            "category": "generator",
+                            "type": "error",
+                            "code": "EXCEL_GENERATOR_BUS_NOT_FOUND",
+                            "target": f"Bus {b_num}",
+                            "message": f"Bus {b_num}: Excel Generator exists but matching verified Canvas Bus was not found."
+                        })
+                        continue
+
+                    # Duplicate prevention check
+                    already_exists = any(
+                        str(e.get('id')) == f"gen_auto_{b_num}" or
+                        (get_el_type(e) in ('generator', 'tool.generator') and (
+                            e.get('bus_number') == b_num or 
+                            e.get('busNumber') == b_num or 
+                            str(e.get('parentBusId') or '') == str(target_bus_id)
+                        ))
+                        for e in elements
+                    )
+                    if already_exists:
+                        applied_gen_buses.add(b_num)
+                        continue
+
+                    is_slack = bool(g_info.get('is_slack', False))
+                    is_explicit_sc = bool(
+                        g_info.get('is_synchronous_condenser') or
+                        g_info.get('isSynchronousCondenser') or
+                        'condenser' in str(g_info.get('type', '')).lower() or
+                        str(g_info.get('type', '')).lower() == 'sc' or
+                        '동기조상기' in str(g_info.get('label', ''))
+                    )
+                    is_sc = (not is_slack) and is_explicit_sc
+
+                    target_bus_el = el_by_id.get(str(target_bus_id), {})
+                    b_pos = target_bus_el.get('position')
+                    if isinstance(b_pos, dict):
+                        bx = float(b_pos.get('dx', 100.0 * b_num))
+                        by = float(b_pos.get('dy', 200.0))
+                    else:
+                        bx, by = 100.0 * b_num, 200.0
+
+                    auto_gen = {
+                        'id': f"gen_auto_{b_num}",
+                        'type': 'generator',
+                        'parentBusId': target_bus_id,
+                        'bus_number': b_num,
+                        'busNumber': b_num,
+                        'position': {'dx': bx, 'dy': by - 60.0},
+                        'width': 44.0,
+                        'height': 44.0,
+                        'isSlack': is_slack,
+                        'isSynchronousCondenser': is_sc,
+                        'pPu': float(g_info.get('pg_pu', 0.0)),
+                        'qPu': float(g_info.get('qg_pu', 0.0)),
+                        'vPu': float(g_info.get('voltage_setpoint', 1.0)),
+                        'label': f"G_{b_num}" + (" (Slack)" if is_slack else ""),
+                        'source': 'excel_auto',
+                    }
+                    elements.append(auto_gen)
+                    applied_counts['generator'] += 1
                     applied_gen_buses.add(b_num)
-                    continue
+                    added_auto_generators.append({
+                        'id': auto_gen['id'],
+                        'bus_number': b_num,
+                        'parent_bus_id': target_bus_id,
+                        'pg_mw': g_info.get('pg_mw', 0.0),
+                        'pg_pu': auto_gen['pPu'],
+                        'qg_mvar': g_info.get('qg_mvar', 0.0),
+                        'qg_pu': auto_gen['qPu'],
+                        'v_pu': auto_gen['vPu'],
+                        'is_slack': is_slack,
+                        'label': auto_gen['label'],
+                        'source': 'excel_auto',
+                    })
 
-                is_slack = bool(g_info.get('is_slack', False))
-                is_explicit_sc = bool(
-                    g_info.get('is_synchronous_condenser') or
-                    g_info.get('isSynchronousCondenser') or
-                    'condenser' in str(g_info.get('type', '')).lower() or
-                    str(g_info.get('type', '')).lower() == 'sc' or
-                    '동기조상기' in str(g_info.get('label', ''))
-                )
-                is_sc = (not is_slack) and is_explicit_sc
-
-                auto_gen = {
-                    'id': f"gen_auto_{b_num}",
-                    'type': 'generator',
-                    'parentBusId': target_bus_id,
-                    'bus_number': b_num,
-                    'isSlack': is_slack,
-                    'isSynchronousCondenser': is_sc,
-                    'pPu': float(g_info.get('pg_pu', 0.0)),
-                    'qPu': float(g_info.get('qg_pu', 0.0)),
-                    'vPu': float(g_info.get('voltage_setpoint', 1.0)),
-                    'label': f"G_{b_num}" + (" (Slack)" if is_slack else ""),
-                    'source': 'excel_auto',
-                }
-                elements.append(auto_gen)
-                applied_counts['generator'] += 1
-                applied_gen_buses.add(b_num)
-                added_auto_generators.append({
-                    'id': auto_gen['id'],
-                    'bus_number': b_num,
-                    'parent_bus_id': target_bus_id,
-                    'pg_mw': g_info.get('pg_mw', 0.0),
-                    'pg_pu': auto_gen['pPu'],
-                    'qg_mvar': g_info.get('qg_mvar', 0.0),
-                    'qg_pu': auto_gen['qPu'],
-                    'v_pu': auto_gen['vPu'],
-                    'is_slack': is_slack,
-                    'label': auto_gen['label'],
-                    'source': 'excel_auto',
-                })
+                    # Auto-supplement equipment lead line connecting generator to its parent bus
+                    lead_id = f"lead_gen_auto_{b_num}"
+                    lead_already_exists = any(
+                        str(e.get('id')) == lead_id or
+                        (get_el_type(e) in ('line', 'tool.line') and (
+                            (str(e.get('startElementId')) == auto_gen['id'] and str(e.get('endElementId')) == str(target_bus_id)) or
+                            (str(e.get('startElementId')) == str(target_bus_id) and str(e.get('endElementId')) == auto_gen['id'])
+                        ))
+                        for e in elements
+                    )
+                    if not lead_already_exists:
+                        auto_lead = {
+                            'id': lead_id,
+                            'type': 'line',
+                            'position': {'dx': bx, 'dy': by - 60.0},
+                            'endPosition': {'dx': bx, 'dy': by},
+                            'startElementId': auto_gen['id'],
+                            'endElementId': target_bus_id,
+                            'connected_to': [auto_gen['id'], target_bus_id],
+                            'label': f"Lead G_{b_num} ↔ Bus_{b_num}",
+                            'isEquipmentLead': True,
+                            'isGenLead': True,
+                            'electricalBranch': False,
+                            'rPu': 0.0,
+                            'xPu': 0.0,
+                            'bPu': 0.0,
+                            'tapRatio': 1.0,
+                            'source': 'excel_auto',
+                        }
+                        elements.append(auto_lead)
+                        added_auto_leads.append(lead_id)
 
         mismatch_report = self.compare_elements_with_excel(elements, excel_data)
+        if generator_bus_errors:
+            mismatch_report['is_matched'] = False
+            mismatch_report.setdefault('discrepancies', []).extend(generator_bus_errors)
 
         summary = {
             'slack_bus_number': slack_bus_no,
@@ -756,6 +844,8 @@ class ExcelCaseImporter:
             'total_elements_updated': sum(applied_counts.values()),
             'mismatch_report': mismatch_report,
             'added_auto_generators': added_auto_generators,
+            'added_auto_leads': added_auto_leads,
+            'bus_validation_passed': bus_validation_passed,
         }
         return elements, summary
 
@@ -787,6 +877,13 @@ class ExcelCaseImporter:
             el_type = get_el_type(el)
             if 'bus' in el_type and not any(k in el_type for k in ('gen', 'load', 'trans')):
                 b_num = el.get('bus_number')
+                if b_num is None:
+                    b_num = el.get('busNumber')
+                if b_num is not None:
+                    try:
+                        b_num = int(b_num)
+                    except (ValueError, TypeError):
+                        b_num = None
                 if b_num is None and el.get('label'):
                     m = re.search(r'(\d+)', str(el.get('label')))
                     if m:
@@ -930,6 +1027,10 @@ class ExcelCaseImporter:
                 id_str = str(el.get('id') or '').lower()
 
                 # Check if this is a lead to a generator or load
+                if el.get('isEquipmentLead') or el.get('is_equipment_lead') or el.get('isGenLead') or el.get('is_gen_lead') or el.get('electricalBranch') is False:
+                    continue
+                if id_str.startswith('lead_') or 'lead' in id_str or '↔' in lbl_str:
+                    continue
                 is_gen = 'gen' in s_type or 'gen' in e_type or 'gen' in s_str or 'gen' in e_str or 'g_' in s_str or 'g_' in e_str or 'gen' in lbl_str or 'gen' in id_str
                 is_load = 'load' in s_type or 'load' in e_type or 'load' in s_str or 'load' in e_str or 'load' in lbl_str or 'load' in id_str
                 is_lead = (is_gen or is_load) and ('lead' in id_str or 'lead' in lbl_str)

@@ -2941,6 +2941,27 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                   elements.add(newEl);
                   existingIds.add(id);
                   newlyAddedGens.add(newEl);
+                } else if (typeStr == 'line' || typeStr == 'tool.line') {
+                  final newLineData = Map<String, dynamic>.from(updated);
+                  final sId = newLineData['startElementId']?.toString();
+                  final eId = newLineData['endElementId']?.toString();
+                  DrawingElement? startEl;
+                  DrawingElement? endEl;
+                  if (sId != null) {
+                    startEl = elements.where((e) => e.id == sId).firstOrNull;
+                  }
+                  if (eId != null) {
+                    endEl = elements.where((e) => e.id == eId).firstOrNull;
+                  }
+                  if (newLineData['position'] == null && startEl != null) {
+                    newLineData['position'] = {'dx': startEl.position.dx, 'dy': startEl.position.dy};
+                  }
+                  if (newLineData['endPosition'] == null && endEl != null) {
+                    newLineData['endPosition'] = {'dx': endEl.position.dx, 'dy': endEl.position.dy};
+                  }
+                  final newLeadEl = DrawingElement.fromJson(newLineData);
+                  elements.add(newLeadEl);
+                  existingIds.add(id);
                 }
               }
             }
@@ -3238,8 +3259,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           angle: angle,
           label: label,
           parentBusId: parentBusId,
+          busNumber: devBusNum,
         );
         if (type == Tool.bus) {
+          newEl.busNumber = devBusNum;
           if (node['is_slack'] == true || node['isSlack'] == true) {
             newEl.isSlack = true;
           }

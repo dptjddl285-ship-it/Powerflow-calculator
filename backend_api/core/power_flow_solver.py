@@ -103,7 +103,15 @@ class PowerFlowSolver:
             if el_type == "bus" or el_type == "tool.bus":
                 el_id = str(el.get("id", ""))
                 label = str(el.get("label", ""))
-                b_num = self._extract_bus_number(label, el_id)
+                b_cand = el.get("bus_number") or el.get("busNumber")
+                b_num = None
+                if b_cand is not None:
+                    try:
+                        b_num = int(b_cand)
+                    except (ValueError, TypeError):
+                        b_num = None
+                if b_num is None:
+                    b_num = self._extract_bus_number(label, el_id)
                 if b_num is None:
                     continue
 
@@ -250,6 +258,8 @@ class PowerFlowSolver:
                 label = str(el.get("label", ""))
 
                 # Skip feeder / lead lines wired to transformers, generators, or loads
+                if el.get("isEquipmentLead") or el.get("is_equipment_lead") or el.get("isGenLead") or el.get("is_gen_lead") or el.get("electricalBranch") is False:
+                    continue
                 if start_id in transformer_ids or end_id in transformer_ids:
                     continue
                 if any(cid in transformer_ids for cid in conns):

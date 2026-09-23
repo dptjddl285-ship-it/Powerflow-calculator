@@ -70,7 +70,7 @@ class TestExcelDiscrepancyChecker(unittest.TestCase):
 
 
     def test_synchronous_condenser_load_equivalence(self):
-        """Bus 14 having a load symbol in the diagram satisfies the synchronous condenser requirement."""
+        """Load does not satisfy generator requirement; apply_to_elements auto-supplements missing generator."""
         elements = []
         for k in self.excel_data["buses"].keys():
             elements.append({"id": f"bus_{k}", "type": "bus", "bus_number": int(k), "label": f"{k}"})
@@ -82,8 +82,14 @@ class TestExcelDiscrepancyChecker(unittest.TestCase):
             if int(k) != 14:
                 elements.append({"id": f"gen_{k}", "type": "generator", "parentBusId": f"bus_{k}", "bus_number": int(k)})
 
-        report = self.importer.compare_elements_with_excel(elements, self.excel_data)
-        # Bus 14 should NOT be in missing_generators!
+        # Raw comparison: Bus 14 generator is missing because Load and Gen are independent
+        raw_report = self.importer.compare_elements_with_excel(elements, self.excel_data)
+        self.assertIn(14, raw_report["details"]["missing_generators"])
+
+        # After apply_to_elements: Bus 14 generator is auto-supplemented
+        updated_elements, summary = self.importer.apply_to_elements(elements, self.excel_data)
+        self.assertTrue(any(e.get('id') == 'gen_auto_14' for e in updated_elements))
+        report = summary["mismatch_report"]
         self.assertNotIn(14, report["details"]["missing_generators"])
 
     def test_transformer_multibus_connections(self):

@@ -34,6 +34,10 @@ class DrawingElement {
   int? circuitCount;
   String? busType;
   String? source;
+  int? busNumber;
+  bool isEquipmentLead = false;
+  bool isGenLead = false;
+  bool electricalBranch = true;
 
   bool get isAutoAddedFromExcel =>
       source == 'excel_auto' || id.startsWith('gen_auto_');
@@ -82,6 +86,10 @@ class DrawingElement {
     this.busType,
     this.source,
     this.isSynchronousCondenserExplicit,
+    this.busNumber,
+    this.isEquipmentLead = false,
+    this.isGenLead = false,
+    this.electricalBranch = true,
   }) {
     if (type == Tool.generator && isSynchronousCondenserExplicit == null) {
       if (label.startsWith("SC_") || label.startsWith("SC ") || label == "SC" || label.contains("동기조상기") || id.startsWith("sc_") || id.startsWith("SC_")) {
@@ -114,6 +122,10 @@ class DrawingElement {
       circuitCount: circuitCount,
       busType: busType,
       source: source,
+      busNumber: busNumber,
+      isEquipmentLead: isEquipmentLead,
+      isGenLead: isGenLead,
+      electricalBranch: electricalBranch,
     )
       ..showInfo = showInfo
       ..isSlack = isSlack
@@ -134,6 +146,7 @@ class DrawingElement {
       'id': id,
       'label': label,
       'type': type.name,
+      'bus_number': busNumber,
       'parentBusId': parentBusId,
       'startElementId': startElementId,
       'endElementId': endElementId,
@@ -150,6 +163,9 @@ class DrawingElement {
       'circuitCount': circuitCount,
       'bus_type': busType,
       'source': source,
+      'isEquipmentLead': isEquipmentLead,
+      'isGenLead': isGenLead,
+      'electricalBranch': electricalBranch,
     };
   }
 
@@ -229,6 +245,20 @@ class DrawingElement {
     if (json.containsKey('source') && json['source'] != null) {
       source = json['source'].toString();
     }
+    if (json.containsKey('bus_number') && json['bus_number'] != null) {
+      busNumber = (json['bus_number'] as num).toInt();
+    } else if (json.containsKey('busNumber') && json['busNumber'] != null) {
+      busNumber = (json['busNumber'] as num).toInt();
+    }
+    if (json.containsKey('isEquipmentLead') && json['isEquipmentLead'] != null) {
+      isEquipmentLead = json['isEquipmentLead'] == true;
+    }
+    if (json.containsKey('isGenLead') && json['isGenLead'] != null) {
+      isGenLead = json['isGenLead'] == true;
+    }
+    if (json.containsKey('electricalBranch') && json['electricalBranch'] != null) {
+      electricalBranch = json['electricalBranch'] == true;
+    }
   }
 
   factory DrawingElement.fromJson(Map<String, dynamic> json) {
@@ -266,6 +296,10 @@ class DrawingElement {
       circuitCount: (json['circuitCount'] as num?)?.toInt(),
       busType: json['bus_type']?.toString(),
       source: json['source']?.toString(),
+      busNumber: (json['bus_number'] as num?)?.toInt() ?? (json['busNumber'] as num?)?.toInt(),
+      isEquipmentLead: json['isEquipmentLead'] == true,
+      isGenLead: json['isGenLead'] == true,
+      electricalBranch: json['electricalBranch'] != false,
     );
     el.updateFromJson(json);
     if (el.type == Tool.bus && el.width < el.height) {
