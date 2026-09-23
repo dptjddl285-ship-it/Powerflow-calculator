@@ -91,14 +91,12 @@ void main() {
       },
     );
 
-    test('uses the review stage to resolve an implicit approval', () {
+    test('does not resolve Connection Review replies into implicit approval', () {
       const context = PowerLensAssistantContext(
         currentScreen: 'REVIEW_PAGE',
         workflowStage: 'CONNECTION_REVIEW',
       );
-      expect(service.resolveIntentActions('이거 괜찮아 보이는데?', context), [
-        PowerLensAppAction.approveCurrentAndNext,
-      ]);
+      expect(service.resolveIntentActions('이거 괜찮아 보이는데?', context), isEmpty);
       expect(service.resolveIntentActions('넌 뭘 할 수 있어?'), [
         PowerLensAppAction.explainCurrentStage,
       ]);
@@ -107,20 +105,14 @@ void main() {
       ]);
     });
 
-    test('separates connection overview, lines-only, and sequential review', () {
+    test('Connection Review keeps a whole-network exception surface', () {
       const context = PowerLensAssistantContext(
         currentScreen: 'REVIEW_PAGE',
         workflowStage: 'CONNECTION_REVIEW',
       );
-      expect(service.resolveIntentActions('전체 다 봐줘', context), [
-        PowerLensAppAction.connectionFullReview,
-      ]);
-      expect(service.resolveIntentActions('선로만 집중해줘', context), [
-        PowerLensAppAction.connectionLinesOnly,
-      ]);
-      expect(service.resolveIntentActions('다음 선 보여줘', context), [
-        PowerLensAppAction.connectionNextLine,
-      ]);
+      expect(service.resolveIntentActions('전체 다 봐줘', context), isEmpty);
+      expect(service.resolveIntentActions('선로만 집중해줘', context), isEmpty);
+      expect(service.resolveIntentActions('다음 선 보여줘', context), isEmpty);
       expect(service.resolveIntentActions('객체 검수 완료해줘', context), [
         PowerLensAppAction.goToNextStage,
       ]);

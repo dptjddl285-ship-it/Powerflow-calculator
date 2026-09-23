@@ -268,13 +268,37 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   // Statistics (Connection)
   int get _lineAmbiguousCount =>
-      _workingLines.where((l) => l.reviewStatus == 'AMBIGUOUS').length;
+      _activeConnectionLines.where((l) => l.reviewStatus == 'AMBIGUOUS').length;
   int get _lineDetectedCount =>
-      _workingLines.where((l) => l.reviewStatus == 'DETECTED').length;
+      _activeConnectionLines.where((l) => l.reviewStatus == 'DETECTED').length;
   int get _lineRejectedCount =>
       _workingLines.where((l) => l.reviewStatus == 'REJECTED').length;
   int get _criticalIssuesCount =>
-      _topologyIssues.where((i) => i['severity'] == 'error').length;
+      _topologyIssues.where(ConnectionReviewGateEvaluator.isCriticalIssue).length;
+
+  List<ReviewLineItem> get _activeConnectionLines =>
+      ConnectionReviewGateEvaluator.activeLines(_workingLines);
+
+  List<ReviewLineItem> get _connectionExceptionLines => _activeConnectionLines
+      .where(ConnectionReviewGateEvaluator.isExceptionLine)
+      .toList();
+
+  int get _connectionCrossingCount => _activeConnectionLines
+      .where(ConnectionReviewGateEvaluator.isUnresolvedCrossing)
+      .length;
+
+  List<String> get _connectionGateBlockers =>
+      ConnectionReviewGateEvaluator.getBlockers(
+        workingLines: _workingLines,
+        topologyIssues: _topologyIssues,
+      );
+
+  Set<String> get _connectionGuideLineIds =>
+      ConnectionReviewGateEvaluator.computeGuideLineIds(
+        workingLines: _workingLines,
+        topologyIssues: _topologyIssues,
+        focusTargets: PowerLensAIService.instance.lastFocusTargets,
+      );
 
   List<ReviewLineItem> get _connectionPriorityMissionLines {
     final mission = _workingLines
@@ -304,43 +328,38 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   bool get _canVerifyFinalGate =>
-      _lineAmbiguousCount == 0 &&
-      _criticalIssuesCount == 0 &&
-      _connectionMissionComplete &&
-      _workingLines.where((l) => l.reviewStatus != 'REJECTED').isNotEmpty;
+      ConnectionReviewGateEvaluator.canVerifyGate(
+        workingLines: _workingLines,
+        topologyIssues: _topologyIssues,
+      );
 
   // Filtered & Sorted Working Lines
   List<ReviewLineItem> get _filteredAndSortedWorkingLines {
-    List<ReviewLineItem> list = List.from(_workingLines);
+    List<ReviewLineItem> list = _connFilterStatus == 'REJECTED'
+        ? _workingLines.where((l) => l.reviewStatus == 'REJECTED').toList()
+        : _activeConnectionLines;
 
-    if (_connFilterStatus == 'AMBIGUOUS') {
-      list = list.where((l) => l.reviewStatus == 'AMBIGUOUS').toList();
-    } else if (_connFilterStatus == 'AUTO_CONFIRMED') {
+    if (_connFilterStatus == 'AMBIGUOUS' ||
+        _connFilterStatus == 'NEEDS_REVIEW') {
       list = list
-          .where(
-            (l) => l.reviewStatus == 'CONFIRMED' && !l.source.contains('human'),
-          )
+          .where(ConnectionReviewGateEvaluator.isExceptionLine)
           .toList();
-    } else if (_connFilterStatus == 'HUMAN_CONFIRMED') {
+    } else if (_connFilterStatus == 'CROSSING') {
       list = list
-          .where(
-            (l) => l.reviewStatus == 'CONFIRMED' && l.source.contains('human'),
-          )
+          .where(ConnectionReviewGateEvaluator.isUnresolvedCrossing)
           .toList();
-    } else if (_connFilterStatus == 'DETECTED') {
-      list = list.where((l) => l.reviewStatus == 'DETECTED').toList();
-    } else if (_connFilterStatus == 'REJECTED') {
-      list = list.where((l) => l.reviewStatus == 'REJECTED').toList();
     } else if (_connFilterStatus == 'ERROR_ONLY') {
-      list = list.where((l) => l.validationIssues.isNotEmpty).toList();
+      list = list
+          .where(ConnectionReviewGateEvaluator.lineHasCriticalIssue)
+          .toList();
     }
 
     if (_connSortOption == 'SEVERITY') {
       list.sort((a, b) {
         int rank(ReviewLineItem l) {
-          if (l.validationIssues.isNotEmpty) return 0;
-          if (l.reviewStatus == 'AMBIGUOUS') return 1;
-          if (l.reviewStatus == 'DETECTED') return 2;
+          if (ConnectionReviewGateEvaluator.lineHasCriticalIssue(l)) return 0;
+          if (ConnectionReviewGateEvaluator.isUnresolvedCrossing(l)) return 1;
+          if (l.reviewStatus == 'AMBIGUOUS') return 2;
           return 3;
         }
 
@@ -348,21 +367,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       });
     } else if (_connSortOption == 'ID_ASC') {
       list.sort((a, b) => a.lineId.compareTo(b.lineId));
-    }
-
-    if (_currentPhase == ReviewPhase.connectionReview &&
-        !_connectionFastMode &&
-        _connSortOption == 'SEVERITY' &&
-        _connFilterStatus == 'ALL') {
-      final priorityIds = _connectionPriorityMissionLines
-          .map((line) => line.lineId)
-          .toSet();
-      list.sort((a, b) {
-        final aPriority = priorityIds.contains(a.lineId);
-        final bPriority = priorityIds.contains(b.lineId);
-        if (aPriority != bPriority) return aPriority ? -1 : 1;
-        return a.lineId.compareTo(b.lineId);
-      });
     }
 
     return list;
@@ -399,9 +403,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       case ReviewPhase.busMappingReview:
         return 'bus_gate';
       case ReviewPhase.connectionReview:
-        return _connectionMissionComplete
-            ? 'connection_gate'
-            : 'connection_priority';
+        return _canVerifyFinalGate ? 'connection_gate' : '';
       case ReviewPhase.verifiedFinal:
         return _importedExcelData == null
             ? 'final_excel_upload'
@@ -578,24 +580,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _busPage = 0;
         _selectedLine = null;
       } else if (_currentPhase == ReviewPhase.connectionReview) {
-        _connectionFullOverview = false;
-        _connectionLinesOnlyMode = false;
-        _connectionFastMode = false;
-        _lineFocusOnly = true;
+        final guideIds = _connectionGuideLineIds;
         _linePage = 0;
-        _showAllLinesList = false;
+        _connFilterStatus = guideIds.isNotEmpty ? 'NEEDS_REVIEW' : 'ALL';
+        _showAllLinesList = true;
         _showTopologyDetails = _topologyIssues.isNotEmpty;
-        if (_lineAmbiguousCount > 0 || _topologyIssues.isNotEmpty) {
-          _connFilterStatus = _lineAmbiguousCount > 0
-              ? 'AMBIGUOUS'
-              : 'ERROR_ONLY';
-          final issues = _filteredAndSortedWorkingLines;
-          _selectedLine = issues.isNotEmpty ? issues.first : _selectedLine;
-        } else {
-          _connFilterStatus = 'ALL';
-          final allLines = _filteredAndSortedWorkingLines;
-          _selectedLine = allLines.isNotEmpty ? allLines.first : _selectedLine;
-        }
+        final issues = _filteredAndSortedWorkingLines;
+        _selectedLine = issues.isNotEmpty ? issues.first : _selectedLine;
         _selectedNode = null;
       }
     });
@@ -613,63 +604,15 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   bool _showConnectionFullReviewForAgent() {
-    if (_currentPhase != ReviewPhase.connectionReview ||
-        _workingLines.isEmpty) {
-      return false;
-    }
-    setState(() {
-      _connectionFullOverview = true;
-      _connectionLinesOnlyMode = false;
-      _connectionFastMode = true;
-      _lineFocusOnly = false;
-      _connFilterStatus = 'ALL';
-      _connSortOption = 'ID_ASC';
-      _showAllLinesList = true;
-      _selectedLine = null;
-      _selectedNode = null;
-      _selectedTopologyIssue = null;
-      _linePage = 0;
-    });
-    return true;
+    return false;
   }
 
   bool _showConnectionLinesOnlyForAgent() {
-    if (_currentPhase != ReviewPhase.connectionReview ||
-        _workingLines.isEmpty) {
-      return false;
-    }
-    setState(() {
-      _connectionFullOverview = false;
-      _connectionLinesOnlyMode = true;
-      _connectionFastMode = true;
-      _lineFocusOnly = false;
-      _connFilterStatus = 'ALL';
-      _connSortOption = 'ID_ASC';
-      _showAllLinesList = true;
-      _selectedLine = null;
-      _selectedNode = null;
-      _selectedTopologyIssue = null;
-      _linePage = 0;
-    });
-    return true;
+    return false;
   }
 
   bool _showConnectionNextLineForAgent() {
-    if (_currentPhase != ReviewPhase.connectionReview ||
-        _workingLines.isEmpty) {
-      return false;
-    }
-    setState(() {
-      _connectionFullOverview = false;
-      _connectionLinesOnlyMode = false;
-      _connectionFastMode = false;
-      _lineFocusOnly = true;
-      _connFilterStatus = 'ALL';
-      _connSortOption = 'SEVERITY';
-      _showAllLinesList = false;
-    });
-    _selectNextLine();
-    return true;
+    return false;
   }
 
   bool _approveCurrentAndNextForAgent() {
@@ -681,9 +624,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         // Bus Mapping V2: sequential approveCurrentAndNext does not exist
         return false;
       case ReviewPhase.connectionReview:
-        if (_selectedLine == null) return false;
-        _confirmLineAndNext(_selectedLine!);
-        return true;
+        // Connection Review V2 has no implicit approval or auto-next action.
+        return false;
       case ReviewPhase.verifiedFinal:
         return false;
     }
@@ -739,7 +681,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           _connectionFullOverview = false;
           _connectionLinesOnlyMode = false;
           _connectionFastMode = false;
-          _lineFocusOnly = true;
+          _lineFocusOnly = false;
           _selectedNode = null;
           _connFilterStatus = 'ALL';
           var lines = _filteredAndSortedWorkingLines;
@@ -755,12 +697,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   PowerLensAssistantContext _buildAssistantContext() {
-    final connectionBlockers = <String>[
-      if (_lineAmbiguousCount > 0) '검토가 필요한 결선 $_lineAmbiguousCount개',
-      ..._topologyIssues.map(
-        (issue) => issue['message']?.toString() ?? '연결 구조 오류',
-      ),
-    ];
+    final connectionBlockers = _connectionGateBlockers;
 
     return PowerLensAssistantContext(
       currentScreen: 'REVIEW_PAGE',
@@ -779,9 +716,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       totalBuses: _busNodes.length,
       unresolvedBusNumbers: _busUncertainCount,
       duplicateBusNumbers: _duplicateBusNumbers.length,
-      totalConnections: _workingLines.length,
-      ambiguousConnections: _lineAmbiguousCount,
-      topologyIssueCount: _topologyIssues.length,
+      totalConnections: _activeConnectionLines.length,
+      ambiguousConnections: _connectionExceptionLines.length,
+      topologyIssueCount: _topologyIssues
+          .where(ConnectionReviewGateEvaluator.isCriticalIssue)
+          .length,
       finalVerified: _verifiedSld != null,
       selectedNode: _selectedNode?.toJson(),
       selectedLine: _selectedLine?.toJson(),
@@ -1094,111 +1033,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
 
 
-  // --- Sequential Line Review Methods ---
-  void _selectPreviousLine() {
-    var lines = _filteredAndSortedWorkingLines;
-    if (lines.isEmpty || (_selectedLine != null && !lines.any((l) => l.lineId == _selectedLine!.lineId))) {
-      _connFilterStatus = 'ALL';
-      lines = _filteredAndSortedWorkingLines;
-      if (lines.isEmpty) {
-        lines = _workingLines.where((l) => l.reviewStatus != 'REJECTED').toList();
-      }
-    }
-    if (lines.isEmpty) lines = _workingLines;
-    if (lines.isEmpty) return;
-
-    int currentIdx = _selectedLine != null
-        ? lines.indexWhere((l) => l.lineId == _selectedLine!.lineId)
-        : 0;
-    if (currentIdx < 0) currentIdx = 0;
-    int prevIdx = (currentIdx - 1 + lines.length) % lines.length;
-    setState(() {
-      _selectedLine = lines[prevIdx];
-      _linePage = prevIdx ~/ _linePageSize;
-      _selectedNode = null;
-      _selectedTopologyIssue = null;
-    });
-  }
-
-  void _selectNextLine() {
-    var lines = _filteredAndSortedWorkingLines;
-    if (lines.isEmpty || (_selectedLine != null && !lines.any((l) => l.lineId == _selectedLine!.lineId))) {
-      _connFilterStatus = 'ALL';
-      lines = _filteredAndSortedWorkingLines;
-      if (lines.isEmpty) {
-        lines = _workingLines.where((l) => l.reviewStatus != 'REJECTED').toList();
-      }
-    }
-    if (lines.isEmpty) lines = _workingLines;
-    if (lines.isEmpty) return;
-
-    int currentIdx = _selectedLine != null
-        ? lines.indexWhere((l) => l.lineId == _selectedLine!.lineId)
-        : -1;
-    int nextIdx = currentIdx + 1;
-    if (nextIdx >= lines.length) {
-      nextIdx = 0;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("✓ 모든 선로를 한 바퀴 검토했습니다."),
-          duration: Duration(seconds: 2),
-        ),
-      );
-    }
-    setState(() {
-      _selectedLine = lines[nextIdx];
-      _linePage = nextIdx ~/ _linePageSize;
-      _selectedNode = null;
-      _selectedTopologyIssue = null;
-    });
-  }
-
-  void _confirmLineAndNext(ReviewLineItem line) {
-    setState(() {
-      line.reviewStatus = 'CONFIRMED';
-      line.source = '${line.source}_human_confirmed';
-      if (_connFilterStatus == 'AMBIGUOUS' && _lineAmbiguousCount == 0) {
-        _connFilterStatus = 'ALL';
-      } else if (_connFilterStatus == 'ERROR_ONLY' && _criticalIssuesCount == 0) {
-        _connFilterStatus = 'ALL';
-      }
-    });
-    _triggerTopologyValidation();
-    _selectNextLine();
-  }
-
-  void _rejectLineAndNext(ReviewLineItem line) {
-    final lines = _filteredAndSortedWorkingLines;
-    int currentIdx = lines.indexWhere((item) => item.lineId == line.lineId);
-    setState(() {
-      _workingLines.removeWhere((item) => item.lineId == line.lineId);
-      if (_connFilterStatus == 'AMBIGUOUS' && _lineAmbiguousCount == 0) {
-        _connFilterStatus = 'ALL';
-      } else if (_connFilterStatus == 'ERROR_ONLY' && _criticalIssuesCount == 0) {
-        _connFilterStatus = 'ALL';
-      }
-      var remaining = _filteredAndSortedWorkingLines;
-      if (remaining.isEmpty) {
-        _connFilterStatus = 'ALL';
-        remaining = _filteredAndSortedWorkingLines;
-        if (remaining.isEmpty) {
-          remaining = _workingLines.where((l) => l.reviewStatus != 'REJECTED').toList();
-        }
-      }
-      if (remaining.isNotEmpty) {
-        int nextIdx = currentIdx.clamp(0, remaining.length - 1);
-        _selectedLine = remaining[nextIdx];
-        _linePage = nextIdx ~/ _linePageSize;
-      } else {
-        _selectedLine = null;
-      }
-      _isFinalVerified = false;
-      _selectedNode = null;
-      _selectedTopologyIssue = null;
-    });
-    _triggerTopologyValidation();
-  }
-
   // --- Bus Mapping V2 Methods ---
   void _handleApplyBusNumber(ReviewNodeItem busNode, int num) {
     if (num <= 0) return;
@@ -1325,12 +1159,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           selectedLabel: _selectedNode?.effectiveDisplayLabel,
         );
       case ReviewPhase.connectionReview:
-        if (_connectionMissionComplete || (_lineAmbiguousCount == 0 && _topologyIssues.isEmpty)) {
-          return "모든 선로와 결선 연결이 정상적으로 검증되었습니다!\n"
-              "아래 [결선 검수 완료]를 눌러 마지막 확인을 시작해주세요.";
+        if (_connectionGateBlockers.isEmpty) {
+          return "전체 네트워크 결선이 정상 확인되었어요.\n"
+              "전체 도면을 마지막으로 확인한 뒤 아래 [결선 검수 완료]를 눌러주세요.";
         }
-        return "전체 연결을 먼저 확인해봤어요. 제가 다시 보는 게 좋다고 판단한 선부터 같이 볼게요.\n"
-            "[핵심 검토]에서 [선로 승인하고 다음]을 누르거나, 전체 선로·한 선씩 보기로 바꿀 수 있어요.";
+        return "확인이 필요한 결선 예외를 실제 경로와 함께 표시했어요.\n"
+            "도면에서 해당 선로를 선택하고 끝점·근거·전기 오류를 확인해주세요.";
       case ReviewPhase.verifiedFinal:
         return _importedExcelData == null
             ? "검증이 끝났어요. 이제 엑셀 값을 연결하면 실제 조류계산을 할 수 있어요.\n"
@@ -1371,7 +1205,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     if (event.logicalKey == LogicalKeyboardKey.arrowRight ||
         event.logicalKey == LogicalKeyboardKey.arrowDown) {
       if (_currentPhase == ReviewPhase.connectionReview) {
-        _selectNextLine();
+        // Connection Review V2 is not a keyboard-driven sequential queue.
+        // Keep the event consumed so arrows cannot silently change focus.
         return true;
       }
     }
@@ -1380,7 +1215,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     if (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
         event.logicalKey == LogicalKeyboardKey.arrowUp) {
       if (_currentPhase == ReviewPhase.connectionReview) {
-        _selectPreviousLine();
+        // Explicit line selection in the network list is required.
         return true;
       }
     }
@@ -1390,7 +1225,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         event.logicalKey == LogicalKeyboardKey.numpadEnter) {
       if (_currentPhase == ReviewPhase.connectionReview &&
           _selectedLine != null) {
-        _confirmLineAndNext(_selectedLine!);
+        // Enter is deliberately not an approval shortcut in Connection V2.
         return true;
       }
     }
@@ -1402,7 +1237,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         return true;
       } else if (_currentPhase == ReviewPhase.connectionReview &&
           _selectedLine != null) {
-        _rejectLineAndNext(_selectedLine!);
+        _rejectLine(_selectedLine!);
         return true;
       }
     }
@@ -1766,7 +1601,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       _connectionFullOverview = false;
       _connectionLinesOnlyMode = false;
       _connectionFastMode = false;
-      _lineFocusOnly = true;
+      // Connection Review V2 always keeps the full network visible. Focus is
+      // reserved for actual exception LINE/ISSUE targets, never a fabricated
+      // sequential queue.
+      _lineFocusOnly = false;
     });
 
     try {
@@ -1805,7 +1643,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _connectionFullOverview = false;
         _connectionLinesOnlyMode = false;
         _connectionFastMode = false;
-        _lineFocusOnly = true;
+        _lineFocusOnly = false;
       });
 
       FocusManager.instance.primaryFocus?.unfocus();
@@ -1836,30 +1674,58 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         lines: _workingLines,
       );
 
+      final rawAnnotated = res['annotated_lines'];
+      final annotatedById = <String, ReviewLineItem>{};
+      if (rawAnnotated is List) {
+        for (final raw in rawAnnotated) {
+          if (raw is Map) {
+            final parsed = ReviewLineItem.fromJson(
+              Map<String, dynamic>.from(raw),
+            );
+            annotatedById[parsed.lineId] = parsed;
+          }
+        }
+      }
+
       setState(() {
         _topologyIssues = List<Map<String, dynamic>>.from(res['issues'] ?? []);
+        if (annotatedById.isNotEmpty) {
+          _workingLines = _workingLines.map((current) {
+            final annotated = annotatedById[current.lineId];
+            if (annotated == null) return current;
+            annotated.connectionReviewResolution =
+                current.connectionReviewResolution;
+            if (annotated.candidateTargets.isEmpty) {
+              annotated.candidateTargets = List.from(current.candidateTargets);
+            }
+            return annotated;
+          }).toList();
+          if (_selectedLine != null) {
+            final matching = _workingLines.where(
+              (line) => line.lineId == _selectedLine!.lineId,
+            );
+            _selectedLine = matching.isEmpty ? null : matching.first;
+          }
+        }
       });
+
+      final validLineIds = _connectionGuideLineIds;
+      final validIssueIds = ConnectionReviewGateEvaluator.computeGuideIssueIds(
+        topologyIssues: _topologyIssues,
+        workingLines: _workingLines,
+      );
+      PowerLensAIService.instance.setFocusTargets(
+        PowerLensAIService.instance.lastFocusTargets.where((target) {
+          final type = target['type']?.toString().toUpperCase();
+          final id = target['id']?.toString();
+          if (type == 'LINE') return id != null && validLineIds.contains(id);
+          if (type == 'ISSUE') return id != null && validIssueIds.contains(id);
+          return true;
+        }).toList(),
+      );
     } catch (e) {
       print("토폴로지 검증 오류: $e");
     }
-  }
-
-  void _batchConfirmCleanDetectedLines() {
-    setState(() {
-      for (var line in _workingLines) {
-        if (line.reviewStatus == 'DETECTED' && line.validationIssues.isEmpty) {
-          line.reviewStatus = 'CONFIRMED';
-          line.source = '${line.source}_auto_confirmed';
-        }
-      }
-    });
-    _triggerTopologyValidation();
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text("정상 결선들이 일괄 승인되었습니다."),
-        backgroundColor: Colors.teal,
-      ),
-    );
   }
 
   Future<void> _handleManualAddLineComplete(
@@ -1966,13 +1832,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
     final gateReady = await _runReviewStageGate(
       canProceed: () => _canVerifyFinalGate,
-      blockers: () => [
-        if (_lineAmbiguousCount > 0) '검토가 필요한 결선 $_lineAmbiguousCount개 승인 또는 제외',
-        if (_criticalIssuesCount > 0) '연결 구조 오류 $_criticalIssuesCount건 해결',
-        if (!_connectionMissionComplete) 'Lensy 핵심 선로 검토 미션 완료',
-        if (_workingLines.where((l) => l.reviewStatus != 'REJECTED').isEmpty)
-          '사용 가능한 선로가 없음',
-      ],
+      blockers: () => _connectionGateBlockers,
     );
     if (!gateReady) {
       _focusNextReviewTask();
@@ -2354,13 +2214,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             child: _buildPhaseBadge(
               "③ 결선 검수",
               _currentPhase == ReviewPhase.connectionReview,
-              _workingLines.isNotEmpty && _lineAmbiguousCount == 0,
-              onTap: _workingLines.isNotEmpty
+              _canVerifyFinalGate,
+              onTap: _activeConnectionLines.isNotEmpty
                   ? () {
                       setState(() {
                         _currentPhase = ReviewPhase.connectionReview;
                         _selectedNode = null;
-                        _selectedLine = _workingLines.first;
+                        _selectedLine = _activeConnectionLines.first;
+                        _lineFocusOnly = false;
                       });
                     }
                   : null,
@@ -2751,13 +2612,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     if (_currentPhase == ReviewPhase.busMappingReview) {
       return _busUiState.nextActionText;
     }
-    if (_lineAmbiguousCount > 0) {
-      return '검토가 필요한 결선 $_lineAmbiguousCount개를 확인하세요.';
+    if (_connectionGateBlockers.isNotEmpty) {
+      return _connectionGateBlockers.first;
     }
-    if (_criticalIssuesCount > 0) {
-      return '연결 구조 오류 $_criticalIssuesCount건을 먼저 해결하세요.';
-    }
-    return '결선 확인이 완료되었습니다. 최종 검증을 진행할 수 있습니다.';
+    return '결선 확인이 완료되었습니다. [결선 검수 완료]를 눌러 최종 검증을 진행하세요.';
   }
 
   void _focusNextReviewTask() {
@@ -2783,16 +2641,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _selectedNode = buses.isNotEmpty ? buses.first : null;
         _selectedLine = null;
       } else if (_currentPhase == ReviewPhase.connectionReview) {
-        _connFilterStatus = _lineAmbiguousCount > 0
-            ? 'AMBIGUOUS'
-            : 'ERROR_ONLY';
-        _showAllLinesList = false;
+        final guideIds = _connectionGuideLineIds;
+        _connFilterStatus = guideIds.isNotEmpty ? 'NEEDS_REVIEW' : 'ALL';
+        _showAllLinesList = true;
         _showTopologyDetails = _topologyIssues.isNotEmpty;
         final lines = _filteredAndSortedWorkingLines;
         final nextIndex = lines.indexWhere(
-          (line) =>
-              line.reviewStatus == 'AMBIGUOUS' ||
-              line.validationIssues.isNotEmpty,
+          (line) => guideIds.contains(line.lineId),
         );
         if (nextIndex >= 0) {
           _selectedLine = lines[nextIndex];
@@ -2858,8 +2713,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               !_humanCompletenessConfirmed)
         : isBusPhase
         ? busState.isBlocked
-        : isConnectionPhase &&
-              (_lineAmbiguousCount > 0 || _criticalIssuesCount > 0);
+        : isConnectionPhase && _connectionGateBlockers.isNotEmpty;
     final autoConfirmedCount = isObjectPhase
         ? _workingNodes
               .where(
@@ -2870,13 +2724,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               .length
         : isBusPhase
         ? _busVerifiedCount
-        : _workingLines
-              .where(
-                (line) =>
-                    line.reviewStatus == 'CONFIRMED' &&
-                    !line.source.contains('human'),
-              )
-              .length;
+        : _activeConnectionLines.length;
     final providerMode = _document?.proactiveSummary?.providerMode
         .toLowerCase();
     final providerLabel = providerMode?.startsWith('gemini') == true
@@ -2983,6 +2831,26 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               const Color(0xFFD97706),
               icon: Icons.warning_amber_rounded,
             ),
+          ] else if (isConnectionPhase) ...[
+            _buildAiMetric(
+              '전체 결선',
+              _activeConnectionLines.length,
+              const Color(0xFF2563EB),
+            ),
+            const SizedBox(width: 4),
+            _buildAiMetric(
+              '확인 필요',
+              _connectionExceptionLines.length,
+              const Color(0xFFD97706),
+              icon: Icons.warning_amber_rounded,
+            ),
+            const SizedBox(width: 4),
+            _buildAiMetric(
+              '전기 오류',
+              _criticalIssuesCount,
+              const Color(0xFFDC2626),
+              icon: Icons.error_outline,
+            ),
           ] else ...[
             _buildAiMetric(
               '자동 승인',
@@ -3022,7 +2890,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               size: 13,
             ),
             label: Text(
-              hasNextTask ? '다음 검토' : '정리 완료',
+              isConnectionPhase
+                  ? (hasNextTask ? '예외 보기' : '정상 확인')
+                  : (hasNextTask ? '다음 검토' : '정리 완료'),
               style: const TextStyle(
                 fontSize: 10.5,
                 fontWeight: FontWeight.bold,
@@ -3210,27 +3080,27 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                 ),
                               ],
                             ] else ...[
-                              if (_lineDetectedCount > 0)
-                                ElevatedButton.icon(
-                                  onPressed: _batchConfirmCleanDetectedLines,
-                                  icon: const Icon(Icons.done_all, size: 13),
-                                  label: Text(
-                                    "정상 결선 승인 ($_lineDetectedCount)",
-                                    style: const TextStyle(
-                                      fontSize: 10.5,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: const Color(0xFF0D9488),
-                                    foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 4,
-                                    ),
-                                    visualDensity: VisualDensity.compact,
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 5,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF1F5F9),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(
+                                    color: const Color(0xFFCBD5E1),
                                   ),
                                 ),
+                                child: const Text(
+                                  '정상 결선은 자동 확인 · 예외만 검토',
+                                  style: TextStyle(
+                                    color: Color(0xFF475569),
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
                               const SizedBox(width: 6),
                               ChoiceChip(
                                 label: Text(
@@ -3652,7 +3522,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                         ReviewPhase.busMappingReview
                                     ? _buildBusMappingReviewSidePanel()
                                     : isConnectionPhase
-                                    ? _buildConnectionReviewSidePanel()
+                                    ? _buildConnectionReviewV2SidePanel()
                                     : _buildObjectReviewSidePanel(),
                               ),
                             ),
@@ -4715,13 +4585,526 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
               visualDensity: VisualDensity.compact,
             ),
-            child: const Text('한 선씩 보기', style: TextStyle(fontSize: 10)),
+            child: const Text('예외 목록 보기', style: TextStyle(fontSize: 10)),
           ),
         ],
       ),
     );
   }
 
+  Color _connectionLineColor(ReviewLineItem line) {
+    if (line.reviewStatus == 'REJECTED') return const Color(0xFF94A3B8);
+    if (ConnectionReviewGateEvaluator.lineHasCriticalIssue(line)) {
+      return const Color(0xFFDC2626);
+    }
+    if (ConnectionReviewGateEvaluator.isUnresolvedCrossing(line)) {
+      return const Color(0xFF9333EA);
+    }
+    if (line.reviewStatus == 'AMBIGUOUS') return const Color(0xFFD97706);
+    return const Color(0xFF64748B);
+  }
+
+  Widget _buildConnectionReviewV2SidePanel() {
+    final active = _activeConnectionLines;
+    final filtered = _filteredAndSortedWorkingLines;
+    final selected = _selectedLine;
+    final visible = filtered.isEmpty ? active : filtered;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.account_tree_outlined, size: 17, color: Color(0xFF2563EB)),
+            const SizedBox(width: 6),
+            const Expanded(
+              child: Text(
+                '전체 네트워크 결선 검수',
+                style: TextStyle(
+                  color: Color(0xFF0F172A),
+                  fontWeight: FontWeight.w800,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+            Text(
+              '${active.length}개',
+              style: const TextStyle(
+                color: Color(0xFF64748B),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          _connectionGateBlockers.isEmpty
+              ? '정상 결선은 자동 확인되고, 예외만 실제 경로와 함께 표시됩니다.'
+              : '확인이 필요한 예외를 선택해 끝점·경로·전기 근거를 확인하세요.',
+          style: const TextStyle(
+            color: Color(0xFF475569),
+            fontSize: 10.5,
+            height: 1.35,
+          ),
+        ),
+        const SizedBox(height: 9),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            _buildFilterableConnStatBadge(
+              '전체',
+              active.length,
+              const Color(0xFF475569),
+              'ALL',
+            ),
+            _buildFilterableConnStatBadge(
+              '확인 필요',
+              _connectionExceptionLines.length,
+              const Color(0xFFD97706),
+              'NEEDS_REVIEW',
+            ),
+            _buildFilterableConnStatBadge(
+              '교차',
+              _connectionCrossingCount,
+              const Color(0xFF9333EA),
+              'CROSSING',
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        if (active.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF7ED),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: const Color(0xFFFDBA74)),
+            ),
+            child: const Text(
+              ConnectionReviewGateEvaluator.noActiveLineMessage,
+              style: TextStyle(
+                color: Color(0xFF9A3412),
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          )
+        else ...[
+          const Text(
+            '선로 선택',
+            style: TextStyle(
+              color: Color(0xFF334155),
+              fontSize: 11,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 5,
+            runSpacing: 5,
+            children: visible.map((line) {
+              final color = _connectionLineColor(line);
+              final isSelected = selected?.lineId == line.lineId;
+              return ChoiceChip(
+                label: Text(line.effectiveDisplayLabel),
+                selected: isSelected,
+                labelStyle: TextStyle(
+                  color: isSelected ? Colors.white : color,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w700,
+                ),
+                selectedColor: color,
+                backgroundColor: color.withValues(alpha: 0.08),
+                side: BorderSide(color: color.withValues(alpha: 0.55)),
+                visualDensity: VisualDensity.compact,
+                onSelected: (_) {
+                  setState(() {
+                    _selectedLine = line;
+                    _selectedNode = null;
+                    _selectedTopologyIssue = null;
+                  });
+                },
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 12),
+          if (selected != null && selected.reviewStatus != 'REJECTED')
+            _buildConnectionReviewV2Inspector(selected)
+          else if (selected != null)
+            _buildConnectionReviewV2Inspector(selected)
+          else
+            _buildNoSelectionPrompt('결선'),
+        ],
+        const SizedBox(height: 12),
+        _buildConnectionV2TopologySummary(),
+      ],
+    );
+  }
+
+  Widget _buildConnectionV2TopologySummary() {
+    final critical = _topologyIssues
+        .where(ConnectionReviewGateEvaluator.isCriticalIssue)
+        .toList();
+    final warnings = _topologyIssues
+        .where((issue) => !ConnectionReviewGateEvaluator.isCriticalIssue(issue))
+        .toList();
+    final hasCritical = critical.isNotEmpty;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: hasCritical ? const Color(0xFFFFF1F2) : const Color(0xFFF8FAFC),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: hasCritical ? const Color(0xFFFCA5A5) : const Color(0xFFE2E8F0),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                hasCritical ? Icons.error_outline : Icons.fact_check_outlined,
+                size: 16,
+                color: hasCritical
+                    ? const Color(0xFFDC2626)
+                    : const Color(0xFF64748B),
+              ),
+              const SizedBox(width: 5),
+              Expanded(
+                child: Text(
+                  hasCritical
+                      ? '전기 오류 ${critical.length}개'
+                      : '토폴로지 재검증 완료 · 경고 ${warnings.length}건',
+                  style: TextStyle(
+                    color: hasCritical
+                        ? const Color(0xFFB91C1C)
+                        : const Color(0xFF475569),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: '토폴로지 재검증',
+                visualDensity: VisualDensity.compact,
+                onPressed: _triggerTopologyValidation,
+                icon: const Icon(Icons.refresh, size: 16),
+              ),
+            ],
+          ),
+          if (hasCritical) ...[
+            const SizedBox(height: 4),
+            ...critical.take(3).map(
+              (issue) => Padding(
+                padding: const EdgeInsets.only(top: 3),
+                child: Text(
+                  _formatTopologyIssueKo(issue),
+                  style: const TextStyle(
+                    color: Color(0xFF7F1D1D),
+                    fontSize: 10.5,
+                    height: 1.3,
+                  ),
+                ),
+              ),
+            ),
+          ] else if (warnings.isNotEmpty)
+            const Padding(
+              padding: EdgeInsets.only(top: 3),
+              child: Text(
+                'warning/info는 최종 게이트를 막지 않습니다.',
+                style: TextStyle(
+                  color: Color(0xFF64748B),
+                  fontSize: 10.5,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildConnectionReviewV2Inspector(ReviewLineItem line) {
+    final color = _connectionLineColor(line);
+    final status = ConnectionReviewGateEvaluator.lineStatusLabel(line);
+    final connStr = line.endpointsDisplay ??
+        (line.connectedTo.isEmpty ? '미연결' : line.connectedTo.join(' ↔ '));
+    final hasCrossing = ConnectionReviewGateEvaluator.hasCrossingEvidence(line);
+    final isIssue = ConnectionReviewGateEvaluator.isExceptionLine(line);
+    final pathSummary = line.path.length >= 2
+        ? '${line.path.length}개 점 · ${line.path.first.join(', ')} → ${line.path.last.join(', ')}'
+        : '실제 픽셀 경로 점 ${line.path.length}개';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(9),
+        border: Border.all(color: color.withValues(alpha: 0.55), width: 1.4),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${line.effectiveDisplayLabel} · ${line.lineId}',
+                      style: const TextStyle(
+                        color: Color(0xFF0F172A),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      connStr,
+                      style: const TextStyle(
+                        color: Color(0xFF334155),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: color.withValues(alpha: 0.5)),
+                ),
+                child: Text(
+                  status,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _buildConnectionEvidenceRow('실제 경로', pathSummary),
+          _buildConnectionEvidenceRow(
+            '추적/단자',
+            '${line.traceMethod} · ${line.sourcePort} → ${line.targetPort}',
+          ),
+          if (line.agentExplanation != null &&
+              line.agentExplanation!.trim().isNotEmpty)
+            _buildConnectionEvidenceRow('AI 설명', line.agentExplanation!),
+          if (line.validationIssues.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            const Text(
+              '검증 근거',
+              style: TextStyle(
+                color: Color(0xFF334155),
+                fontSize: 10.5,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 4),
+            ...line.validationIssues.map(
+              (issue) => Padding(
+                padding: const EdgeInsets.only(bottom: 3),
+                child: Text(
+                  '• ${issue['message'] ?? issue['code'] ?? '검증 이슈'}',
+                  style: TextStyle(
+                    color: ConnectionReviewGateEvaluator.isCriticalIssue(issue)
+                        ? const Color(0xFFB91C1C)
+                        : const Color(0xFF92400E),
+                    fontSize: 10.5,
+                    height: 1.3,
+                  ),
+                ),
+              ),
+            ),
+          ],
+          if (line.candidateTargets.isNotEmpty) ...[
+            const SizedBox(height: 9),
+            const Text(
+              '후보 끝점 · 직접 선택하면 재검증합니다',
+              style: TextStyle(
+                color: Color(0xFF334155),
+                fontSize: 10.5,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 5),
+            Wrap(
+              spacing: 5,
+              runSpacing: 5,
+              children: line.candidateTargets.map((target) {
+                return ActionChip(
+                  label: Text(target, style: const TextStyle(fontSize: 10.5)),
+                  onPressed: () => _reassignConnectionEndpoint(line, target),
+                );
+              }).toList(),
+            ),
+          ],
+          if (hasCrossing) ...[
+            const SizedBox(height: 9),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFAF5FF),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: const Color(0xFFD8B4FE)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '실제 교차 근거가 감지되었습니다.',
+                    style: TextStyle(
+                      color: Color(0xFF7E22CE),
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Wrap(
+                    spacing: 5,
+                    children: [
+                      OutlinedButton(
+                        onPressed: () =>
+                            _resolveConnectionCrossing(line, 'CONNECTED'),
+                        child: const Text('연결됨', style: TextStyle(fontSize: 10)),
+                      ),
+                      OutlinedButton(
+                        onPressed: () =>
+                            _resolveConnectionCrossing(line, 'CROSSING_ONLY'),
+                        child: const Text('교차만 함', style: TextStyle(fontSize: 10)),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 9),
+          if (isIssue)
+            OutlinedButton.icon(
+              onPressed: line.reviewStatus == 'REJECTED'
+                  ? null
+                  : () => _rejectLine(line),
+              icon: const Icon(Icons.remove_circle_outline, size: 15),
+              label: const Text('선로 제외', style: TextStyle(fontSize: 10.5)),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFF64748B),
+                visualDensity: VisualDensity.compact,
+              ),
+            )
+          else
+            const Text(
+              '정상 결선은 개별 승인하지 않습니다. 전체 네트워크를 확인한 뒤 최종 CTA를 사용하세요.',
+              style: TextStyle(
+                color: Color(0xFF64748B),
+                fontSize: 10.5,
+                height: 1.3,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildConnectionEvidenceRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 54,
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: Color(0xFF64748B),
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(
+                color: Color(0xFF334155),
+                fontSize: 10.5,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _reassignConnectionEndpoint(ReviewLineItem line, String targetId) {
+    final index = _workingLines.indexWhere((item) => item.lineId == line.lineId);
+    if (index < 0) return;
+    final updated = ConnectionReviewGateEvaluator.reassignTarget(line, targetId);
+    setState(() {
+      _workingLines[index] = updated;
+      _selectedLine = updated;
+      _selectedNode = null;
+      _selectedTopologyIssue = null;
+      _isFinalVerified = false;
+    });
+    PowerLensAIService.instance.removeFocusTarget(line.lineId);
+    _triggerTopologyValidation();
+  }
+
+  void _resolveConnectionCrossing(
+    ReviewLineItem line,
+    String resolution,
+  ) {
+    final index = _workingLines.indexWhere((item) => item.lineId == line.lineId);
+    if (index < 0) return;
+    setState(() {
+      final updated = line.copyWith(
+        reviewStatus: 'CONFIRMED',
+        source: 'human_crossing_review',
+      );
+      updated.connectionReviewResolution = resolution;
+      _workingLines[index] = updated;
+      _selectedLine = updated;
+      _isFinalVerified = false;
+    });
+    PowerLensAIService.instance.removeFocusTarget(line.lineId);
+    _triggerTopologyValidation();
+  }
+
+  void _rejectLine(ReviewLineItem line) {
+    final index = _workingLines.indexWhere((item) => item.lineId == line.lineId);
+    if (index < 0) return;
+    setState(() {
+      line.reviewStatus = 'REJECTED';
+      line.source = 'human_rejected';
+      _workingLines[index] = line;
+      _selectedLine = null;
+      _selectedNode = null;
+      _selectedTopologyIssue = null;
+      _isFinalVerified = false;
+    });
+    PowerLensAIService.instance.removeFocusTarget(line.lineId);
+    _triggerTopologyValidation();
+  }
+
+  // Legacy wrapper retained only for source compatibility; the active
+  // Connection Review path uses _buildConnectionReviewV2SidePanel.
+  // ignore: unused_element
   Widget _buildConnectionReviewSidePanel() {
     var lines = _filteredAndSortedWorkingLines;
     if (lines.isEmpty) {
@@ -5359,7 +5742,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text(
-                "⚡ 선로 결선 확인 (순차 집중 모드)",
+                "⚡ 선로 결선 근거 확인",
                 style: TextStyle(
                   color: Color(0xFF334155),
                   fontSize: 11.5,
@@ -5586,15 +5969,15 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
           // 5. Big Primary Action CTA
           GlowingTargetWrapper(
-            targetId: 'connection_priority',
+            targetId: 'connection_gate',
             borderRadius: BorderRadius.circular(8),
-            guideLabel: "✨ 선로 승인하고 다음",
+            guideLabel: "✨ 결선 검수 완료",
             child: ElevatedButton.icon(
               key: _connectionPrimaryActionKey,
-              onPressed: () => _confirmLineAndNext(line),
+              onPressed: null,
               icon: const Icon(Icons.check_circle_outline, size: 18),
               label: const Text(
-                "선로 승인하고 다음 (Enter ➔)",
+                "정상 결선은 자동 확인",
                 style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold),
               ),
               style: ElevatedButton.styleFrom(
@@ -5618,7 +6001,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   borderRadius: BorderRadius.circular(4),
                   guideLabel: "✨ 이전 선로 (◀)",
                   child: OutlinedButton.icon(
-                    onPressed: _selectPreviousLine,
+                    onPressed: null,
                     icon: const Icon(Icons.arrow_back, size: 13),
                     label: const Text("이전 (◀)", style: TextStyle(fontSize: 11)),
                     style: OutlinedButton.styleFrom(
@@ -5635,7 +6018,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   borderRadius: BorderRadius.circular(4),
                   guideLabel: "✨ 선로 제외/삭제",
                   child: OutlinedButton.icon(
-                    onPressed: () => _rejectLineAndNext(line),
+                    onPressed: () => _rejectLine(line),
                     icon: const Icon(
                       Icons.delete_outline,
                       size: 13,
@@ -5659,7 +6042,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   borderRadius: BorderRadius.circular(4),
                   guideLabel: "✨ 선로 건너뛰기",
                   child: OutlinedButton(
-                    onPressed: _selectNextLine,
+                    onPressed: null,
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 8),
                       side: const BorderSide(color: Color(0xFFCBD5E1)),
@@ -5676,9 +6059,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 child: GlowingTargetWrapper(
                   targetId: 'line_next',
                   borderRadius: BorderRadius.circular(4),
-                  guideLabel: "✨ 다음 선로 (▶)",
+                  guideLabel: "✨ 선로 선택",
                   child: OutlinedButton.icon(
-                    onPressed: _selectNextLine,
+                    onPressed: null,
                     icon: const Icon(Icons.arrow_forward, size: 13),
                     label: const Text("다음 (▶)", style: TextStyle(fontSize: 11)),
                     style: OutlinedButton.styleFrom(
@@ -5711,7 +6094,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    "두 부품 간 선로가 올바르면 [선로 승인하고 다음]을 누르세요. 키보드 [Enter] 또는 [➔] 키로 연속 검토할 수 있습니다.",
+                    "정상 결선은 개별 승인하지 않습니다. 확인이 필요한 예외만 실제 경로와 함께 검토하세요.",
                     style: TextStyle(
                       color: Color(0xFF1E40AF),
                       fontSize: 10.5,
@@ -7273,7 +7656,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   key: _connectionGateKey,
                   onPressed: _verifyFinalGate,
                   icon: const Icon(Icons.verified, size: 16),
-                  label: const Text("결선 검수 완료 ➔ 다음: 최종 확인 & 엑셀"),
+                    label: const Text("결선 검수 완료"),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _canVerifyFinalGate
                         ? const Color(0xFF16A34A)

@@ -1139,18 +1139,26 @@ class _ConnectionOverlayPainter extends CustomPainter {
       Color strokeColor;
       double strokeWidth;
 
-      if (isSelected) {
-        strokeColor = const Color(0xFF00E5FF); // Bright cyan for focused line
-        strokeWidth = 4.2 + pulseValue * 1.5;
-      } else if (lineFocusOnly && selectedLine != null) {
-        strokeColor = Colors.grey.withValues(alpha: 0.18);
-        strokeWidth = 1.0;
+      if (ConnectionReviewGateEvaluator.lineHasCriticalIssue(line)) {
+        strokeColor = const Color(0xFFDC2626); // critical electrical error
+        strokeWidth = isSelected ? 4.2 + pulseValue * 1.5 : 3.2;
+      } else if (ConnectionReviewGateEvaluator.isUnresolvedCrossing(line)) {
+        strokeColor = const Color(0xFF9333EA); // actual crossing evidence
+        strokeWidth = isSelected ? 4.2 + pulseValue * 1.5 : 3.2;
+      } else if (status == 'AMBIGUOUS') {
+        strokeColor = const Color(0xFFD97706); // endpoint uncertainty
+        strokeWidth = isSelected ? 4.2 + pulseValue * 1.5 : 3.2;
       } else if (status == 'REJECTED') {
         strokeColor = Colors.grey.withValues(alpha: 0.4);
         strokeWidth = 1.5;
       } else {
-        strokeColor = const Color(0xFFE00000); // Solid red for active lines
-        strokeWidth = status == 'AMBIGUOUS' ? 3.2 : 2.6;
+        strokeColor = const Color(0xFF64748B); // neutral, auto-accepted line
+        strokeWidth = isSelected ? 4.2 + pulseValue * 1.5 : 2.2;
+      }
+
+      if (lineFocusOnly && selectedLine != null && !isSelected) {
+        strokeColor = Colors.grey.withValues(alpha: 0.18);
+        strokeWidth = 1.0;
       }
 
       final paint = Paint()

@@ -113,7 +113,8 @@ class ReviewNodeItem {
       confidence: (json['confidence'] as num?)?.toDouble() ?? 0.0,
       source: json['source']?.toString() ?? 'unknown',
       reviewStatus:
-          json['review_status']?.toString().toUpperCase() ?? 'DETECTED',
+          (json['review_status'] ?? json['status'])?.toString().toUpperCase() ??
+          'DETECTED',
       reviewReasons: reasons,
       agentExplanation: json['agent_explanation']?.toString(),
       recommendedAction: json['recommended_action']?.toString(),
@@ -649,6 +650,258 @@ class BusReviewUiPolicy {
   }
 }
 
+/// Deterministic, exception-first policy for the Connection Review V2 gate.
+///
+/// This helper is deliberately independent of widgets so the final CTA,
+/// Lensy focus targets, and tests all use the same rules. A clean DETECTED
+/// line is usable without an individual approval action. Only actual
+/// exceptions or authoritative topology errors are returned as blockers.
+class ConnectionReviewGateEvaluator {
+  static const noActiveLineMessage =
+      '유효한 결선 선로가 없습니다. 결선 검출을 확인해주세요.';
+  static const primaryActionLabel = '결선 검수 완료';
+
+  static List<ReviewLineItem> activeLines(
+    Iterable<ReviewLineItem> lines,
+  ) {
+    return lines
+        .where((line) => line.reviewStatus.toUpperCase() != 'REJECTED')
+        .toList();
+  }
+
+  static bool isCriticalIssue(Map<String, dynamic> issue) {
+    return issue['severity']?.toString().toLowerCase() == 'error';
+  }
+
+  static List<Map<String, dynamic>> _lineIssues(ReviewLineItem line) {
+    final issues = <Map<String, dynamic>>[...line.validationIssues];
+    final nested = line.evidence['validation_issues'];
+    if (nested is List) {
+      for (final issue in nested) {
+        if (issue is Map<String, dynamic>) issues.add(issue);
+      }
+    }
+    return issues;
+  }
+
+  static bool lineHasCriticalIssue(ReviewLineItem line) {
+    return _lineIssues(line).any(isCriticalIssue);
+  }
+
+  static bool _containsCrossingKey(String key) {
+    final normalized = key.toLowerCase();
+    return normalized.contains('cross') ||
+        normalized.contains('overlap') ||
+        normalized.contains('intersection') ||
+        normalized.contains('교차');
+  }
+
+  static bool _evidenceValueExists(Object? value) {
+    if (value == null) return false;
+    if (value is bool) return value;
+    if (value is String) {
+      final normalized = value.trim().toLowerCase();
+      return normalized.isNotEmpty &&
+          normalized != 'false' &&
+          normalized != 'none' &&
+          normalized != 'null';
+    }
+    if (value is Iterable || value is Map) return (value as dynamic).isNotEmpty;
+    return true;
+  }
+
+  /// Returns true only when the payload contains explicit crossing/overlap
+  /// evidence. A path alone is never treated as crossing evidence.
+  static bool hasCrossingEvidence(ReviewLineItem line) {
+    bool inspectMap(Map<String, dynamic> map) {
+      for (final entry in map.entries) {
+        if (_containsCrossingKey(entry.key) &&
+            _evidenceValueExists(entry.value)) {
+          return true;
+        }
+        if (entry.value is Map<String, dynamic> &&
+            inspectMap(entry.value as Map<String, dynamic>)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    if (inspectMap(line.evidence)) return true;
+    return _lineIssues(line).any(
+      (issue) => inspectMap(issue) ||
+          (_containsCrossingKey(issue['code']?.toString() ?? '') &&
+              _evidenceValueExists(issue['message'])),
+    );
+  }
+
+  static bool isCrossingResolved(ReviewLineItem line) {
+    final resolution = line.connectionReviewResolution?.toUpperCase();
+    return resolution == 'CONNECTED' || resolution == 'CROSSING_ONLY';
+  }
+
+  static bool isUnresolvedCrossing(ReviewLineItem line) {
+    return hasCrossingEvidence(line) && !isCrossingResolved(line);
+  }
+
+  static bool isExceptionLine(ReviewLineItem line) {
+    return line.reviewStatus.toUpperCase() == 'AMBIGUOUS' ||
+        lineHasCriticalIssue(line) ||
+        isUnresolvedCrossing(line);
+  }
+
+  static List<String> getBlockers({
+    required List<ReviewLineItem> workingLines,
+    List<Map<String, dynamic>> topologyIssues = const [],
+  }) {
+    final blockers = <String>[];
+    final active = activeLines(workingLines);
+    if (active.isEmpty) {
+      blockers.add(noActiveLineMessage);
+      return blockers;
+    }
+
+    final ambiguousCount = active
+        .where((line) => line.reviewStatus.toUpperCase() == 'AMBIGUOUS')
+        .length;
+    if (ambiguousCount > 0) {
+      blockers.add('확인이 필요한 결선 $ambiguousCount건이 남아 있습니다.');
+    }
+
+    final crossingCount =
+        active.where(isUnresolvedCrossing).length;
+    if (crossingCount > 0) {
+      blockers.add('교차 여부 확인이 필요한 결선 $crossingCount건이 남아 있습니다.');
+    }
+
+    final lineErrorCount = active.where(lineHasCriticalIssue).length;
+    final topologyErrorCount = topologyIssues.where(isCriticalIssue).length;
+    if (lineErrorCount + topologyErrorCount > 0) {
+      blockers.add(
+        '전기적 연결 오류 ${lineErrorCount + topologyErrorCount}건을 해결해야 합니다.',
+      );
+    }
+    return blockers;
+  }
+
+  static bool canVerifyGate({
+    required List<ReviewLineItem> workingLines,
+    List<Map<String, dynamic>> topologyIssues = const [],
+  }) {
+    return getBlockers(
+      workingLines: workingLines,
+      topologyIssues: topologyIssues,
+    ).isEmpty;
+  }
+
+  static String? _issueId(Map<String, dynamic> issue) {
+    final raw = issue['issue_id'] ?? issue['id'];
+    return raw?.toString();
+  }
+
+  static Set<String> _issueComponentIds(Map<String, dynamic> issue) {
+    final ids = <String>{};
+    final raw = issue['component_ids'] ?? issue['related_ids'];
+    if (raw is List) ids.addAll(raw.map((value) => value.toString()));
+    final lineId = issue['line_id'] ?? issue['lineId'];
+    if (lineId != null) ids.add(lineId.toString());
+    return ids;
+  }
+
+  static Set<String> computeGuideLineIds({
+    required List<ReviewLineItem> workingLines,
+    List<Map<String, dynamic>> topologyIssues = const [],
+    List<Map<String, dynamic>>? focusTargets,
+  }) {
+    final active = activeLines(workingLines);
+    final ids = <String>{
+      for (final line in active)
+        if (isExceptionLine(line)) line.lineId,
+    };
+    final criticalIssues = topologyIssues.where(isCriticalIssue).toList();
+    for (final issue in criticalIssues) {
+      final components = _issueComponentIds(issue);
+      for (final line in active) {
+        if (components.contains(line.lineId) ||
+            line.connectedTo.any(components.contains)) {
+          ids.add(line.lineId);
+        }
+      }
+    }
+    if (focusTargets != null) {
+      for (final target in focusTargets) {
+        final type = target['type']?.toString().toUpperCase();
+        final id = target['id']?.toString();
+        final matching = active.where((item) => item.lineId == id);
+        final line = matching.isEmpty ? null : matching.first;
+        if (type == 'LINE' && line != null && isExceptionLine(line)) {
+          ids.add(line.lineId);
+        }
+      }
+    }
+    return ids;
+  }
+
+  static Set<String> computeGuideIssueIds({
+    List<Map<String, dynamic>> topologyIssues = const [],
+    List<ReviewLineItem> workingLines = const [],
+    List<Map<String, dynamic>>? focusTargets,
+  }) {
+    final ids = <String>{
+      for (final issue in topologyIssues.where(isCriticalIssue))
+        if (_issueId(issue) != null) _issueId(issue)!,
+    };
+    for (final line in activeLines(workingLines)) {
+      for (final issue in _lineIssues(line).where(isCriticalIssue)) {
+        if (_issueId(issue) != null) ids.add(_issueId(issue)!);
+      }
+    }
+    if (focusTargets != null) {
+      final validIds = <String>{
+        for (final issue in topologyIssues)
+          if (_issueId(issue) != null) _issueId(issue)!,
+      }.whereType<String>().toSet();
+      ids.addAll(
+        focusTargets
+            .where((target) => target['type']?.toString().toUpperCase() == 'ISSUE')
+            .map((target) => target['id']?.toString())
+            .whereType<String>()
+            .where(validIds.contains),
+      );
+    }
+    return ids;
+  }
+
+  static String lineStatusLabel(ReviewLineItem line) {
+    final status = line.reviewStatus.toUpperCase();
+    if (status == 'REJECTED') return '제외';
+    if (lineHasCriticalIssue(line)) return '전기 오류';
+    if (isUnresolvedCrossing(line)) return '교차 검토';
+    if (status == 'AMBIGUOUS') return '확인 필요';
+    return 'AI 확인 · 정상 연결';
+  }
+
+  static ReviewLineItem reassignTarget(
+    ReviewLineItem line,
+    String targetId,
+  ) {
+    final endpoints = List<String>.from(line.connectedTo);
+    if (endpoints.isEmpty) return line;
+    if (endpoints.length == 1) {
+      endpoints.add(targetId);
+    } else {
+      endpoints[1] = targetId;
+    }
+    final reassigned = line.copyWith(
+      connectedTo: endpoints,
+      reviewStatus: 'CONFIRMED',
+      source: 'human_reconnected',
+    );
+    reassigned.connectionReviewResolution = null;
+    return reassigned;
+  }
+}
+
 class CompletenessReviewResult {
   final String assessment;
   final String messageKo;
@@ -696,6 +949,8 @@ class ReviewLineItem {
   String reviewStatus; // 'DETECTED', 'AMBIGUOUS', 'CONFIRMED', 'REJECTED'
   String source;
   List<Map<String, dynamic>> validationIssues;
+  Map<String, dynamic> evidence;
+  String? connectionReviewResolution;
   String? agentExplanation;
   String? recommendedAction;
   List<String> candidateTargets;
@@ -717,6 +972,8 @@ class ReviewLineItem {
     this.reviewStatus = 'DETECTED',
     this.source = 'ai_detected',
     this.validationIssues = const [],
+    this.evidence = const {},
+    this.connectionReviewResolution,
     this.agentExplanation,
     this.recommendedAction,
     this.candidateTargets = const [],
@@ -769,6 +1026,11 @@ class ReviewLineItem {
       parsedCandidates = rawCandidates.map((e) => e.toString()).toList();
     }
 
+    final rawEvidence = json['evidence'];
+    final parsedEvidence = rawEvidence is Map<String, dynamic>
+        ? rawEvidence
+        : <String, dynamic>{};
+
     return ReviewLineItem(
       lineId: json['line_id']?.toString() ?? json['id']?.toString() ?? '',
       connectedTo: parsedConnected,
@@ -777,9 +1039,16 @@ class ReviewLineItem {
       targetPort: json['target_port']?.toString() ?? 'auto',
       traceMethod: json['trace_method']?.toString() ?? 'electrical_graph',
       reviewStatus:
-          json['review_status']?.toString().toUpperCase() ?? 'DETECTED',
+          (json['review_status'] ?? json['status'])?.toString().toUpperCase() ??
+          'DETECTED',
       source: json['source']?.toString() ?? 'ai_detected',
       validationIssues: parsedIssues,
+      evidence: parsedEvidence,
+      connectionReviewResolution:
+          (json['connection_review_resolution'] ??
+                  json['crossing_resolution'] ??
+                  json['crossingResolution'])
+              ?.toString(),
       agentExplanation: json['agent_explanation']?.toString(),
       recommendedAction: json['recommended_action']?.toString(),
       candidateTargets: parsedCandidates,
@@ -802,6 +1071,9 @@ class ReviewLineItem {
       'review_status': reviewStatus,
       'source': source,
       'validation_issues': validationIssues,
+      'evidence': evidence,
+      if (connectionReviewResolution != null)
+        'connection_review_resolution': connectionReviewResolution,
       if (agentExplanation != null) 'agent_explanation': agentExplanation,
       if (recommendedAction != null) 'recommended_action': recommendedAction,
       'candidate_targets': candidateTargets,
@@ -823,6 +1095,8 @@ class ReviewLineItem {
     String? reviewStatus,
     String? source,
     List<Map<String, dynamic>>? validationIssues,
+    Map<String, dynamic>? evidence,
+    String? connectionReviewResolution,
     String? agentExplanation,
     String? recommendedAction,
     List<String>? candidateTargets,
@@ -842,6 +1116,9 @@ class ReviewLineItem {
       reviewStatus: reviewStatus ?? this.reviewStatus,
       source: source ?? this.source,
       validationIssues: validationIssues ?? List.from(this.validationIssues),
+      evidence: evidence ?? Map<String, dynamic>.from(this.evidence),
+      connectionReviewResolution:
+          connectionReviewResolution ?? this.connectionReviewResolution,
       agentExplanation: agentExplanation ?? this.agentExplanation,
       recommendedAction: recommendedAction ?? this.recommendedAction,
       candidateTargets: candidateTargets ?? List.from(this.candidateTargets),

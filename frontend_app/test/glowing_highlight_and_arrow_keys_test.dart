@@ -58,15 +58,16 @@ void main() {
       // Bus issues are guided by production BusGuideBox, not a legacy button.
       expect(service.determineTargetForContext(busCtx), isNull);
 
-      // Connection Review with unapproved line
+      // Connection Review with an exception: guide by real LINE focus, not a
+      // fabricated button target.
       const connCtx = PowerLensAssistantContext(
         currentScreen: 'REVIEW_PAGE',
         workflowStage: 'connection_review',
         workingLines: [
-          {'id': 'L1', 'status': 'PENDING'},
+          {'id': 'L1', 'status': 'AMBIGUOUS'},
         ],
       );
-      expect(service.determineTargetForContext(connCtx), 'connection_priority');
+      expect(service.determineTargetForContext(connCtx), isNull);
 
       // Verified Final without Excel
       const finalNoExcelCtx = PowerLensAssistantContext(
@@ -115,10 +116,10 @@ void main() {
         currentScreen: 'REVIEW_PAGE',
         workflowStage: 'CONNECTION_REVIEW',
         workingLines: [
-          {'id': 'L1', 'status': 'PENDING'},
+          {'id': 'L1', 'status': 'AMBIGUOUS'},
         ],
       );
-      expect(service.determineTargetForContext(connUpperCtx), 'connection_priority');
+      expect(service.determineTargetForContext(connUpperCtx), isNull);
 
       const finalUpperCtx = PowerLensAssistantContext(
         currentScreen: 'REVIEW_PAGE',
@@ -149,15 +150,14 @@ void main() {
       // In Object Review V2, batch approve is suppressed
       expect(service.resolveIntentActions('일괄 승인해줘', objCtx), isEmpty);
 
-      // Connection Review retains its existing batch action; Bus Mapping does
-      // not expose a batch-approval action in V2.
+      // Connection Review has no batch-approval action in V2.
       const connectionCtx = PowerLensAssistantContext(
         currentScreen: 'REVIEW_PAGE',
         workflowStage: 'connection_review',
       );
-      expect(service.resolveIntentActions('일괄 승인해줘', connectionCtx), [PowerLensAppAction.approveAllClean]);
-      expect(service.resolveIntentActions('정상 객체 전체 승인', connectionCtx), [PowerLensAppAction.approveAllClean]);
-      expect(service.resolveIntentActions('한 번에 다 승인', connectionCtx), [PowerLensAppAction.approveAllClean]);
+      expect(service.resolveIntentActions('일괄 승인해줘', connectionCtx), isEmpty);
+      expect(service.resolveIntentActions('정상 객체 전체 승인', connectionCtx), isEmpty);
+      expect(service.resolveIntentActions('한 번에 다 승인', connectionCtx), isEmpty);
 
       // How-to / Where questions resolve to explainCurrentStage (guidance + glowing highlight, NO auto execution)
       expect(service.resolveIntentActions('전체 승인할려면 뭐눌러야해??', objCtx), [PowerLensAppAction.explainCurrentStage]);

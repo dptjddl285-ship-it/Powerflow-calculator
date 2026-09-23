@@ -49,10 +49,31 @@ from .system_knowledge import (
     VALID_HIGHLIGHT_TARGETS,
 )
 from core.bus_review_contract import BUS_NO_ACTIVE_MESSAGE, evaluate_bus_mapping
+from .connection_review_contract import (
+    CONNECTION_NO_ACTIVE_MESSAGE,
+    active_connection_lines,
+    connection_blockers,
+    connection_exception_line_ids,
+    connection_has_blockers,
+    issue_identifier,
+    is_error_issue,
+    line_has_critical_issue,
+    line_id,
+    line_validation_issues,
+    related_line_ids,
+)
 
 
 def _is_bus_mapping_stage(stage: str) -> bool:
     return (stage or "").upper() in ("BUS_MAPPING", "BUS_MAPPING_REVIEW")
+
+
+def _is_connection_review_stage(stage: str) -> bool:
+    return (stage or "").upper() in (
+        "CONNECTION_REVIEW",
+        "CONNECTION",
+        "LINE_REVIEW",
+    )
 
 
 def is_circuit_mutation_request(user_message: str) -> bool:
@@ -137,19 +158,26 @@ def sanitize_and_validate_agent_response(
 
     susp_cnt = len([n for n in w_nodes if str(n.get("review_status") or n.get("status", "")).upper() == "SUSPICIOUS"])
     miss_cnt = len([c for c in cands if str(c.get("status", "")).upper() == "OPEN"])
-    amb_cnt = len([l for l in w_lines if str(l.get("review_status") or l.get("status", "")).upper() == "AMBIGUOUS"])
+    active_lines = active_connection_lines(w_lines)
+    amb_cnt = len([l for l in active_lines if str(l.get("review_status") or l.get("status", "")).upper() == "AMBIGUOUS"])
     # topology_error_count only aggregates issues with severity == 'error'
-    err_cnt = len([i for i in issues if str(i.get("severity", "")).lower() == "error"])
+    err_cnt = len([i for i in issues if is_error_issue(i)])
+    line_error_cnt = len([l for l in active_lines if line_has_critical_issue(l)])
 
     bus_state = evaluate_bus_mapping(w_nodes) if _is_bus_mapping_stage(stage) else None
     bus_blocked = bool(bus_state and bus_state["total"] == 0)
+    connection_blocked = _is_connection_review_stage(stage) and connection_has_blockers(
+        active_lines, issues
+    )
     has_issues = (
         susp_cnt > 0
         or miss_cnt > 0
         or amb_cnt > 0
         or err_cnt > 0
+        or line_error_cnt > 0
         or bus_blocked
         or bool(bus_state and bus_state["issue_count"] > 0)
+        or connection_blocked
     )
 
     res["evidence_summary"] = {
@@ -240,9 +268,17 @@ def sanitize_and_validate_agent_response(
 
     # 8. Strict focus targets validation (Type & ID matching)
     valid_node_ids = {str(n.get("id")) for n in w_nodes if n.get("id")}
-    valid_line_ids = {str(l.get("line_id", l.get("id"))) for l in w_lines if l.get("line_id", l.get("id"))}
+    valid_line_ids = {
+        line_id(l)
+        for l in active_lines
+        if line_id(l)
+    }
     valid_cand_ids = {str(c.get("id", c.get("candidate_id"))) for c in cands if c.get("id", c.get("candidate_id"))}
-    valid_issue_ids = {str(i.get("id", i.get("line_id", i.get("node_id")))) for i in issues if i.get("id", i.get("line_id", i.get("node_id")))}
+    valid_issue_ids = {
+        str(i.get("id", i.get("issue_id", i.get("line_id", i.get("node_id")))))
+        for i in issues
+        if i.get("id", i.get("issue_id", i.get("line_id", i.get("node_id"))))
+    }
 
     raw_focus = res.get("focus_targets", [])
     sanitized_focus = []
@@ -280,6 +316,81 @@ def sanitize_and_validate_agent_response(
 
     res["focus_targets"] = sanitized_focus
 
+    if _is_connection_review_stage(stage) and connection_blocked:
+        # Connection Review V2 is exception-first.  Never allow a clean or
+        # fabricated action when the deterministic contract has an exception.
+        if not is_circuit_mutation_request(user_message):
+            res["action_mode"] = "GUIDE"
+        res["decision"] = "BLOCKED" if not active_lines else "HUMAN_CHECK"
+        res["action_id"] = None
+        res["highlight_target"] = None
+        exception_ids = connection_exception_line_ids(active_lines, issues)
+        deterministic_focus = []
+        for line in active_lines:
+            current_id = line_id(line)
+            if current_id not in exception_ids:
+                continue
+            critical = line_has_critical_issue(line)
+            current_issues = line_validation_issues(line)
+            reason = next(
+                (
+                    str(issue.get("message"))
+                    for issue in current_issues
+                    if is_error_issue(issue) and issue.get("message")
+                ),
+                "연결 대상 또는 결선 상태를 확인해주세요.",
+            )
+            deterministic_focus.append(
+                {
+                    "type": "LINE",
+                    "id": current_id,
+                    "reason": reason,
+                    "severity": "ERROR" if critical else "REVIEW",
+                }
+            )
+        # A topology issue may not carry a line_id.  Map it to actual endpoint
+        # lines when possible; otherwise preserve only an explicitly supplied
+        # issue identifier.
+        focused_ids = {item["id"] for item in deterministic_focus}
+        for issue in issues:
+            if not is_error_issue(issue):
+                continue
+            for current_id in related_line_ids(issue, active_lines):
+                if current_id not in focused_ids:
+                    deterministic_focus.append(
+                        {
+                            "type": "LINE",
+                            "id": current_id,
+                            "reason": str(issue.get("message") or issue.get("code") or "전기적 연결 오류"),
+                            "severity": "ERROR",
+                        }
+                    )
+                    focused_ids.add(current_id)
+            issue_id = str(issue.get("id") or issue.get("issue_id") or "").strip()
+            if issue_id and issue_id not in focused_ids:
+                deterministic_focus.append(
+                    {
+                        "type": "ISSUE",
+                        "id": issue_id,
+                        "reason": str(issue.get("message") or issue.get("code") or "전기적 연결 오류"),
+                        "severity": "ERROR",
+                    }
+                )
+                focused_ids.add(issue_id)
+        res["focus_targets"] = deterministic_focus
+        res["reply_ko"] = (
+            CONNECTION_NO_ACTIVE_MESSAGE
+            if not active_lines
+            else "확인이 필요한 결선 예외를 표시했습니다. 정상 선로는 AI가 확인했으며, 표시된 예외만 확인해주세요."
+        )
+        res["summary_text"] = res["reply_ko"]
+    elif _is_connection_review_stage(stage) and not connection_blocked and not user_message:
+        # Proactive clean summaries must not look like a human approval queue.
+        res["decision"] = "PROCEED"
+        res["action_mode"] = "NONE"
+        res["action_id"] = None
+        res["highlight_target"] = None
+        res["focus_targets"] = []
     if bus_blocked:
         # An empty active Bus set is a hard workflow blocker, not a clean
         # review. Keep the response safe even when an LLM returned PROCEED.
@@ -532,64 +643,97 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                 )
             )
 
-        elif stage_upper in ("CONNECTION_REVIEW", "LINE_REVIEW"):
-            total_lines = len(w_lines)
-            clean_lines = total_lines - len(ambiguous)
-
-            for a in ambiguous:
-                disp = a.get("display_label", a.get("line_id", "Unknown"))
-                conn_name = a.get("display_name", disp)
-                item = {
-                    "id": a.get("line_id", a.get("id", "")),
-                    "display_label": disp,
+        elif _is_connection_review_stage(stage):
+            active_lines = active_connection_lines(w_lines)
+            exception_ids = connection_exception_line_ids(active_lines, issues)
+            critical_line_ids = {
+                line_id(line)
+                for line in active_lines
+                if line_id(line) and line_has_critical_issue(line)
+            }
+            critical_topology = [issue for issue in issues if is_error_issue(issue)]
+            focus_targets = []
+            priority_items = []
+            for line in active_lines:
+                current_id = line_id(line)
+                if current_id not in exception_ids:
+                    continue
+                current_issues = line_validation_issues(line)
+                reason = next(
+                    (
+                        str(issue.get("message"))
+                        for issue in current_issues
+                        if is_error_issue(issue) and issue.get("message")
+                    ),
+                    "연결 대상이 불확실하거나 결선 검증이 필요합니다.",
+                )
+                if str(line.get("review_status") or line.get("status") or "").upper() == "AMBIGUOUS":
+                    reason = "연결 대상 불확실"
+                severity = "ERROR" if current_id in critical_line_ids else "REVIEW"
+                display = line.get("display_label", current_id)
+                priority_items.append({
+                    "id": current_id,
+                    "display_label": display,
                     "target_type": "LINE",
-                    "reason": f"결선 다중 모선 후보 ({conn_name})",
-                    "severity": "WARNING",
-                }
-                priority_items.append(item)
+                    "reason": reason,
+                    "severity": severity,
+                })
                 focus_targets.append({
                     "type": "LINE",
-                    "id": a.get("line_id", a.get("id", "")),
-                    "reason": f"결선 다중 모선 후보 ({conn_name})",
-                    "severity": "WARNING",
+                    "id": current_id,
+                    "reason": reason,
+                    "severity": severity,
                 })
 
-            for iss in error_issues:
-                iid = iss.get("line_id", iss.get("node_id", ""))
-                item = {
-                    "id": iid,
-                    "display_label": iss.get("code", "GRAPH_ERROR"),
-                    "target_type": "TOPOLOGY_ISSUE",
-                    "reason": iss.get("message", "전기적 규칙 위반"),
-                    "severity": "ERROR",
-                }
-                priority_items.append(item)
-                focus_targets.append({
-                    "type": "ISSUE",
-                    "id": iid,
-                    "reason": iss.get("message", "전기적 규칙 위반"),
-                    "severity": "ERROR",
-                })
+            focused_ids = {str(item.get("id")) for item in focus_targets}
+            for issue in critical_topology:
+                for current_id in related_line_ids(issue, active_lines):
+                    if current_id not in focused_ids:
+                        focus_targets.append({
+                            "type": "LINE",
+                            "id": current_id,
+                            "reason": str(issue.get("message") or issue.get("code") or "전기적 연결 오류"),
+                            "severity": "ERROR",
+                        })
+                        focused_ids.add(current_id)
+                issue_id = issue_identifier(issue)
+                if issue_id and issue_id not in focused_ids:
+                    focus_targets.append({
+                        "type": "ISSUE",
+                        "id": issue_id,
+                        "reason": str(issue.get("message") or issue.get("code") or "전기적 연결 오류"),
+                        "severity": "ERROR",
+                    })
+                    focused_ids.add(issue_id)
 
-            lines = ["📊 **[AI 검토 우선순위 요약 - 결선 검수]**"]
-            lines.append(f"• **총 인식 선로**: {total_lines}개 (정상 결선: **{clean_lines}개**)")
-            lines.append(f"• **결선 오류/검토 필요**: **{len(ambiguous)}건** (연결 구조 결함: **{len(error_issues)}건**)")
-
-            if priority_items:
+            total_lines = len(active_lines)
+            clean_lines = max(0, total_lines - len(exception_ids))
+            error_count = len(critical_topology) + len(critical_line_ids)
+            v2_lines = ["📊 **[AI 검토 현황 - 결선 검수]**"]
+            v2_lines.append(f"• **전체 결선**: {total_lines}개 (정상 연결: **{clean_lines}개**)")
+            v2_lines.append(f"• **확인 필요**: **{len(exception_ids)}건**")
+            v2_lines.append(f"• **전기 오류**: **{error_count}건**")
+            if not active_lines:
+                decision = "BLOCKED"
+                action_mode = "GUIDE"
+                target = None
+                reply_ko = CONNECTION_NO_ACTIVE_MESSAGE
+                v2_lines.append(f"\n⚠️ **{CONNECTION_NO_ACTIVE_MESSAGE}**")
+            elif exception_ids or critical_topology:
                 decision = "HUMAN_CHECK"
-                target = "connection_priority"
-                reply_ko = f"선로 연결 검토가 필요합니다. 검토 대상 선로 및 토폴로지 오류가 {len(priority_items)}건 감지되었습니다."
-                lines.append("\n🔗 **먼저 확인해야 할 결선:**")
-                for idx, p in enumerate(priority_items[:4]):
-                    lines.append(f"  {idx + 1}) **{p['display_label']}** - {p['reason']}")
-                lines.append("\n💡 정상 선로는 `[정상 결선 일괄 승인]`으로 승인하고, 오류 선로만 [연결 대상 재지정]을 진행하세요.")
+                action_mode = "GUIDE"
+                target = None
+                reply_ko = "확인이 필요한 결선 예외를 표시했습니다. 정상 선로는 AI가 확인했으며, 표시된 예외만 확인해주세요."
+                v2_lines.append("\n🔗 **확인이 필요한 실제 예외:**")
+                for idx, item in enumerate(priority_items[:6]):
+                    v2_lines.append(f"  {idx + 1}) **{item['display_label']}** - {item['reason']}")
             else:
                 decision = "PROCEED"
-                target = "connection_gate"
-                reply_ko = "모든 결선이 전기적 무결성 검증을 통과했습니다. 회로도 검증 완료를 진행하세요."
-                lines.append("\n✓ 모든 결선이 전기적 무결성 검증을 통과했습니다. `[회로도 검증 완료]`를 진행하세요.")
-
-            summary_text = "\n".join(lines)
+                action_mode = "NONE"
+                target = None
+                reply_ko = "정상 연결된 선로는 AI가 확인했습니다. 전체 도면을 확인한 뒤 [결선 검수 완료]를 눌러주세요."
+                v2_lines.append("\n✓ 정상 결선은 자동으로 확인되었습니다. 전체 도면을 확인한 뒤 `[결선 검수 완료]`를 눌러주세요.")
+            summary_text = "\n".join(v2_lines)
 
         elif stage_upper in ("FINAL_REVIEW", "FINAL", "VERIFIED_FINAL"):
             decision = "PROCEED"
@@ -659,10 +803,10 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                 "topology_error_count": len(error_issues),
             },
             "summary_text": summary_text,
-            "total_count": bus_summary["total_buses"] if bus_summary is not None else (len(w_nodes) if stage_upper != "CONNECTION_REVIEW" else len(w_lines)),
-            "clean_count": bus_summary["verified_buses"] if bus_summary is not None else (len(w_nodes) - len(suspicious) if stage_upper != "CONNECTION_REVIEW" else len(w_lines) - len(ambiguous)),
-            "suspicious_count": bus_summary["issue_buses"] if bus_summary is not None else (len(suspicious) if stage_upper != "CONNECTION_REVIEW" else len(ambiguous)),
-            "missing_count": len(open_cands) if stage_upper != "CONNECTION_REVIEW" else len(error_issues),
+            "total_count": bus_summary["total_buses"] if bus_summary is not None else (len(active_connection_lines(w_lines)) if _is_connection_review_stage(stage) else len(w_nodes)),
+            "clean_count": bus_summary["verified_buses"] if bus_summary is not None else (len(active_connection_lines(w_lines)) - len(connection_exception_line_ids(active_connection_lines(w_lines), issues)) if _is_connection_review_stage(stage) else len(w_nodes) - len(suspicious)),
+            "suspicious_count": bus_summary["issue_buses"] if bus_summary is not None else (len(connection_exception_line_ids(active_connection_lines(w_lines), issues)) if _is_connection_review_stage(stage) else len(suspicious)),
+            "missing_count": len(open_cands) if not _is_connection_review_stage(stage) else len(error_issues),
             "bus_summary": bus_summary,
             "priority_items": priority_items,
             "provider_mode": self.provider_name,
@@ -838,29 +982,43 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
         # 3. Selected Line Inquiry
         if selected_line and any(k in msg for k in ["왜", "이유", "문제", "오류", "선로", "line", "why"]):
             line_id = str(selected_line.get("line_id", selected_line.get("id", "Unknown")))
-            status = selected_line.get("review_status", "NORMAL")
-            issues_list = selected_line.get("validation_issues", [])
+            status = str(selected_line.get("review_status", "DETECTED")).upper()
+            issues_list = line_validation_issues(selected_line)
             issue_msgs = [i.get("message", "") for i in issues_list if isinstance(i, dict)]
+            is_critical = line_has_critical_issue(selected_line)
+            is_rejected = status == "REJECTED"
 
             lines = [f"🔍 **[선택 선로 결선 분석 - {line_id}]**\n"]
-            lines.append(f"• **검수 상태**: {status}")
+            lines.append(f"• **검수 상태**: {'확인 필요' if status == 'AMBIGUOUS' else ('전기 오류' if is_critical else ('제외' if is_rejected else 'AI 확인'))}")
             if issue_msgs:
                 lines.append(f"• **결선 이슈**: {', '.join(issue_msgs)}")
             else:
-                lines.append("• **결선 상태**: 모선 간 정상적인 연결이 확인되었습니다.")
+                lines.append("• **결선 상태**: 실제 traced path와 endpoint가 정상 연결로 확인되었습니다.")
             reply = "\n".join(lines)
 
             res = {
                 "reply_ko": reply,
-                "decision": "HUMAN_CHECK" if status == "AMBIGUOUS" else "PROCEED",
+                "decision": "HUMAN_CHECK" if (status == "AMBIGUOUS" or is_critical) else "PROCEED",
                 "intent": "INSPECT_SELECTED_LINE",
                 "action_mode": "NONE",
                 "action_id": None,
                 "highlight_target": "canvas_line",
-                "focus_targets": [{"type": "LINE", "id": line_id, "reason": status, "severity": "INFO"}],
+                "focus_targets": [] if is_rejected else [{
+                    "type": "LINE",
+                    "id": line_id,
+                    "reason": "전기적 연결 오류" if is_critical else ("연결 대상 불확실" if status == "AMBIGUOUS" else "AI 확인 선로"),
+                    "severity": "ERROR" if is_critical else ("REVIEW" if status == "AMBIGUOUS" else "INFO"),
+                }],
                 "agent_status": "LOCAL_LINE_INFO",
             }
-            return sanitize_and_validate_agent_response(res, message, w_nodes, w_lines, cands, issues, stage)
+            # A selected line is authoritative chat context even when the
+            # caller omits the full working-line collection. Preserve that
+            # context so the connection contract does not replace an actual
+            # line explanation with the empty-network blocker.
+            validation_lines = w_lines if w_lines else [selected_line]
+            return sanitize_and_validate_agent_response(
+                res, message, w_nodes, validation_lines, cands, issues, stage
+            )
 
         # 4. Summary & Status Requests
         if any(k in msg for k in ["요약", "현황", "검토 필요", "상태", "summary", "status"]):
@@ -976,21 +1134,29 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                 reply += f"1. 모선 번호 확인 필요: **{issue_count}개**\n"
                 reply += "2. 도면에 표시된 확인 필요 모선을 클릭하여 번호와 근거를 확인하고 틀린 경우에만 수정하세요.\n"
                 reply += "3. 모든 확인이 끝나면 하단 **[모선 검수 완료]**를 눌러주세요."
-        elif stage_upper in ("CONNECTION_REVIEW", "CONNECTION", "LINE_REVIEW"):
-            ambiguous_count = len([l for l in w_lines if (l.get("review_status") or l.get("status")) == "AMBIGUOUS"])
-            error_count = len([i for i in issues if i.get("severity") in ("error", "ERROR")])
-            reply = "🧭 **[다음 단계 진행 가이드 - ③ 선로 결선 검수]:**\n"
-            if ambiguous_count == 0 and error_count == 0:
-                target = "connection_gate"
-                reply += "✓ 모든 선로 연결 상태가 확인되었습니다!\n"
-                reply += "• 하단 **[결선 승인 완료 (Gate 3 통과)]** 버튼을 눌러 **[다음: ④ 최종 검증 및 회로 생성]** 단계로 이동하세요."
-            else:
-                target = "connection_priority"
+        elif _is_connection_review_stage(stage):
+            active_lines = active_connection_lines(w_lines)
+            exception_ids = connection_exception_line_ids(active_lines, issues)
+            error_count = len([i for i in issues if is_error_issue(i)]) + sum(
+                1 for line in active_lines if line_has_critical_issue(line)
+            )
+            reply = "🧭 **[다음 단계 진행 가이드 - ③ 결선 검수]:**\n"
+            if not active_lines:
+                dec = "BLOCKED"
+                target = None
+                reply += f"⚠️ {CONNECTION_NO_ACTIVE_MESSAGE}\n"
+                reply += "결선 검출 결과와 객체 연결 상태를 확인한 뒤 다시 시도해주세요."
+            elif exception_ids or error_count > 0:
                 dec = "HUMAN_CHECK"
-                reply += f"1. 모호한 선로 연결 검토 (남은 모호 선로: **{ambiguous_count}개**)\n"
-                reply += f"2. 토폴로지 오류 항목 점검 (치명 오류: **{error_count}건**)\n"
-                reply += "3. 정상 결선은 **[선로 승인하고 다음 (Enter)]**, 잘못된 결선은 [연결 대상 재지정] 또는 [선로 제외]\n"
-                reply += "4. 모든 결선 확인 완료 후 하단 **[결선 승인 완료]** 클릭 ➔ **[다음: ④ 최종 검증 및 회로 생성]** 단계로 이동"
+                target = None
+                reply += f"1. 확인이 필요한 실제 결선 예외: **{len(exception_ids)}건**\n"
+                reply += f"2. 전기적 연결 오류: **{error_count}건**\n"
+                reply += "3. 표시된 예외의 endpoint, traced path, validation evidence만 확인하거나 수정해주세요."
+            else:
+                dec = "PROCEED"
+                target = None
+                reply += "✓ 정상 연결된 선로는 AI가 확인했습니다.\n"
+                reply += "• 전체 도면을 확인한 뒤 하단 **[결선 검수 완료]**를 눌러주세요."
         elif stage_upper in ("FINAL_REVIEW", "FINAL", "VERIFIED_FINAL"):
             target = "final_excel_upload"
             reply = (
@@ -1028,7 +1194,11 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
             "reply_ko": reply,
             "decision": dec,
             "intent": "STAGE_GUIDANCE",
-            "action_mode": "GUIDE" if target else "NONE",
+            "action_mode": (
+                "GUIDE"
+                if (_is_connection_review_stage(stage) and dec in ("HUMAN_CHECK", "BLOCKED"))
+                else ("GUIDE" if target else "NONE")
+            ),
             "action_id": None,
             "highlight_target": target,
             "agent_status": "LOCAL_GUIDE",
@@ -1180,6 +1350,24 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
             res["agent_status"] = "LOCAL_BUS_CONTRACT"
             return res
 
+        if _is_connection_review_stage(stage):
+            # Connection truth and focus targets come from the deterministic
+            # topology/line evidence contract; Gemini may explain it later,
+            # but must not decide whether a line is clean.
+            res = LocalReviewAssistantProvider().generate_proactive_summary(
+                document_id=document_id,
+                stage=stage,
+                working_nodes=w_nodes,
+                working_lines=w_lines,
+                missing_candidates=cands,
+                topology_issues=issues,
+                app_context=app_context,
+            )
+            res["provider_mode"] = self.provider_name
+            res["display_mode"] = self.display_mode_name
+            res["agent_status"] = "LOCAL_CONNECTION_CONTRACT"
+            return res
+
         suspicious_nodes = [
             {
                 "id": n.get("id"),
@@ -1316,6 +1504,27 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
             res["provider_mode"] = self.provider_name
             res["display_mode"] = self.display_mode_name
             res["agent_status"] = "LOCAL_BUS_CONTRACT"
+            return res
+
+        if _is_connection_review_stage(stage):
+            # Keep interactive Connection answers on the same deterministic
+            # exception-first path as proactive summaries.
+            res = LocalReviewAssistantProvider().answer_chat(
+                message=message,
+                document_id=document_id,
+                stage=stage,
+                selected_node=selected_node,
+                selected_line=selected_line,
+                working_nodes=working_nodes,
+                working_lines=working_lines,
+                missing_candidates=missing_candidates,
+                topology_issues=topology_issues,
+                history=history,
+                app_context=app_context,
+            )
+            res["provider_mode"] = self.provider_name
+            res["display_mode"] = self.display_mode_name
+            res["agent_status"] = "LOCAL_CONNECTION_CONTRACT"
             return res
 
         system_instruction = (

@@ -470,48 +470,35 @@ class AgentCoreV2Test(unittest.TestCase):
         self.assertEqual(res["decision"], "PROCEED")
 
     def test_21_proactive_payload_separates_topology_errors_and_warnings(self):
-        """TEST 21: Proactive payload distinguishes critical topology errors from warnings/info."""
+        """TEST 21: Connection proactive contract is deterministic and warning-safe."""
         prov = GeminiReviewAssistantProvider(
             api_key="test_dummy_key",
             model_name="gemini-3.8-flash",
         )
-        captured_user_prompt = []
-
-        def mock_call_gemini(system_instruction, contents, timeout_sec=25.0):
-            for part in contents[0].get("parts", []):
-                captured_user_prompt.append(part.get("text", ""))
-            mock_json = json.dumps({
-                "reply_ko": "브리핑 완료",
-                "decision": "PROCEED",
-                "action_mode": "NONE",
-            })
-            return mock_json, "gemini-3.8-flash", False
-
-        prov._call_gemini_with_fallback = mock_call_gemini
 
         issues = [
             {"id": "err_1", "severity": "error", "message": "모선 단락 결선 결함"},
-            {"id": "warn_1", "severity": "warning", "message": "단선도 선로 교차 경고"},
+            {"id": "warn_1", "severity": "warning", "message": "단선도 선로 간격 경고"},
             {"id": "info_1", "severity": "info", "message": "도면 정보"},
         ]
 
-        prov.generate_proactive_summary(
+        res = prov.generate_proactive_summary(
             document_id="doc_proactive_test",
             stage="CONNECTION_REVIEW",
             working_nodes=[{"id": "b1", "review_status": "NORMAL"}],
-            working_lines=[{"line_id": "l1", "review_status": "NORMAL"}],
+            working_lines=[{"line_id": "l1", "review_status": "CONFIRMED"}],
             missing_candidates=[],
             topology_issues=issues,
         )
 
-        self.assertTrue(len(captured_user_prompt) > 0)
-        full_prompt = captured_user_prompt[0]
-
-        # Ensure prompt contains explicit separated counts and sections
-        self.assertIn('"topology_error_count": 1', full_prompt)
-        self.assertIn('"topology_warning_count": 2', full_prompt)
-        self.assertIn('"topology_errors"', full_prompt)
-        self.assertIn('"topology_warnings"', full_prompt)
+        self.assertEqual(res["decision"], "HUMAN_CHECK")
+        self.assertEqual(res["action_mode"], "GUIDE")
+        self.assertIsNone(res["highlight_target"])
+        self.assertEqual(res["evidence_summary"]["topology_error_count"], 1)
+        self.assertEqual(
+            [(target["type"], target["id"]) for target in res["focus_targets"]],
+            [("ISSUE", "err_1")],
+        )
 
     def test_22_object_review_proactive_with_suspicious_nodes(self):
         """TEST 22: OBJECT_REVIEW proactive with suspicious nodes returns HUMAN_CHECK, GUIDE, focus_targets, and suppresses legacy object_approve."""
@@ -857,6 +844,112 @@ class AgentCoreV2Test(unittest.TestCase):
         self.assertEqual(gate["gate_status"], "BLOCKED")
         self.assertEqual(gate["focus_node_ids"], [])
         self.assertIn("유효한 모선", gate["message"])
+
+    def test_37_connection_v2_exception_first_backend_contract(self):
+        """Connection A~X core predicates: clean, ambiguous, error, warning, zero-line, and focus safety."""
+        clean = self.local_prov.generate_proactive_summary(
+            document_id="doc_conn_clean",
+            stage="CONNECTION_REVIEW",
+            working_lines=[{"line_id": "l_clean", "review_status": "DETECTED"}],
+        )
+        self.assertEqual(clean["decision"], "PROCEED")
+        self.assertEqual(clean["action_mode"], "NONE")
+        self.assertIsNone(clean["highlight_target"])
+        self.assertEqual(clean["focus_targets"], [])
+
+        ambiguous = self.local_prov.generate_proactive_summary(
+            document_id="doc_conn_ambiguous",
+            stage="CONNECTION_REVIEW",
+            working_lines=[{"line_id": "l_amb", "review_status": "AMBIGUOUS"}],
+        )
+        self.assertEqual(ambiguous["decision"], "HUMAN_CHECK")
+        self.assertEqual(ambiguous["action_mode"], "GUIDE")
+        self.assertEqual(ambiguous["focus_targets"][0]["id"], "l_amb")
+        self.assertIsNone(ambiguous["highlight_target"])
+
+        critical = self.local_prov.generate_proactive_summary(
+            document_id="doc_conn_error",
+            stage="CONNECTION_REVIEW",
+            working_lines=[
+                {
+                    "line_id": "l_error",
+                    "review_status": "DETECTED",
+                    "validation_issues": [
+                        {"id": "line_issue_1", "severity": "error", "message": "끝점 오류"}
+                    ],
+                }
+            ],
+        )
+        self.assertEqual(critical["decision"], "HUMAN_CHECK")
+        self.assertEqual(critical["focus_targets"][0]["id"], "l_error")
+
+        warning_only = self.local_prov.generate_proactive_summary(
+            document_id="doc_conn_warning",
+            stage="CONNECTION_REVIEW",
+            working_lines=[{"line_id": "l_warning", "review_status": "DETECTED"}],
+            topology_issues=[{"id": "warn_1", "severity": "warning", "message": "간격 안내"}],
+        )
+        self.assertEqual(warning_only["decision"], "PROCEED")
+        self.assertEqual(warning_only["evidence_summary"]["topology_error_count"], 0)
+
+        no_active = self.local_prov.generate_proactive_summary(
+            document_id="doc_conn_empty",
+            stage="CONNECTION_REVIEW",
+            working_lines=[{"line_id": "l_rejected", "review_status": "REJECTED"}],
+        )
+        self.assertEqual(no_active["decision"], "BLOCKED")
+        self.assertEqual(no_active["action_mode"], "GUIDE")
+        self.assertIn("유효한 결선", no_active["reply_ko"])
+        self.assertEqual(no_active["focus_targets"], [])
+
+        fabricated = sanitize_and_validate_agent_response(
+            {
+                "reply_ko": "가상 포커스",
+                "decision": "HUMAN_CHECK",
+                "action_mode": "GUIDE",
+                "focus_targets": [
+                    {"type": "LINE", "id": "line_fake"},
+                    {"type": "ISSUE", "id": "issue_fake"},
+                ],
+            },
+            stage="CONNECTION_REVIEW",
+            working_lines=[{"line_id": "l_real", "review_status": "AMBIGUOUS"}],
+        )
+        self.assertEqual([target["id"] for target in fabricated["focus_targets"]], ["l_real"])
+
+        mutation = self.local_prov.answer_chat(
+            message="선로 추가해줘",
+            document_id="doc_conn_mutation",
+            stage="CONNECTION_REVIEW",
+            working_lines=[{"line_id": "l_real", "review_status": "DETECTED"}],
+        )
+        self.assertEqual(mutation["action_mode"], "CONFIRM_REQUIRED")
+        self.assertIsNone(mutation["action_id"])
+
+    def test_38_connection_final_gate_rejects_zero_active_lines(self):
+        """Authoritative final gate blocks a valid node set when every line is rejected."""
+        import asyncio
+        from review.schemas import VerifyFinalGateRequest
+        from review.staged_api import review_verify_final_gate
+
+        fake_session = MagicMock(width=100, height=100)
+        request = VerifyFinalGateRequest(
+            document_id="doc_conn_gate_empty",
+            working_nodes=[
+                {
+                    "id": "bus_1",
+                    "class": "bus",
+                    "review_status": "CONFIRMED",
+                    "bbox": [10, 10, 20, 20],
+                }
+            ],
+            working_lines=[{"line_id": "l_rejected", "review_status": "REJECTED"}],
+        )
+        with patch("review.staged_api.session_store.get_session", return_value=fake_session):
+            result = asyncio.run(review_verify_final_gate(request))
+
+        self.assertEqual(result["gate_status"], "BLOCKED")
+        self.assertIn("유효한 결선", result["message"])
 
 
 if __name__ == "__main__":

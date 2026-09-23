@@ -212,15 +212,17 @@ class PowerLensAIService extends ChangeNotifier {
           }
           return 'bus_gate';
         case 'connection_review':
-          final unapprovedLines = context.workingLines
-              .where(
-                (l) => l['status'] != 'CONFIRMED' && l['status'] != 'REJECTED',
-              )
+          final lines = context.workingLines
+              .map((raw) => ReviewLineItem.fromJson(raw))
               .toList();
-          if (unapprovedLines.isNotEmpty) {
-            return 'connection_priority';
-          }
-          return 'connection_gate';
+          final blockers = ConnectionReviewGateEvaluator.getBlockers(
+            workingLines: lines,
+            topologyIssues: context.topologyIssues,
+          );
+          // Exception lines are guided by their real LINE/ISSUE focus on the
+          // canvas. The only stable UI target for a clean review is the
+          // single final CTA.
+          return blockers.isEmpty ? 'connection_gate' : null;
         case 'verified_final':
         case 'final':
           if (!context.excelLoaded) {
@@ -543,33 +545,19 @@ class PowerLensAIService extends ChangeNotifier {
     }
 
     final isConnectionReview = _isConnectionReviewStage(context);
-    if (isConnectionReview &&
+    // Connection Review V2 is a whole-network exception review. Legacy
+    // view-mode and next-line commands remain in the enum for compatibility,
+    // but are intentionally not emitted by the active semantic router.
+    final asksForSequentialConnection =
+        isConnectionReview &&
         _containsAny(q, const [
-          '선로만',
-          '선만보고',
-          '전체선로만',
-          '다른기호는빼',
-          '한개씩말고전체선로',
-        ])) {
-      return const [PowerLensAppAction.connectionLinesOnly];
-    }
-
-    if (isConnectionReview &&
-        _containsAny(q, const [
-          '전체다',
-          '선로전부',
-          '전체적으로이상',
-          '결선전체',
-          '전체결선',
-          '모든선로',
-        ])) {
-      return const [PowerLensAppAction.connectionFullReview];
-    }
-
-    if (isConnectionReview &&
-        _containsAny(q, const ['다음선', '다음선로', '다음거', '하나씩볼', '한선씩', '이선봐'])) {
-      return const [PowerLensAppAction.connectionNextLine];
-    }
+          '다음선',
+          '다음선로',
+          '다음거',
+          '하나씩볼',
+          '한선씩',
+          '이선봐',
+        ]);
 
     if (_containsAny(q, const ['캔버스로이동', '캔버스이동', '캔버스편집', '도면편집화면'])) {
       return const [PowerLensAppAction.handoffToCanvas];
@@ -660,7 +648,7 @@ class PowerLensAIService extends ChangeNotifier {
         stageStr == 'bus_mapping' ||
         stageStr == 'bus_mapping_review';
     if (_isReviewStage(context) && isBatchApprove) {
-      if (isObjectOrBusReview) {
+      if (isObjectOrBusReview || isConnectionReview) {
         return const [];
       }
       return const [PowerLensAppAction.approveAllClean];
@@ -677,11 +665,13 @@ class PowerLensAIService extends ChangeNotifier {
       '오케이',
     ]);
     if (_isReviewStage(context) && isPositiveReviewReply) {
-      if (isObjectOrBusReview) {
+      if (isObjectOrBusReview || isConnectionReview) {
         return const [];
       }
       return const [PowerLensAppAction.approveCurrentAndNext];
     }
+
+    if (asksForSequentialConnection) return const [];
 
     if (_containsAny(q, const [
       '다음에뭐',
@@ -1204,19 +1194,25 @@ class PowerLensAIService extends ChangeNotifier {
       case PowerLensAppAction.showReviewIssues:
         return _getReviewIssuesReply(context, handled);
       case PowerLensAppAction.approveCurrentAndNext:
-        return handled ? '현재 항목을 승인하고 다음 항목으로 이동했어요.' : '승인할 현재 항목이 없어요.';
+        return handled
+            ? '현재 항목을 확인했어요. 남은 예외가 있으면 도면에서 해당 항목만 확인해주세요.'
+            : '지금은 개별 승인할 항목이 없어요.';
       case PowerLensAppAction.approveAllClean:
         return handled
             ? '정상 대기 항목들을 한 번에 확인했어요.'
             : '일괄 처리할 대기 항목이 없거나 이미 처리되었습니다.';
       case PowerLensAppAction.connectionFullReview:
         return handled
-            ? '전체 선로를 한눈에 볼 수 있게 바꿨어요. 의심 선로부터 요약해서 확인해보세요.'
-            : '지금은 전체 선로 보기를 열 수 없어요.';
+            ? '전체 결선 화면에서 확인이 필요한 예외를 표시했어요.'
+            : '지금은 결선 검수 화면을 열 수 없어요.';
       case PowerLensAppAction.connectionLinesOnly:
-        return handled ? '다른 기호를 줄이고 전체 선로만 표시했어요.' : '지금은 선로 전용 보기를 열 수 없어요.';
+        return handled
+            ? '전체 네트워크 화면에서 확인이 필요한 결선을 표시했어요.'
+            : '지금은 결선 검수 화면을 열 수 없어요.';
       case PowerLensAppAction.connectionNextLine:
-        return handled ? '다음 선로를 보여드릴게요.' : '다음 선로가 없어요.';
+        return handled
+            ? '자동 선로 이동은 사용하지 않아요. 확인이 필요한 결선을 도면에서 선택해주세요.'
+            : '확인할 결선이 없어요.';
       case PowerLensAppAction.handoffToCanvas:
         return handled
             ? '캔버스로 이동했어요. 여기서 조류계산을 시작할 수 있어요.'
@@ -1288,18 +1284,17 @@ class PowerLensAIService extends ChangeNotifier {
         return '현재 검토가 필요한 모선 번호 오류가 없습니다! 전체 번호를 마지막으로 확인한 뒤 [모선 검수 완료]를 눌러 결선 검수로 넘어가시면 됩니다.';
       }
     } else if (stage == 'CONNECTION_REVIEW') {
-      final amb = context.ambiguousConnections;
-      final topo = context.topologyIssueCount;
-
-      if (amb > 0 || topo > 0) {
-        final parts = [
-          if (amb > 0) '의심 선로 $amb건',
-          if (topo > 0) '위상 오류 $topo건',
-        ];
-        return '검토가 필요한 결선(${parts.join(', ')})만 모아서 표시했어요. 선로를 확인하고 [선로 승인하고 다음]을 눌러주세요.';
-      } else {
-        return '현재 검토가 필요한 선로 결함이나 연결 문제가 없습니다! 모든 선로가 정상이므로 [결선 검수 완료]를 눌러주세요.';
+      final lines = context.workingLines
+          .map((raw) => ReviewLineItem.fromJson(raw))
+          .toList();
+      final blockers = ConnectionReviewGateEvaluator.getBlockers(
+        workingLines: lines,
+        topologyIssues: context.topologyIssues,
+      );
+      if (blockers.isNotEmpty) {
+        return '확인이 필요한 결선만 도면에 표시했어요. ${blockers.join(' ')} 실제 선로와 근거를 확인한 뒤 예외를 해결해주세요.';
       }
+      return '현재 검토가 필요한 결선 예외가 없습니다. 전체 네트워크를 마지막으로 확인한 뒤 [결선 검수 완료]를 눌러주세요.';
     } else if (stage == 'FINAL' ||
         stage == 'FINAL_CAD' ||
         stage == 'VERIFIED_FINAL') {
@@ -1364,10 +1359,15 @@ class PowerLensAIService extends ChangeNotifier {
         }
         break;
       case 'CONNECTION_REVIEW':
-        if (ctx.ambiguousConnections > 0 || ctx.topologyIssueCount > 0) {
-          return "⚠️ 검토가 필요한 결선이 **${ctx.ambiguousConnections}개**, "
-              "토폴로지 문제가 **${ctx.topologyIssueCount}건** 남아 있어요. "
-              "문제 항목을 해결한 뒤 최종 검증으로 넘어갈 수 있습니다.";
+        final connectionLines = ctx.workingLines
+            .map((raw) => ReviewLineItem.fromJson(raw))
+            .toList();
+        final connectionBlockers = ConnectionReviewGateEvaluator.getBlockers(
+          workingLines: connectionLines,
+          topologyIssues: ctx.topologyIssues,
+        );
+        if (connectionBlockers.isNotEmpty) {
+          return "⚠️ ${connectionBlockers.join(' ')} 실제 선로와 근거를 확인한 뒤 최종 검증으로 넘어갈 수 있습니다.";
         }
         break;
       case 'FINAL':
@@ -1419,6 +1419,11 @@ class PowerLensAIService extends ChangeNotifier {
             "✨ **객체 검수 안내:**\n"
             "• 정상 객체는 일괄 승인할 필요가 없습니다. 도면에 확인 필요로 표시된 의심 객체나 누락 후보만 확인하시면 됩니다.\n"
             "• 확인이 끝나면 하단의 [객체 검수 완료] 버튼을 눌러 다음 단계로 진행하세요.";
+      } else if (stage == 'CONNECTION_REVIEW') {
+        reply =
+            "✨ **결선 검수 안내:**\n"
+            "• 정상 결선은 개별 승인하지 않습니다.\n"
+            "• 확인 필요, 교차 근거, 전기 오류가 표시된 예외만 실제 도면과 대조한 뒤 [결선 검수 완료]를 눌러주세요.";
       } else {
         reply =
             "✨ **정상 항목 일괄 승인 안내:**\n"
@@ -1545,9 +1550,16 @@ class PowerLensAIService extends ChangeNotifier {
           ? "⚠️ 아직 확인이 필요한 모선이 **${ctx.unresolvedBusNumbers}개** 있습니다. 번호를 확인하거나 수정한 뒤 [모선 검수 완료]를 눌러주세요."
           : "✅ 모든 모선 번호 확인이 완료되었습니다. [모선 검수 완료]를 눌러주세요.";
     } else if (ctx.workflowStage == 'CONNECTION_REVIEW') {
-      return ctx.topologyIssueCount > 0
-          ? "⚠️ 연결 구조 오류가 **${ctx.topologyIssueCount}건** 발견되었습니다. 선로를 확인하고 승인해 주세요."
-          : "✅ 선로 결선에 모호한 문제가 없습니다. 최종 검증으로 진행하세요.";
+      final lines = ctx.workingLines
+          .map((raw) => ReviewLineItem.fromJson(raw))
+          .toList();
+      final blockers = ConnectionReviewGateEvaluator.getBlockers(
+        workingLines: lines,
+        topologyIssues: ctx.topologyIssues,
+      );
+      return blockers.isNotEmpty
+          ? "⚠️ 확인이 필요한 결선 예외가 있습니다. ${blockers.join(' ')} 실제 선로 근거를 확인해주세요."
+          : "✅ 확인이 필요한 결선 예외가 없습니다. 전체 네트워크를 마지막으로 확인한 뒤 [결선 검수 완료]를 눌러주세요.";
     }
     return "현재 검토가 지연된 항목이 없습니다. 다음 단계를 진행해보세요!";
   }
@@ -1612,20 +1624,21 @@ class PowerLensAIService extends ChangeNotifier {
               "• 하단 **[모선 검수 완료]** 버튼을 눌러주세요.";
         }
       case 'CONNECTION_REVIEW':
-        if (selected != null && selected.isNotEmpty) {
-          return "💡 **다음 할 일 (결선 검수):**\n"
-              "• 현재 선로 **$selected**을 검토 중입니다.\n"
-              "• 연결된 양 끝 모선이 맞다면 **[선로 승인 (Enter)]**을 누르세요. 다음 선로로 자동 이동합니다.";
+        final lines = ctx.workingLines
+            .map((raw) => ReviewLineItem.fromJson(raw))
+            .toList();
+        final blockers = ConnectionReviewGateEvaluator.getBlockers(
+          workingLines: lines,
+          topologyIssues: ctx.topologyIssues,
+        );
+        if (blockers.isNotEmpty) {
+          return "💡 **다음 할 일 (결선 예외 확인):**\n"
+              "• ${blockers.join(' ')}\n"
+              "• 도면에서 실제 경로와 양 끝점을 확인하고 필요한 경우 후보 연결을 선택하세요.";
         }
-        if (ctx.topologyIssueCount > 0) {
-          return "💡 **다음 할 일 (결선 검수):**\n"
-              "• 감지된 연결 오류: ${ctx.topologyIssueCount}건\n"
-              "• 강조된 선로를 확인하고 올바른 모선으로 연결하거나 승인하세요.";
-        } else {
-          return "💡 **다음 할 일 (결선 검수 완료):**\n"
-              "• 선로 연결이 모두 검증되었습니다.\n"
-              "• **[결선 확정 ➔ 최종 검증]**을 눌러 완성된 단선도를 확인하세요.";
-        }
+        return "💡 **다음 할 일 (결선 검수 완료):**\n"
+            "• 전체 네트워크의 결선 예외가 해결되었습니다.\n"
+            "• **[결선 검수 완료]**를 눌러 최종 검증을 시작하세요.";
       case 'FINAL':
       case 'FINAL_CAD':
         if (!ctx.excelLoaded) {
@@ -1711,16 +1724,22 @@ class PowerLensAIService extends ChangeNotifier {
         return "🔢 **모선 번호 확인 단계입니다.**\n"
             "모선 번호를 전체 확인했어요. 다시 확인하면 좋은 모선이${countStr} 있어요. 도면에 표시해둘게요.";
       case 'CONNECTION_REVIEW':
-        final hasConnIssues =
-            (ctx?.ambiguousConnections ?? 0) > 0 ||
-            (ctx?.topologyIssueCount ?? 0) > 0;
-        if (!hasConnIssues && ctx != null) {
+        final connectionLines = ctx?.workingLines
+                .map((raw) => ReviewLineItem.fromJson(raw))
+                .toList() ??
+            const <ReviewLineItem>[];
+        final connectionBlockers = ctx == null
+            ? const <String>[]
+            : ConnectionReviewGateEvaluator.getBlockers(
+                workingLines: connectionLines,
+                topologyIssues: ctx.topologyIssues,
+              );
+        if (connectionBlockers.isEmpty && ctx != null) {
           return "⚡ **결선 검수 단계입니다.**\n"
-              "모든 선로와 결선 연결이 정상적으로 검증되었습니다! **[결선 검수 완료]**를 눌러 최종 확인으로 진행하시면 됩니다.";
+              "전체 네트워크를 확인했어요. 예외가 없으므로 **[결선 검수 완료]**를 눌러 최종 검증으로 진행하시면 됩니다.";
         }
         return "⚡ **결선 검수 단계입니다.**\n"
-            "전체 연결을 먼저 확인해봤어요. 제가 다시 보는 게 좋다고 판단한 선부터 같이 볼게요. "
-            "**[핵심 검토]**, **[전체 선로]**, **[한 선씩]** 중에서 선택할 수 있어요.";
+            "확인이 필요한 결선 예외만 실제 경로와 함께 표시할게요. 해당 선로 또는 이슈를 선택해 근거를 확인해주세요.";
       case 'FINAL':
       case 'FINAL_CAD':
         return "✨ **검증이 끝났어요.**\n"
@@ -1753,11 +1772,16 @@ class PowerLensAIService extends ChangeNotifier {
             ? "모선 번호를 전체 확인했어요. 다시 확인하면 좋은 모선이${countStr} 있어요. 도면에 표시해둘게요."
             : "제가 다시 확인할 모선은 이제 없어요. 전체 번호를 한번 확인한 뒤 [모선 검수 완료]를 눌러주세요.";
       case 'CONNECTION_REVIEW':
-        final hasConnIssues =
-            ctx.ambiguousConnections > 0 || ctx.topologyIssueCount > 0;
-        return hasConnIssues
-            ? "전체 연결을 먼저 확인해봤어요. 제가 다시 보는 게 좋다고 판단한 선부터 같이 볼게요."
-            : "모든 선로 결선이 정상 확인되었어요! [결선 검수 완료]를 눌러주세요.";
+        final connectionLines = ctx.workingLines
+            .map((raw) => ReviewLineItem.fromJson(raw))
+            .toList();
+        final connectionBlockers = ConnectionReviewGateEvaluator.getBlockers(
+          workingLines: connectionLines,
+          topologyIssues: ctx.topologyIssues,
+        );
+        return connectionBlockers.isNotEmpty
+            ? "확인이 필요한 결선 예외를 실제 경로와 함께 표시할게요."
+            : "전체 네트워크 결선이 정상 확인되었어요! [결선 검수 완료]를 눌러주세요.";
       case 'FINAL':
       case 'FINAL_CAD':
         return ctx.excelLoaded
@@ -1799,13 +1823,20 @@ class PowerLensAIService extends ChangeNotifier {
           '다음 단계로 이동',
         ];
       case 'CONNECTION_REVIEW':
-        final hasConnIssues =
-            (ctx?.ambiguousConnections ?? 0) > 0 ||
-            (ctx?.topologyIssueCount ?? 0) > 0;
+        final connectionLines = ctx?.workingLines
+                .map((raw) => ReviewLineItem.fromJson(raw))
+                .toList() ??
+            const <ReviewLineItem>[];
+        final hasConnIssues = ctx == null
+            ? true
+            : ConnectionReviewGateEvaluator.getBlockers(
+                workingLines: connectionLines,
+                topologyIssues: ctx.topologyIssues,
+              ).isNotEmpty;
         return [
-          hasConnIssues ? '연결 오류 점검' : '결선 검수 완료하기',
+          hasConnIssues ? '결선 예외 확인' : '결선 검수 완료하기',
           '다음에 뭐 해?',
-          '다음 단계로 이동',
+          '전체 네트워크 요약',
         ];
       case 'FINAL':
       case 'FINAL_CAD':

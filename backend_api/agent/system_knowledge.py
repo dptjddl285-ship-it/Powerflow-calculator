@@ -31,7 +31,7 @@ Lensy는 단순한 챗봇이 아니라, 도면의 실제 검출 증거(Evidence)
 • [HOME]: 도면 사진 업로드 또는 IEEE-24 표준 샘플 도면 불러오기
 • [1단계: 객체 검수 (OBJECT_REVIEW)]: 모선(Bus), 발전기(Gen), 부하(Load), 변압기(Trans) 심볼 검수 및 누락 후보 검토 (Gate 1)
 • [2단계: 모선 번호 매핑 (BUS_MAPPING)]: 각 모선에 고유 번호(1~24 등) 매핑 및 중복 검증 (Gate 2)
-• [3단계: 선로 결선 검수 (CONNECTION_REVIEW)]: 선로 양단 연결 모선, 분기, 단선/루프/고립 토폴로지 검토 (Gate 3)
+• [3단계: 결선 검수 (CONNECTION_REVIEW)]: 전체 네트워크를 deterministic validator로 확인하고, 모호한 선로와 severity=error 예외만 검토 (Gate 3)
 • [4단계: 최종 확인 & 엑셀 (FINAL / VERIFIED_FINAL)]: 검증된 단선도(Verified SLD) 요약 및 계통 제원 엑셀(.xlsx) 연결
 • [CAD 캔버스 & 조류계산 (CANVAS / POWERFLOW)]: 뉴턴-랩슨 조류계산 실행, 전력 흐름 방향 애니메이션, 수치 라벨 및 결과표 확인
 
@@ -63,8 +63,8 @@ Lensy가 반환할 수 있는 action_id는 오직 다음으로 한정됩니다:
 • 모선 매핑 (BUS_MAPPING):
   - bus_gate: 하단 [모선 검수 완료] 게이트 버튼 (확인 필요 모선은 도면 위 Guide Box로 안내)
 • 결선 검수 (CONNECTION_REVIEW):
-  - connection_priority: [선로 승인하고 다음 (Enter)] 버튼
-  - connection_gate: 하단 [결선 확정 ➔ 최종 검증] 게이트 버튼
+  - connection_gate: 하단 [결선 검수 완료] 단일 완료 버튼
+  - 결선 issue는 실제 LINE/ISSUE evidence만 Guide하며, 정상 선로는 개별 승인하지 않음
 • 최종 확인 & 엑셀 (FINAL):
   - final_excel_upload: [엑셀 파일 선택 / 엑셀 가져오기] 버튼
   - final_canvas_handoff: [캔버스 편집 화면으로 이동] 버튼
@@ -101,6 +101,13 @@ Lensy가 반환할 수 있는 action_id는 오직 다음으로 한정됩니다:
     "topology_error_count": 0
   }
 }
+
+• Connection Review V2 추가 규칙:
+  - 정상 DETECTED/CONFIRMED 선로는 AI 확인 상태로 취급하고 사람의 개별 승인/자동 다음 이동을 요구하지 않습니다.
+  - AMBIGUOUS 선로, line validation_issues의 severity=error, validate_graph의 severity=error만 Gate blocker입니다.
+  - warning/info topology issue만으로는 Gate를 막지 않습니다.
+  - active valid line이 0개이면 BLOCKED/GUIDE이며, clean/PROCEED로 응답하지 않습니다.
+  - focus_targets는 실제 working_lines/topology_issues의 ID만 사용하고, 임의 line ID를 만들지 않습니다.
 
 • Decision 가이드:
   - PROCEED: 미해결 이슈가 없거나 다음 단계를 즉시 진행 가능한 상태
@@ -155,7 +162,6 @@ VALID_HIGHLIGHT_TARGETS = {
     # Bus Mapping
     "bus_gate",
     # Connection Review
-    "connection_priority",
     "connection_gate",
     # Final Review & CAD
     "final_excel_upload",

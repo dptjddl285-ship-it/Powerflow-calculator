@@ -638,6 +638,24 @@ async def review_verify_final_gate(request: VerifyFinalGateRequest):
                 "critical_issue_count": len(suspicious_nodes),
             }
 
+        # Connection Review V2 requires at least one usable connection. A
+        # document containing only rejected lines must not silently pass the
+        # connection gate with an empty accepted_lines collection.
+        active_lines = [
+            line
+            for line in request.working_lines
+            if str(line.get("review_status", "")).upper() != "REJECTED"
+        ]
+        if not active_lines:
+            return {
+                "status": "success",
+                "gate_status": "BLOCKED",
+                "document_id": request.document_id,
+                "message": "유효한 결선 선로가 없습니다. 결선 검출을 확인해주세요.",
+                "critical_issue_count": 1,
+                "issues": [],
+            }
+
         # 2. Check confirmed lines (clean DETECTED are auto-confirmed)
         accepted_lines = []
         ambiguous_lines = []
