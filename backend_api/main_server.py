@@ -165,6 +165,26 @@ async def apply_excel_to_elements(request: Request):
         body = await request.json()
         elements = body.get("elements", [])
         excel_data = body.get("excel_data", {})
+        if body.get("verified_sld_review") is True:
+            # Final review is a read-only comparison. The canvas importer may
+            # add missing generators/leads, which must never alter or mask the
+            # verified topology while the user is still reviewing it.
+            mismatch_report = excel_importer.compare_elements_with_excel(
+                elements,
+                excel_data,
+                structured_bus_numbers_only=True,
+            )
+            summary = {
+                "review_only": True,
+                "mismatch_report": mismatch_report,
+            }
+            return {
+                "status": "success",
+                "elements": elements,
+                "summary": summary,
+                "mismatch_report": mismatch_report,
+            }
+
         updated_elements, summary = excel_importer.apply_to_elements(elements, excel_data)
         return {
             "status": "success",

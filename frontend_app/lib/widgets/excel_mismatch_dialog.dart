@@ -10,6 +10,7 @@ class ExcelMismatchDialog extends StatefulWidget {
   final Map<String, dynamic> excelData;
   final List<dynamic> elements;
   final VoidCallback onAutoRecover;
+  final String autoRecoverLabel;
   final VoidCallback? onResetToStart;
   final VoidCallback? onCancel;
 
@@ -19,6 +20,7 @@ class ExcelMismatchDialog extends StatefulWidget {
     required this.excelData,
     required this.elements,
     required this.onAutoRecover,
+    this.autoRecoverLabel = "누락 요소 자동 추가 (동기화)",
     this.onResetToStart,
     this.onCancel,
   });
@@ -379,7 +381,7 @@ class _ExcelMismatchDialogState extends State<ExcelMismatchDialog> {
                   ElevatedButton.icon(
                     onPressed: widget.onAutoRecover,
                     icon: const Icon(Icons.auto_fix_high, size: 16),
-                    label: const Text("누락 요소 자동 추가 (동기화)"),
+                    label: Text(widget.autoRecoverLabel),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.teal.shade700,
                       foregroundColor: Colors.white,

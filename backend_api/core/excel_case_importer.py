@@ -849,7 +849,13 @@ class ExcelCaseImporter:
         }
         return elements, summary
 
-    def compare_elements_with_excel(self, elements: list, excel_data: dict) -> dict:
+    def compare_elements_with_excel(
+        self,
+        elements: list,
+        excel_data: dict,
+        *,
+        structured_bus_numbers_only: bool = False,
+    ) -> dict:
         """도면의 캔버스 요소와 엑셀 계통 사양을 정밀 비교하여 불일치 내역 리포트를 생성합니다."""
         import re
 
@@ -873,6 +879,8 @@ class ExcelCaseImporter:
         # 1. Map element ID to bus number
         el_id_to_bus_num = {}
         diagram_buses = set()
+        diagram_bus_counts = {}
+        unmapped_bus_ids = []
         for el in elements:
             el_type = get_el_type(el)
             if 'bus' in el_type and not any(k in el_type for k in ('gen', 'load', 'trans')):
@@ -884,11 +892,11 @@ class ExcelCaseImporter:
                         b_num = int(b_num)
                     except (ValueError, TypeError):
                         b_num = None
-                if b_num is None and el.get('label'):
+                if b_num is None and not structured_bus_numbers_only and el.get('label'):
                     m = re.search(r'(\d+)', str(el.get('label')))
                     if m:
                         b_num = int(m.group(1))
-                if b_num is None and el.get('id'):
+                if b_num is None and not structured_bus_numbers_only and el.get('id'):
                     m = re.search(r'bus_(\d+)', str(el.get('id')))
                     if m:
                         b_num = int(m.group(1))
@@ -899,26 +907,42 @@ class ExcelCaseImporter:
                 if b_num is not None:
                     b_num = int(b_num)
                     diagram_buses.add(b_num)
+                    diagram_bus_counts[b_num] = diagram_bus_counts.get(b_num, 0) + 1
                     if el.get('id') is not None:
                         el_id_to_bus_num[str(el['id'])] = b_num
+                elif structured_bus_numbers_only:
+                    unmapped_bus_ids.append(str(el.get('id') or '<unknown>'))
 
         # 2. Extract diagram generators
         diagram_gens = set()
+        unmapped_device_ids = []
         for el in elements:
             el_type = get_el_type(el)
             if 'gen' in el_type:
                 parent_id = str(el.get('parentBusId') or '')
-                b_num = el.get('bus_number') or el.get('connected_bus_number') or el_id_to_bus_num.get(parent_id)
-                if b_num is None and el.get('label'):
+                b_num = el.get('bus_number')
+                if b_num is None:
+                    b_num = el.get('connected_bus_number')
+                if b_num is None:
+                    b_num = el.get('busNumber')
+                if b_num is None:
+                    b_num = el_id_to_bus_num.get(parent_id)
+                if b_num is None and not structured_bus_numbers_only and el.get('label'):
                     m = re.search(r'(\d+)', str(el.get('label')))
                     if m:
                         b_num = int(m.group(1))
-                if b_num is None and el.get('id'):
+                if b_num is None and not structured_bus_numbers_only and el.get('id'):
                     m = re.search(r'(\d+)', str(el.get('id')))
                     if m:
                         b_num = int(m.group(1))
                 if b_num is not None:
-                    diagram_gens.add(int(b_num))
+                    try:
+                        diagram_gens.add(int(b_num))
+                    except (ValueError, TypeError):
+                        if structured_bus_numbers_only:
+                            unmapped_device_ids.append(str(el.get('id') or '<unknown>'))
+                elif structured_bus_numbers_only:
+                    unmapped_device_ids.append(str(el.get('id') or '<unknown>'))
 
         # 3. Extract diagram loads
         diagram_loads = set()
@@ -926,17 +950,29 @@ class ExcelCaseImporter:
             el_type = get_el_type(el)
             if 'load' in el_type:
                 parent_id = str(el.get('parentBusId') or '')
-                b_num = el.get('bus_number') or el.get('connected_bus_number') or el_id_to_bus_num.get(parent_id)
-                if b_num is None and el.get('label'):
+                b_num = el.get('bus_number')
+                if b_num is None:
+                    b_num = el.get('connected_bus_number')
+                if b_num is None:
+                    b_num = el.get('busNumber')
+                if b_num is None:
+                    b_num = el_id_to_bus_num.get(parent_id)
+                if b_num is None and not structured_bus_numbers_only and el.get('label'):
                     m = re.search(r'(\d+)', str(el.get('label')))
                     if m:
                         b_num = int(m.group(1))
-                if b_num is None and el.get('id'):
+                if b_num is None and not structured_bus_numbers_only and el.get('id'):
                     m = re.search(r'(\d+)', str(el.get('id')))
                     if m:
                         b_num = int(m.group(1))
                 if b_num is not None:
-                    diagram_loads.add(int(b_num))
+                    try:
+                        diagram_loads.add(int(b_num))
+                    except (ValueError, TypeError):
+                        if structured_bus_numbers_only:
+                            unmapped_device_ids.append(str(el.get('id') or '<unknown>'))
+                elif structured_bus_numbers_only:
+                    unmapped_device_ids.append(str(el.get('id') or '<unknown>'))
 
         # 4. Extract Excel expectations first (to assist in branch/transformer matching)
         excel_buses = {int(k) for k in excel_data.get('buses', {}).keys()}
@@ -963,6 +999,7 @@ class ExcelCaseImporter:
         diagram_branches = set()
         trans_lead_line_ids = set()
         all_trans_buses = set()
+        unmapped_branch_ids = []
 
         for tr in elements:
             if 'trans' in get_el_type(tr):
@@ -1002,7 +1039,7 @@ class ExcelCaseImporter:
                                 found_any = True
                     if not found_any and len(conn_buses) == 2:
                         diagram_branches.add(tuple(sorted([int(conn_buses[0]), int(conn_buses[1])])))
-                elif len(conn_buses) == 1:
+                elif len(conn_buses) == 1 and not structured_bus_numbers_only:
                     m = re.search(r'(\d+)\s*[-~_↔]\s*(\d+)', str(tr.get('label') or tr.get('id') or ''))
                     if m:
                         diagram_branches.add(tuple(sorted([int(m.group(1)), int(m.group(2))])))
@@ -1029,18 +1066,28 @@ class ExcelCaseImporter:
                 # Check if this is a lead to a generator or load
                 if el.get('isEquipmentLead') or el.get('is_equipment_lead') or el.get('isGenLead') or el.get('is_gen_lead') or el.get('electricalBranch') is False:
                     continue
-                if id_str.startswith('lead_') or 'lead' in id_str or '↔' in lbl_str:
+                if not structured_bus_numbers_only and (
+                    id_str.startswith('lead_') or 'lead' in id_str or '↔' in lbl_str
+                ):
                     continue
-                is_gen = 'gen' in s_type or 'gen' in e_type or 'gen' in s_str or 'gen' in e_str or 'g_' in s_str or 'g_' in e_str or 'gen' in lbl_str or 'gen' in id_str
-                is_load = 'load' in s_type or 'load' in e_type or 'load' in s_str or 'load' in e_str or 'load' in lbl_str or 'load' in id_str
-                is_lead = (is_gen or is_load) and ('lead' in id_str or 'lead' in lbl_str)
+                if structured_bus_numbers_only:
+                    is_gen = 'gen' in s_type or 'gen' in e_type
+                    is_load = 'load' in s_type or 'load' in e_type
+                else:
+                    is_gen = 'gen' in s_type or 'gen' in e_type or 'gen' in s_str or 'gen' in e_str or 'g_' in s_str or 'g_' in e_str or 'gen' in lbl_str or 'gen' in id_str
+                    is_load = 'load' in s_type or 'load' in e_type or 'load' in s_str or 'load' in e_str or 'load' in lbl_str or 'load' in id_str
+                is_lead = (is_gen or is_load) and (
+                    structured_bus_numbers_only or 'lead' in id_str or 'lead' in lbl_str
+                )
 
                 if is_lead:
                     continue
 
                 fb = el_id_to_bus_num.get(start_id)
                 tb = el_id_to_bus_num.get(end_id)
-                if fb is None or tb is None:
+                if (fb is None or tb is None) and structured_bus_numbers_only:
+                    unmapped_branch_ids.append(str(el.get('id') or '<unknown>'))
+                elif fb is None or tb is None:
                     m = re.search(r'(\d+)\s*[-~_]\s*(\d+)', str(el.get('label') or el.get('id') or ''))
                     if m:
                         fb = fb or int(m.group(1))
@@ -1114,6 +1161,40 @@ class ExcelCaseImporter:
                 "message": f"{b}번 모선의 부하 심볼이 도면에 누락되었습니다."
             })
 
+        duplicate_bus_numbers = sorted(
+            bus_number
+            for bus_number, count in diagram_bus_counts.items()
+            if count > 1
+        ) if structured_bus_numbers_only else []
+        for bus_number in duplicate_bus_numbers:
+            discrepancies.append({
+                "category": "bus",
+                "type": "duplicate",
+                "target": f"Bus {bus_number}",
+                "message": f"도면에 모선 번호 {bus_number}가 중복되어 있습니다."
+            })
+        for bus_id in unmapped_bus_ids:
+            discrepancies.append({
+                "category": "bus",
+                "type": "unmapped",
+                "target": bus_id,
+                "message": f"모선 {bus_id}에 구조화된 bus_number가 없어 엑셀과 안전하게 대조할 수 없습니다."
+            })
+        for element_id in unmapped_device_ids:
+            discrepancies.append({
+                "category": "device",
+                "type": "unmapped",
+                "target": element_id,
+                "message": f"설비 {element_id}의 연결 모선 번호가 명시되어 있지 않아 엑셀과 안전하게 대조할 수 없습니다."
+            })
+        for line_id in unmapped_branch_ids:
+            discrepancies.append({
+                "category": "branch",
+                "type": "unmapped",
+                "target": line_id,
+                "message": f"결선 {line_id}의 검증된 모선 종단을 확인할 수 없어 엑셀과 안전하게 대조할 수 없습니다."
+            })
+
         is_matched = (len(discrepancies) == 0)
 
         # Summary string
@@ -1124,6 +1205,10 @@ class ExcelCaseImporter:
         if surplus_branches: summary_parts.append(f"초과 선로: {len(surplus_branches)}개")
         if missing_gens: summary_parts.append(f"누락 발전기: {len(missing_gens)}개")
         if missing_loads: summary_parts.append(f"누락 부하: {len(missing_loads)}개")
+        if structured_bus_numbers_only and (unmapped_bus_ids or unmapped_device_ids or unmapped_branch_ids):
+            summary_parts.append(
+                f"구조화된 연결 번호 확인 필요: {len(unmapped_bus_ids) + len(unmapped_device_ids) + len(unmapped_branch_ids)}개"
+            )
 
         summary_text = " • ".join(summary_parts) if summary_parts else "모든 모선, 선로, 발전기, 부하가 일치합니다."
 
@@ -1154,5 +1239,9 @@ class ExcelCaseImporter:
                 "surplus_generators": surplus_gens,
                 "missing_loads": missing_loads,
                 "surplus_loads": surplus_loads,
+                "unmapped_buses": unmapped_bus_ids,
+                "unmapped_devices": unmapped_device_ids,
+                "unmapped_branches": unmapped_branch_ids,
+                "duplicate_bus_numbers": duplicate_bus_numbers,
             }
         }

@@ -1,6 +1,7 @@
 import unittest
 import os
 import sys
+from copy import deepcopy
 
 backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if backend_dir not in sys.path:
@@ -145,6 +146,63 @@ class TestExcelCaseImporter(unittest.TestCase):
         self.assertEqual(line_l2['xPu'], 0.0)
         self.assertGreater(line_l2['pPu'], 0.0)
         self.assertIn('Line Bus 2 ↔ Load_2', line_l2['label'])
+
+    def test_verified_sld_comparison_uses_explicit_bus_numbers_and_does_not_mutate(self):
+        elements = [
+            {'id': 'node_alpha', 'type': 'bus', 'label': 'Bus 1', 'bus_number': 1},
+            {'id': 'node_beta', 'type': 'bus', 'label': 'Bus 2', 'bus_number': 2},
+            {
+                'id': 'edge_alpha_beta',
+                'type': 'line',
+                'connected_to': ['node_alpha', 'node_beta'],
+                'label': 'verified edge',
+            },
+        ]
+        excel_data = {
+            'buses': {'1': {}, '2': {}},
+            'generators': {},
+            'branches': {'1_2': {'from_bus': 1, 'to_bus': 2}},
+            'transformers': {},
+        }
+        original = deepcopy(elements)
+
+        report = self.importer.compare_elements_with_excel(
+            elements,
+            excel_data,
+            structured_bus_numbers_only=True,
+        )
+
+        self.assertTrue(report['is_matched'], report['discrepancies'])
+        self.assertEqual(elements, original)
+
+    def test_verified_sld_comparison_never_infers_bus_number_from_id_or_label(self):
+        elements = [
+            {'id': 'bus_17', 'type': 'bus', 'label': 'Bus 17'},
+            {'id': 'bus_18', 'type': 'bus', 'label': 'Bus 18'},
+            {
+                'id': 'line_17_18',
+                'type': 'line',
+                'connected_to': ['bus_17', 'bus_18'],
+                'label': 'Line 17-18',
+            },
+        ]
+        excel_data = {
+            'buses': {'17': {}, '18': {}},
+            'generators': {},
+            'branches': {'17_18': {'from_bus': 17, 'to_bus': 18}},
+            'transformers': {},
+        }
+
+        report = self.importer.compare_elements_with_excel(
+            elements,
+            excel_data,
+            structured_bus_numbers_only=True,
+        )
+
+        self.assertFalse(report['is_matched'])
+        self.assertEqual(report['details']['unmapped_buses'], ['bus_17', 'bus_18'])
+        self.assertEqual(report['stats']['diagram']['buses'], 0)
+        self.assertTrue(any(d['type'] == 'unmapped' for d in report['discrepancies']))
 
 if __name__ == '__main__':
     unittest.main()

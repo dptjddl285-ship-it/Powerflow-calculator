@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/review_models.dart';
+import '../models/review_final_contract.dart';
 import '../models/powerlens_assistant_context.dart';
 import '../services/powerlens_ai_service.dart';
 import '../services/review_api_service.dart';
@@ -477,7 +478,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         if (_isLoading) return false;
         return _pickAndUploadImage();
       case PowerLensAppAction.triggerExcelUpload:
-        if (_isLoading || _currentPhase != ReviewPhase.verifiedFinal) {
+        if (_isLoading ||
+            !ReviewFinalContract.canImportExcel(
+              isFinalPhase: _currentPhase == ReviewPhase.verifiedFinal,
+              verifiedSld: _verifiedSld,
+            )) {
           return false;
         }
         await _importExcelInReview();
@@ -504,12 +509,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       case PowerLensAppAction.connectionNextLine:
         return _showConnectionNextLineForAgent();
       case PowerLensAppAction.handoffToCanvas:
-        if (_currentPhase != ReviewPhase.verifiedFinal ||
-            _verifiedSld == null) {
-          return false;
-        }
-        _handoffToFlutterCanvas();
-        return true;
+        return _handoffToFlutterCanvas();
       case PowerLensAppAction.goToNextStage:
         return _advanceReviewStageForAgent();
       case PowerLensAppAction.goToPreviousStage:
@@ -634,9 +634,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         await _verifyFinalGate();
         return _currentPhase == ReviewPhase.verifiedFinal;
       case ReviewPhase.verifiedFinal:
-        if (_verifiedSld?.status != 'VERIFIED') return false;
-        _handoffToFlutterCanvas();
-        return true;
+        return _handoffToFlutterCanvas();
     }
   }
 
@@ -1874,28 +1872,58 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     }
   }
 
-  void _handoffToFlutterCanvas() {
-    if (_verifiedSld == null || _verifiedSld!.status != 'VERIFIED') {
+  bool _handoffToFlutterCanvas() {
+    final canImport = ReviewFinalContract.canImportExcel(
+      isFinalPhase: _currentPhase == ReviewPhase.verifiedFinal,
+      verifiedSld: _verifiedSld,
+    );
+    if (!canImport) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text("최종 검증을 통과한 회로도만 편집 화면으로 전달할 수 있습니다."),
           backgroundColor: Colors.red,
         ),
       );
-      return;
+      return false;
+    }
+    if (_importedExcelData == null) {
+      PowerLensAIService.instance.triggerHighlight('final_excel_upload');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("검증이 끝났어요. 먼저 조류계산에 사용할 Excel 제원을 연결해주세요."),
+          backgroundColor: Color(0xFF0F766E),
+        ),
+      );
+      return false;
+    }
+    if (!ReviewFinalContract.hasVerifiedExcelMatch(_excelMismatchReport)) {
+      PowerLensAIService.instance.triggerHighlight(
+        _excelMismatchReport == null
+            ? 'final_excel_upload'
+            : 'excel_mismatch_btn',
+      );
+      final reportMessage = _excelMismatchReport?['summary']?.toString();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            reportMessage == null || reportMessage.isEmpty
+                ? "Excel 대조 결과를 확인하지 못해 CAD로 전달할 수 없습니다. 파일을 다시 불러와주세요."
+                : "Excel 불일치가 남아 있어요: $reportMessage",
+          ),
+          backgroundColor: Colors.orange.shade900,
+        ),
+      );
+      return false;
     }
 
     final data = _verifiedSld!.toJson();
-    if (_importedExcelData != null) {
-      data['excel_data'] = _importedExcelData;
-      if (_excelMismatchReport != null) {
-        data['mismatch_report'] = _excelMismatchReport;
-      }
-    }
+    data['excel_data'] = _importedExcelData;
+    data['mismatch_report'] = _excelMismatchReport;
     widget.onProceedToCanvas?.call(data);
     if (Navigator.canPop(context)) {
       Navigator.pop(context, data);
     }
+    return true;
   }
 
   Future<void> _confirmResetToBeginning() async {
@@ -2262,36 +2290,45 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             const SizedBox(width: 6),
           ],
           ElevatedButton.icon(
-            onPressed: _importExcelInReview,
+            onPressed: ReviewFinalContract.canImportExcel(
+              isFinalPhase: _currentPhase == ReviewPhase.verifiedFinal,
+              verifiedSld: _verifiedSld,
+            )
+                ? _importExcelInReview
+                : null,
             icon: Icon(
               Icons.table_chart,
               size: 14,
-              color: (_excelMismatchReport != null && _excelMismatchReport!['is_matched'] == false)
+              color: (_importedExcelData != null &&
+                      !ReviewFinalContract.hasVerifiedExcelMatch(_excelMismatchReport))
                   ? const Color(0xFFDC2626)
                   : const Color(0xFF0D9488),
             ),
             label: Text(
               _importedExcelData != null
-                  ? ((_excelMismatchReport != null && _excelMismatchReport!['is_matched'] == false)
-                      ? "⚠️ 엑셀 불일치 (#${_importedExcelData!['slack_bus_number'] ?? '?'})"
-                      : "엑셀 적용됨 (#${_importedExcelData!['slack_bus_number']})")
-                  : "엑셀 불러오기",
+                  ? (!ReviewFinalContract.hasVerifiedExcelMatch(_excelMismatchReport)
+                      ? "⚠️ 대조 확인 필요"
+                      : "제원 확인됨 (#${_importedExcelData!['slack_bus_number'] ?? '?'})")
+                  : "Excel 가져오기",
               style: TextStyle(
                 fontSize: 11,
-                color: (_excelMismatchReport != null && _excelMismatchReport!['is_matched'] == false)
+                color: (_importedExcelData != null &&
+                        !ReviewFinalContract.hasVerifiedExcelMatch(_excelMismatchReport))
                     ? const Color(0xFFB91C1C)
                     : const Color(0xFF0F172A),
                 fontWeight: FontWeight.bold,
               ),
             ),
             style: ElevatedButton.styleFrom(
-              backgroundColor: (_excelMismatchReport != null && _excelMismatchReport!['is_matched'] == false)
+              backgroundColor: (_importedExcelData != null &&
+                      !ReviewFinalContract.hasVerifiedExcelMatch(_excelMismatchReport))
                   ? const Color(0xFFFEF2F2)
                   : const Color(0xFFF1F5F9),
               foregroundColor: const Color(0xFF0F172A),
               elevation: 0,
               side: BorderSide(
-                color: (_excelMismatchReport != null && _excelMismatchReport!['is_matched'] == false)
+                color: (_importedExcelData != null &&
+                        !ReviewFinalContract.hasVerifiedExcelMatch(_excelMismatchReport))
                     ? const Color(0xFFFCA5A5)
                     : const Color(0xFFCBD5E1),
               ),
@@ -7250,8 +7287,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         'type': cls,
         'class': cls,
         'label': node.effectiveDisplayLabel,
-        'bus_number': node.connectedBusNumber ?? node.busNumber ?? node.displayNumber,
-        'connected_bus_number': node.connectedBusNumber ?? node.busNumber,
+        'bus_number': node.busNumber,
+        'connected_bus_number': node.connectedBusNumber,
         'parentBusId': node.connectedBusId,
         'is_slack': isSlack,
         'isSlack': isSlack,
@@ -7284,6 +7321,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         body: jsonEncode({
           'elements': reviewElements,
           'excel_data': excelData,
+          'verified_sld_review': true,
         }),
       );
       if (applyRes.statusCode == 200) {
@@ -7294,6 +7332,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       debugPrint("Review apply_excel_to_elements call error: $e");
     }
 
+    if (!mounted) return;
     setState(() {
       _importedExcelData = excelData;
       _excelMismatchReport = mismatchReport;
@@ -7302,23 +7341,24 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
     if (!mounted) return;
 
-    if (mismatchReport != null && mismatchReport['is_matched'] == false) {
-      ScaffoldMessenger.of(context).clearSnackBars();
-      _showReviewMismatchDialog();
-    } else {
-      ScaffoldMessenger.of(context).clearSnackBars();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            "✅ 엑셀 데이터 매칭 성공 (도면과 완벽 일치)!\n• 슬랙 모선: #${excelData['slack_bus_number'] ?? '자동'}\n• 모선: ${excelData['total_buses'] ?? 0}개, 발전기: ${excelData['total_generators'] ?? 0}개, 선로: ${excelData['total_branches'] ?? 0}개",
-          ),
-          backgroundColor: Colors.green,
-          duration: const Duration(seconds: 4),
-          showCloseIcon: true,
-          closeIconColor: Colors.white,
+    ScaffoldMessenger.of(context).clearSnackBars();
+    final matched = ReviewFinalContract.hasVerifiedExcelMatch(mismatchReport);
+    final reportSummary = mismatchReport?['summary']?.toString();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          matched
+              ? "Excel 계통 제원이 검증된 도면과 일치합니다. 이제 CAD로 전달할 수 있어요."
+              : reportSummary == null || reportSummary.isEmpty
+              ? "Excel은 불러왔지만 대조 결과를 확인하지 못했습니다. 확인 전까지 계산 준비 완료로 처리하지 않습니다."
+              : "Excel 대조 결과: $reportSummary",
         ),
-      );
-    }
+        backgroundColor: matched ? Colors.green.shade700 : Colors.orange.shade900,
+        duration: const Duration(seconds: 5),
+        showCloseIcon: true,
+        closeIconColor: Colors.white,
+      ),
+    );
   }
 
   void _showReviewMismatchDialog() {
@@ -7331,6 +7371,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         mismatchReport: _excelMismatchReport!,
         excelData: _importedExcelData!,
         elements: _collectCurrentReviewElements(),
+        autoRecoverLabel: "불일치 확인 후 돌아가기",
         onResetToStart: () {
           Navigator.of(ctx).pop();
           _confirmResetToBeginning();
@@ -7361,21 +7402,29 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           Navigator.of(ctx).pop();
           ScaffoldMessenger.of(context).clearSnackBars();
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("캔버스 편집 화면으로 이동하여 누락 요소를 자동 동기화합니다."),
-              backgroundColor: Colors.teal,
+            SnackBar(
+              content: Text(
+                _excelMismatchReport?['summary']?.toString() ??
+                    "불일치 항목을 먼저 수정한 뒤 Excel을 다시 대조해주세요.",
+              ),
+              backgroundColor: Colors.orange.shade900,
               showCloseIcon: true,
               closeIconColor: Colors.white,
-              duration: Duration(seconds: 3),
+              duration: const Duration(seconds: 5),
             ),
           );
-          _handoffToFlutterCanvas();
         },
       ),
     );
   }
 
   Future<void> _loadDefaultExcelInReview() async {
+    if (!ReviewFinalContract.canImportExcel(
+      isFinalPhase: _currentPhase == ReviewPhase.verifiedFinal,
+      verifiedSld: _verifiedSld,
+    )) {
+      return;
+    }
     setState(() {
       _isLoading = true;
       _loadingMessage = "📊 기본 ac_case25 계통 데이터를 분석 및 매칭하는 중...";
@@ -7395,6 +7444,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   Future<void> _importExcelInReview() async {
+    if (!ReviewFinalContract.canImportExcel(
+      isFinalPhase: _currentPhase == ReviewPhase.verifiedFinal,
+      verifiedSld: _verifiedSld,
+    )) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Excel 연결은 최종 검증을 통과한 뒤에 할 수 있습니다."),
+        ),
+      );
+      return;
+    }
     try {
       FilePickerResult? result = await FilePicker.pickFiles(
         type: FileType.custom,
@@ -7691,6 +7751,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   Widget _buildVerifiedFinalView() {
     final sld = _verifiedSld!;
+    final hasExcel = _importedExcelData != null;
+    final hasExcelMatch =
+        ReviewFinalContract.hasVerifiedExcelMatch(_excelMismatchReport);
+    final mismatchReport = _excelMismatchReport ?? const <String, dynamic>{};
+    final mismatchMessages =
+        ReviewFinalContract.mismatchMessages(_excelMismatchReport);
     return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
@@ -7722,12 +7788,18 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               ),
               const SizedBox(height: 12),
               const Text(
-                "Verified SLD 회로도 검증 완료! 🎉",
+                "도면 검수가 모두 끝났어요.",
                 style: TextStyle(
                   color: Color(0xFF0F172A),
                   fontSize: 20,
                   fontWeight: FontWeight.bold,
                 ),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                "이제 계산에 사용할 계통 제원을 연결해주세요.",
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Color(0xFF475569), fontSize: 14),
               ),
               const SizedBox(height: 6),
               Text(
@@ -7765,10 +7837,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   color: const Color(0xFFF8FAFC),
                   borderRadius: BorderRadius.circular(8),
                   border: Border.all(
-                    color: _importedExcelData != null
-                        ? ((_excelMismatchReport != null && _excelMismatchReport!['is_matched'] == false)
-                            ? const Color(0xFFF87171)
-                            : const Color(0xFF86EFAC))
+                    color: hasExcel
+                        ? (hasExcelMatch
+                            ? const Color(0xFF86EFAC)
+                            : const Color(0xFFF87171))
                         : const Color(0xFFCBD5E1),
                     width: 1.5,
                   ),
@@ -7783,7 +7855,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                           children: [
                             Icon(
                               Icons.table_chart,
-                              color: (_excelMismatchReport != null && _excelMismatchReport!['is_matched'] == false)
+                              color: (hasExcel && !hasExcelMatch)
                                   ? const Color(0xFFDC2626)
                                   : const Color(0xFF0D9488),
                               size: 20,
@@ -7828,8 +7900,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                 icon: const Icon(Icons.file_upload, size: 14),
                                 label: Text(
                                   _importedExcelData != null
-                                      ? "다른 엑셀 다시 불러오기"
-                                      : "엑셀 파일 선택",
+                                    ? "다른 Excel 다시 가져오기"
+                                    : "Excel 가져오기",
                                   style: const TextStyle(fontSize: 11),
                                 ),
                                 style: ElevatedButton.styleFrom(
@@ -7848,7 +7920,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     ),
                     const SizedBox(height: 10),
                     if (_importedExcelData != null) ...[
-                      if (_excelMismatchReport != null && _excelMismatchReport!['is_matched'] == false) ...[
+                      if (!hasExcelMatch) ...[
                         Container(
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
@@ -7864,37 +7936,53 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                   const Icon(Icons.warning_amber_rounded, color: Color(0xFFDC2626), size: 20),
                                   const SizedBox(width: 8),
                                   const Text(
-                                    "⚠️ 도면과 엑셀 데이터가 일치하지 않습니다!",
+                                    "⚠️ Excel 대조를 통과하지 못했어요.",
                                     style: TextStyle(color: Color(0xFF991B1B), fontWeight: FontWeight.bold, fontSize: 13),
                                   ),
-                                  const Spacer(),
-                                  GlowingTargetWrapper(
-                                    targetId: 'excel_mismatch_btn',
-                                    borderRadius: BorderRadius.circular(6),
-                                    guideLabel: "✨ AI 진단 & 세부비교",
-                                    child: TextButton.icon(
-                                      onPressed: _showReviewMismatchDialog,
-                                      icon: const Icon(Icons.auto_awesome, size: 14, color: Color(0xFF4F46E5)),
-                                      label: const Text(
-                                        "AI 진단 & 세부비교 보기",
-                                        style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: Color(0xFF4F46E5)),
-                                      ),
-                                      style: TextButton.styleFrom(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                        backgroundColor: const Color(0xFFEEF2FF),
+                                  if (_excelMismatchReport != null) ...[
+                                    const Spacer(),
+                                    GlowingTargetWrapper(
+                                      targetId: 'excel_mismatch_btn',
+                                      borderRadius: BorderRadius.circular(6),
+                                      guideLabel: "✨ AI 진단 & 세부비교",
+                                      child: TextButton.icon(
+                                        onPressed: _showReviewMismatchDialog,
+                                        icon: const Icon(Icons.auto_awesome, size: 14, color: Color(0xFF4F46E5)),
+                                        label: const Text(
+                                          "AI 진단 & 세부비교 보기",
+                                          style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: Color(0xFF4F46E5)),
+                                        ),
+                                        style: TextButton.styleFrom(
+                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                          backgroundColor: const Color(0xFFEEF2FF),
+                                        ),
                                       ),
                                     ),
-                                  ),
+                                  ],
                                 ],
                               ),
                               const SizedBox(height: 6),
                               Text(
-                                "• ${_excelMismatchReport!['summary'] ?? '도면과 엑셀 사양이 일치하지 않습니다.'}",
+                                "• ${mismatchReport['summary'] ?? '대조 결과를 확인하지 못했습니다. 파일을 다시 불러오거나 연결 상태를 확인해주세요.'}",
                                 style: const TextStyle(color: Color(0xFFB91C1C), fontSize: 11.5, fontWeight: FontWeight.w600),
                               ),
+                              if (mismatchMessages.isNotEmpty) ...[
+                                const SizedBox(height: 6),
+                                for (final message in mismatchMessages.take(8))
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 3),
+                                    child: Text(
+                                      "• $message",
+                                      style: const TextStyle(
+                                        color: Color(0xFF7F1D1D),
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                  ),
+                              ],
                               const SizedBox(height: 4),
                               Text(
-                                "• 도면: 모선 ${_busNodes.length}개, 결선 ${sld.lines.length}개  |  엑셀: 모선 ${_importedExcelData!['total_buses'] ?? 0}개, 선로 ${_importedExcelData!['total_branches'] ?? 0}개",
+                                "• 도면: 모선 ${_busNodes.length}개, 결선 ${sld.lines.length}개  |  Excel: 모선 ${_importedExcelData!['total_buses'] ?? 0}개, 선로 ${_importedExcelData!['total_branches'] ?? 0}개",
                                 style: const TextStyle(color: Color(0xFF7F1D1D), fontSize: 11),
                               ),
                               const SizedBox(height: 8),
@@ -7953,7 +8041,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                   const Icon(Icons.check_circle, color: Color(0xFF16A34A), size: 18),
                                   const SizedBox(width: 8),
                                   const Text(
-                                    "계통 엑셀 데이터 매칭 완료 (도면과 완벽 일치)",
+                                    "Excel 제원이 검증된 도면과 일치합니다.",
                                     style: TextStyle(color: Color(0xFF15803D), fontWeight: FontWeight.bold, fontSize: 13),
                                   ),
                                 ],
@@ -7969,7 +8057,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                       ],
                     ] else ...[
                       Text(
-                        "💡 계통 제원 엑셀(.xlsx) 파일을 불러오면 슬랙 모선과 발전기/부하/선로 파라미터가 캔버스에 자동 반영됩니다.",
+                        "💡 Excel의 기준 용량, 모선, 슬랙, 발전기·부하, 선로 R/X/B와 변압기 탭을 확인한 뒤 계산에 연결합니다.",
                         style: TextStyle(color: Colors.grey[600], fontSize: 11),
                       ),
                     ],
@@ -7977,23 +8065,27 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 ),
               ),
 
-              const SizedBox(height: 24),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
+              if (ReviewFinalContract.canHandoffToCanvas(
+                isFinalPhase: _currentPhase == ReviewPhase.verifiedFinal,
+                verifiedSld: _verifiedSld,
+                excelData: _importedExcelData,
+                mismatchReport: _excelMismatchReport,
+              )) ...[
+                const SizedBox(height: 24),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
                   GlowingTargetWrapper(
                     targetId: 'final_canvas_handoff',
                     borderRadius: BorderRadius.circular(8),
-                    guideLabel: "✨ 캔버스로 이동",
+                    guideLabel: "✨ CAD로 이동",
                     child: ElevatedButton.icon(
                       key: _finalCanvasHandoffKey,
                       onPressed: _handoffToFlutterCanvas,
                       icon: const Icon(Icons.open_in_new),
-                      label: Text(
-                        _importedExcelData != null
-                            ? "엑셀 데이터 적용하여 캔버스로 이동"
-                            : "캔버스 편집 화면으로 이동",
-                        style: const TextStyle(
+                      label: const Text(
+                        "CAD로 이동",
+                        style: TextStyle(
                           fontSize: 13,
                           fontWeight: FontWeight.bold,
                         ),
@@ -8008,8 +8100,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                       ),
                     ),
                   ),
-                ],
-              ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),
