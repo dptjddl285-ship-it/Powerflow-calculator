@@ -108,7 +108,7 @@ Lensy가 반환할 수 있는 action_id는 오직 다음으로 한정됩니다:
 • Decision 가이드:
   - PROCEED: 미해결 이슈가 없거나 다음 단계를 즉시 진행 가능한 상태
   - HUMAN_CHECK: 의심 객체(SUSPICIOUS), 누락 후보(OPEN), 모호한 선로 등 사용자 검토 필요 항목이 존재
-  - BLOCK: 필수 조건 미달로 다음 단계 진행 불가
+  - BLOCKED: 필수 조건 미달로 다음 단계 진행 불가 (BLOCK 대신 항상 BLOCKED 사용)
   - UNKNOWN: 증거가 부족하여 명확한 판단 불가
 
 • Action Mode 가이드:
@@ -116,14 +116,15 @@ Lensy가 반환할 수 있는 action_id는 오직 다음으로 한정됩니다:
   - "계산해줘", "조류계산 돌려줘": action_mode="EXECUTE", action_id="RUN_POWER_FLOW"
   - "결과 보여줘": action_mode="EXECUTE", action_id="SHOW_POWER_FLOW_RESULTS"
   - "홈으로 가줘": action_mode="EXECUTE", action_id="GO_HOME"
-  - "이 객체 Generator로 바꿔": action_mode="CONFIRM_REQUIRED", action_id=null
+  - "엑셀 추가해줘", "엑셀 파일 열어줘": action_mode="EXECUTE", action_id="OPEN_EXCEL_PICKER"
+  - "선로 추가해줘", "모선 삭제해줘", "이 객체 Generator로 바꿔": action_mode="CONFIRM_REQUIRED", action_id=null (회로 물리적 변경은 자동 실행 금지, 사용자 확인 필수)
 
 • focus_targets 주의사항:
   - 반드시 현재 context의 working_nodes, working_lines, missing_candidates, topology_issues에 실제로 존재하는 ID만 포함해야 합니다.
-  - 가상의 ID(node_999 등)를 절대 만들어내지 마세요.
+  - OBJECT 타입에는 노드 ID만, LINE 타입에는 선로 ID만 매핑해야 하며, 타입을 혼동하거나 가상의 ID(node_999 등)를 절대 만들어내지 마세요.
 """
 
-VALID_DECISIONS = {"PROCEED", "HUMAN_CHECK", "BLOCKED", "BLOCK", "UNKNOWN"}
+VALID_DECISIONS = {"PROCEED", "HUMAN_CHECK", "BLOCKED", "UNKNOWN"}
 VALID_ACTION_MODES = {"NONE", "GUIDE", "EXECUTE", "CONFIRM_REQUIRED"}
 
 ALLOW_LISTED_ACTIONS = {
@@ -143,6 +144,34 @@ ALLOW_LISTED_ACTIONS = {
     "HIDE_VALUE_LABELS",
 }
 
+VALID_HIGHLIGHT_TARGETS = {
+    # Home & Shared
+    "home_upload",
+    "sample_diagram",
+    # Object Review
+    "object_approve",
+    "object_batch_approve",
+    "missing_candidates",
+    "object_gate",
+    # Bus Mapping
+    "bus_input",
+    "bus_gate",
+    # Connection Review
+    "connection_priority",
+    "connection_gate",
+    # Final Review & CAD
+    "final_excel_upload",
+    "final_canvas_handoff",
+    "cad_excel_import",
+    "final_powerflow",
+    "result_flow",
+    # Canvas / Inspector
+    "canvas_node",
+    "canvas_line",
+}
+
+VALID_FOCUS_TARGET_TYPES = {"OBJECT", "LINE", "CANDIDATE", "ISSUE", "UI"}
+
 CANONICAL_RESPONSE_SCHEMA = {
     "reply_ko": str,
     "decision": str,
@@ -153,6 +182,7 @@ CANONICAL_RESPONSE_SCHEMA = {
     "highlight_target": (str, type(None)),
     "focus_targets": list,
     "evidence_summary": dict,
+    "summary_text": str,
 }
 
 __all__ = [
@@ -160,5 +190,7 @@ __all__ = [
     "VALID_DECISIONS",
     "VALID_ACTION_MODES",
     "ALLOW_LISTED_ACTIONS",
+    "VALID_HIGHLIGHT_TARGETS",
+    "VALID_FOCUS_TARGET_TYPES",
     "CANONICAL_RESPONSE_SCHEMA",
 ]

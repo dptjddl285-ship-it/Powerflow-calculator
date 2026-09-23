@@ -9,6 +9,7 @@ from typing import Any
 
 from pathlib import Path
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile
+from fastapi.responses import JSONResponse
 
 import core.env_loader
 from core.adaptive_vision_pipeline import (
@@ -699,7 +700,7 @@ async def review_agent_chat(request: AgentChatRequest):
             "context_summary": result.get("context_summary", {}),
         }
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
 
 # ==========================================
@@ -724,7 +725,7 @@ async def review_proactive_summary(request: ProactiveSummaryRequest):
             **res,
         }
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
 
 @router.get("/review/provider_status")

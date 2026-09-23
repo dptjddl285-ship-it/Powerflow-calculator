@@ -1,4 +1,7 @@
+import 'dart:convert';
+import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:circuit_solver/models/powerlens_assistant_context.dart';
 import 'package:circuit_solver/services/powerlens_ai_service.dart';
 
 void main() {
@@ -113,6 +116,79 @@ void main() {
 
       service.clearProactiveKeys();
       expect(service.shouldRequestProactive('doc_123', 'OBJECT_REVIEW'), isTrue);
+    });
+  });
+
+  group('Agent Core V2 Highlight Deduplication Tests', () {
+    test('Avoids duplicate triggerHighlight when target is already active', () async {
+      int triggerCount = 0;
+      void listener() {
+        if (service.activeHighlightTarget.value == 'object_gate') {
+          triggerCount++;
+        }
+      }
+
+      service.activeHighlightTarget.addListener(listener);
+      service.triggerHighlight('object_gate');
+      expect(service.activeHighlightTarget.value, 'object_gate');
+      expect(triggerCount, 1);
+
+      // executeBackendAction with the same highlight target must NOT re-trigger
+      await service.executeBackendAction(
+        actionMode: 'NONE',
+        actionId: null,
+        highlightTarget: 'object_gate',
+      );
+      expect(triggerCount, 1);
+
+      service.activeHighlightTarget.removeListener(listener);
+      service.clearHighlight();
+    });
+  });
+
+  group('Agent Core V2 Error Handling and Fallback Tests', () {
+    test('Routes HTTP 200 + status:error to offline fallback', () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final originalBaseUrl = PowerLensAIService.baseUrl;
+      PowerLensAIService.baseUrl = 'http://${server.address.host}:${server.port}';
+
+      server.listen((HttpRequest request) async {
+        if (request.uri.path == '/review/agent_chat') {
+          request.response
+            ..statusCode = HttpStatus.ok
+            ..headers.contentType = ContentType.json
+            ..write(jsonEncode({
+              'status': 'error',
+              'message': 'Simulated internal agent exception',
+            }));
+          await request.response.close();
+        } else {
+          request.response
+            ..statusCode = HttpStatus.notFound
+            ..close();
+        }
+      });
+
+      try {
+        const testContext = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'OBJECT_REVIEW',
+          documentId: 'doc_err_test',
+        );
+
+        final initialCount = service.messages.length;
+        await service.sendMessage('객체 상태 어때?', testContext);
+
+        expect(service.messages.length, greaterThan(initialCount));
+        final lastMsg = service.messages.last;
+        // The service must route to offline fallback instead of treating it as success
+        expect(lastMsg.agentStatus, 'LOCAL_READY');
+        expect(lastMsg.sender, 'assistant');
+        expect(service.mascotState, 'blocked');
+      } finally {
+        await server.close(force: true);
+        PowerLensAIService.baseUrl = originalBaseUrl;
+      }
     });
   });
 }

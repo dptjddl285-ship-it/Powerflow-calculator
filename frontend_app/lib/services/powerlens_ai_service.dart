@@ -43,7 +43,7 @@ class PowerLensAIService extends ChangeNotifier {
   static PowerLensAIService get instance => _instance;
   PowerLensAIService._internal();
 
-  static const String baseUrl = 'http://127.0.0.1:8000';
+  static String baseUrl = 'http://127.0.0.1:8000';
 
   final List<PowerLensAIMessageItem> _messages = [];
   List<PowerLensAIMessageItem> get messages => List.unmodifiable(_messages);
@@ -283,7 +283,8 @@ class PowerLensAIService extends ChangeNotifier {
   }) async {
     if (highlightTarget != null &&
         highlightTarget.isNotEmpty &&
-        highlightTarget.toLowerCase() != 'null') {
+        highlightTarget.toLowerCase() != 'null' &&
+        activeHighlightTarget.value != highlightTarget) {
       triggerHighlight(highlightTarget);
     }
 
@@ -788,13 +789,16 @@ class PowerLensAIService extends ChangeNotifier {
           .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(utf8.decode(response.bodyBytes));
-        final rawResult = data is Map ? data['result'] : null;
+        final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+        if (decoded is! Map || decoded['status']?.toString().toLowerCase() != 'success') {
+          throw Exception('Backend agent_chat returned error or non-success status: ${decoded is Map ? decoded['status'] : 'unknown'}');
+        }
+
+        final data = decoded;
+        final rawResult = data['result'];
         final result = rawResult is Map
             ? Map<String, dynamic>.from(rawResult)
-            : (data is Map
-                  ? Map<String, dynamic>.from(data)
-                  : <String, dynamic>{});
+            : Map<String, dynamic>.from(data);
         var replyKo = _cleanAssistantReply(
           result['reply_ko']?.toString() ?? '답변을 생성하지 못했습니다.',
         );
@@ -826,7 +830,7 @@ class PowerLensAIService extends ChangeNotifier {
             actionMode: actionMode,
             actionId: actionId,
             actionParams: actionParams,
-            highlightTarget: effectiveHighlight,
+            highlightTarget: null, // Avoid duplicate trigger; already highlighted above
           );
         }
 

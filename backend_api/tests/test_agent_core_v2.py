@@ -12,6 +12,7 @@ Covers:
 - TEST 9: Evidence summary consistency (count matches working state)
 - TEST 10: System knowledge consistency (ALLOW_LISTED_ACTIONS and constants match)
 """
+import json
 import os
 import sys
 from pathlib import Path
@@ -277,6 +278,162 @@ class AgentCoreV2Test(unittest.TestCase):
         self.assertIn("GUIDE", VALID_ACTION_MODES)
         self.assertIn("CONFIRM_REQUIRED", VALID_ACTION_MODES)
         self.assertIn("NONE", VALID_ACTION_MODES)
+
+    def test_11_llm_proceed_normalized_to_human_check_when_suspicious_exists(self):
+        """TEST 11: LLM returned PROCEED with suspicious_count 0, but server recalculates and forces HUMAN_CHECK."""
+        raw_llm_hallucination = {
+            "reply_ko": "모든 객체가 정상입니다.",
+            "decision": "PROCEED",
+            "evidence_summary": {
+                "suspicious_count": 0,
+                "missing_count": 0,
+                "ambiguous_count": 0,
+                "topology_error_count": 0,
+            },
+        }
+        actual_nodes = [
+            {"id": "bus_1", "review_status": "SUSPICIOUS", "review_reasons": ["비율 경계"]},
+            {"id": "gen_1", "review_status": "CONFIRMED"},
+        ]
+        res = sanitize_and_validate_agent_response(
+            raw_llm_hallucination,
+            user_message="상태 확인해줘",
+            working_nodes=actual_nodes,
+            working_lines=[],
+            missing_candidates=[],
+            topology_issues=[],
+        )
+        # Server MUST overwrite evidence_summary and override PROCEED to HUMAN_CHECK
+        self.assertEqual(res["evidence_summary"]["suspicious_count"], 1)
+        self.assertEqual(res["decision"], "HUMAN_CHECK")
+
+    def test_12_fake_highlight_target_sanitized_to_none(self):
+        """TEST 12: Fake or unlisted highlight_target is stripped to None."""
+        raw = {
+            "reply_ko": "버튼 안내",
+            "highlight_target": "fabricated_magic_button_xyz",
+        }
+        res = sanitize_and_validate_agent_response(raw, "안내")
+        self.assertIsNone(res["highlight_target"])
+
+        # Legitimate allow-listed highlight target is preserved
+        raw_valid = {
+            "reply_ko": "조류계산 버튼 안내",
+            "highlight_target": "final_powerflow",
+        }
+        res_valid = sanitize_and_validate_agent_response(raw_valid, "안내")
+        self.assertEqual(res_valid["highlight_target"], "final_powerflow")
+
+    def test_13_line_type_with_node_id_dropped_from_focus_targets(self):
+        """TEST 13: Strict focus target validation drops mismatch where LINE type contains a node ID."""
+        raw = {
+            "reply_ko": "포커스 타깃 검토",
+            "focus_targets": [
+                # Wrong: type is LINE, but 'bus_1' is a node ID, not in working_lines!
+                {"type": "LINE", "id": "bus_1", "reason": "타입 불일치 타깃"},
+                # Correct LINE target
+                {"type": "LINE", "id": "line_101", "reason": "정상 선로 타깃"},
+                # Correct OBJECT target
+                {"type": "OBJECT", "id": "bus_1", "reason": "정상 모선 타깃"},
+            ],
+        }
+        res = sanitize_and_validate_agent_response(
+            raw,
+            user_message="타깃 확인",
+            working_nodes=[{"id": "bus_1", "review_status": "NORMAL"}],
+            working_lines=[{"line_id": "line_101", "review_status": "NORMAL"}],
+        )
+        focused_targets = res["focus_targets"]
+        # bus_1 with LINE type must NOT be present
+        line_targets = [t for t in focused_targets if t["type"] == "LINE"]
+        self.assertEqual(len(line_targets), 1)
+        self.assertEqual(line_targets[0]["id"], "line_101")
+
+        obj_targets = [t for t in focused_targets if t["type"] == "OBJECT"]
+        self.assertEqual(len(obj_targets), 1)
+        self.assertEqual(obj_targets[0]["id"], "bus_1")
+
+    def test_14_excel_addition_vs_line_addition_distinction(self):
+        """TEST 14: Distinguishes '엑셀 추가해줘' (Safe Action) from '선로 추가해줘' (CONFIRM_REQUIRED)."""
+        # 1. '엑셀 추가해줘' must be Safe Action EXECUTE OPEN_EXCEL_PICKER
+        res_excel = self.local_prov.answer_chat(
+            message="엑셀 추가해줘",
+            document_id="doc_test",
+            stage="CAD",
+        )
+        self.assertEqual(res_excel["action_mode"], "EXECUTE")
+        self.assertEqual(res_excel["action_id"], "OPEN_EXCEL_PICKER")
+
+        # 2. '선로 추가해줘' must be circuit mutation -> CONFIRM_REQUIRED
+        res_line = self.local_prov.answer_chat(
+            message="선로 추가해줘",
+            document_id="doc_test",
+            stage="CONNECTION_REVIEW",
+        )
+        self.assertEqual(res_line["action_mode"], "CONFIRM_REQUIRED")
+        self.assertIsNone(res_line["action_id"])
+
+        # 3. Simple '추가해줘' without circuit noun does NOT trigger circuit mutation
+        res_generic = sanitize_and_validate_agent_response(
+            {"reply_ko": "일반 안내", "action_mode": "NONE"},
+            user_message="추가해줘",
+        )
+        self.assertEqual(res_generic["action_mode"], "NONE")
+
+    def test_15_warning_topology_issue_excluded_from_topology_error_count(self):
+        """TEST 15: Warning and Info topology issues are NOT counted in topology_error_count."""
+        issues = [
+            {"id": "iss_1", "severity": "warning", "message": "모선 간격 협소"},
+            {"id": "iss_2", "severity": "info", "message": "도면 여백 감지"},
+            {"id": "iss_3", "severity": "error", "message": "모선 단락 결선 결함"},
+        ]
+        res = sanitize_and_validate_agent_response(
+            {"reply_ko": "토폴로지 이슈"},
+            "상태",
+            topology_issues=issues,
+        )
+        # Only severity == 'error' should be counted
+        self.assertEqual(res["evidence_summary"]["topology_error_count"], 1)
+
+    def test_16_block_normalized_to_blocked(self):
+        """TEST 16: 'BLOCK' decision is normalized to 'BLOCKED'."""
+        raw = {
+            "reply_ko": "진행 차단",
+            "decision": "BLOCK",
+        }
+        res = sanitize_and_validate_agent_response(raw, "차단")
+        self.assertEqual(res["decision"], "BLOCKED")
+
+    def test_17_staged_api_error_returns_http_500(self):
+        """TEST 17: /review/agent_chat and /review/proactive_summary return HTTP 500 JSONResponse on exception."""
+        import asyncio
+        from review.staged_api import review_agent_chat, review_proactive_summary
+        from review.schemas import AgentChatRequest, ProactiveSummaryRequest
+
+        # Mock chat_reviewer.chat to raise an unexpected runtime error
+        with patch("review.staged_api.chat_reviewer.chat", side_effect=RuntimeError("Test internal crash")):
+            req = AgentChatRequest(
+                document_id="test_doc",
+                message="안녕하세요",
+                stage="OBJECT_REVIEW",
+            )
+            resp = asyncio.run(review_agent_chat(req))
+            self.assertEqual(resp.status_code, 500)
+            data = json.loads(resp.body.decode("utf-8"))
+            self.assertEqual(data.get("status"), "error")
+            self.assertIn("Test internal crash", data.get("message", ""))
+
+        # Mock proactive_summary provider to raise an unexpected error
+        with patch("review.staged_api.get_assistant_provider", side_effect=RuntimeError("Test proactive crash")):
+            req_pro = ProactiveSummaryRequest(
+                document_id="test_doc",
+                stage="OBJECT_REVIEW",
+            )
+            resp_pro = asyncio.run(review_proactive_summary(req_pro))
+            self.assertEqual(resp_pro.status_code, 500)
+            data_pro = json.loads(resp_pro.body.decode("utf-8"))
+            self.assertEqual(data_pro.get("status"), "error")
+            self.assertIn("Test proactive crash", data_pro.get("message", ""))
 
 
 if __name__ == "__main__":

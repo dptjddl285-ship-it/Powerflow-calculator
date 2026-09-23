@@ -45,7 +45,36 @@ from .system_knowledge import (
     CANONICAL_RESPONSE_SCHEMA,
     VALID_ACTION_MODES,
     VALID_DECISIONS,
+    VALID_FOCUS_TARGET_TYPES,
+    VALID_HIGHLIGHT_TARGETS,
 )
+
+
+def is_circuit_mutation_request(user_message: str) -> bool:
+    """Determine whether the message requests a circuit mutation.
+
+    Requires both a circuit target noun (e.g. 모선, 선로, 객체, 결선, 클래스, 번호)
+    and a mutation verb (e.g. 추가, 변경, 수정, 삭제, 지워).
+    Requests for safe external resources (e.g. 엑셀, 도면, 샘플) are excluded.
+    """
+    msg = (user_message or "").strip().lower()
+    safe_resources = ["엑셀", "excel", "xlsx", "샘플", "sample", "도면", "사진", "이미지", "파일"]
+    circuit_nouns = [
+        "객체", "모선", "선로", "결선", "클래스", "종류", "타입", "심볼", "번호", "노드", "라인", "버스",
+        "발전기", "부하", "변압기", "설비", "generator", "load", "bus", "line", "transformer"
+    ]
+    mutation_verbs = [
+        "바꿔", "변경", "수정", "삭제", "지워", "제외", "추가", "바꿈", "바꾸"
+    ]
+
+    has_safe_resource = any(r in msg for r in safe_resources)
+    has_circuit_noun = any(cn in msg for cn in circuit_nouns)
+    has_mutation_verb = any(v in msg for v in mutation_verbs)
+
+    if has_safe_resource and not has_circuit_noun:
+        return False
+
+    return has_circuit_noun and has_mutation_verb
 
 
 def sanitize_and_validate_agent_response(
@@ -60,14 +89,18 @@ def sanitize_and_validate_agent_response(
     """Sanitize and enforce the Canonical Agent Response Contract.
 
     Guarantees:
-    1. decision is in {PROCEED, HUMAN_CHECK, BLOCK, UNKNOWN}.
-    2. action_mode is in {NONE, GUIDE, EXECUTE, CONFIRM_REQUIRED}.
-    3. action_mode is downgraded to GUIDE for location/how-to questions ('어디', '어떻게', etc.).
-    4. action_mode is set to CONFIRM_REQUIRED for circuit mutations ('바꿔', '변경', etc.).
-    5. action_id is restricted to ALLOW_LISTED_ACTIONS (or None).
-    6. focus_targets only contain real IDs existing in working_nodes, lines, candidates, or issues.
-    7. Fabricated targets (e.g. node_999, line_fake) are completely stripped.
-    8. evidence_summary is populated with verifiable counts.
+    1. evidence_summary is ALWAYS recomputed by server from ground truth.
+    2. topology_error_count only includes issues with severity == 'error'.
+    3. decision is in {PROCEED, HUMAN_CHECK, BLOCKED, UNKNOWN}, normalized (BLOCK -> BLOCKED).
+       Prevents PROCEED if actual issues exist (forces HUMAN_CHECK).
+    4. action_mode is in {NONE, GUIDE, EXECUTE, CONFIRM_REQUIRED}.
+    5. action_mode is downgraded to GUIDE for location/how-to questions ('어디', '어떻게', etc.).
+    6. action_mode is set to CONFIRM_REQUIRED only for circuit mutations.
+    7. action_id is restricted to ALLOW_LISTED_ACTIONS (or None).
+    8. highlight_target is validated against VALID_HIGHLIGHT_TARGETS (invalid -> None).
+    9. focus_targets strictly validates type and ID against ground truth.
+       (OBJECT: node, LINE: line, CANDIDATE: candidate, ISSUE: issue, UI: allow-list).
+    10. intent and all canonical fields are normalized.
     """
     res = dict(raw_dict)
 
@@ -91,20 +124,45 @@ def sanitize_and_validate_agent_response(
         reply_ko = "현재 상태를 확인했습니다. 안내가 필요하시면 언제든 질문해주세요."
     res["reply_ko"] = reply_ko
 
-    # 2. Decision validation
+    # 2. Ground-truth evidence calculation (ALWAYS recomputed by server)
+    w_nodes = working_nodes or []
+    w_lines = working_lines or []
+    cands = missing_candidates or []
+    issues = topology_issues or []
+
+    susp_cnt = len([n for n in w_nodes if str(n.get("review_status") or n.get("status", "")).upper() == "SUSPICIOUS"])
+    miss_cnt = len([c for c in cands if str(c.get("status", "")).upper() == "OPEN"])
+    amb_cnt = len([l for l in w_lines if str(l.get("review_status") or l.get("status", "")).upper() == "AMBIGUOUS"])
+    # topology_error_count only aggregates issues with severity == 'error'
+    err_cnt = len([i for i in issues if str(i.get("severity", "")).lower() == "error"])
+
+    has_issues = (susp_cnt > 0 or miss_cnt > 0 or amb_cnt > 0 or err_cnt > 0)
+
+    res["evidence_summary"] = {
+        "suspicious_count": susp_cnt,
+        "missing_count": miss_cnt,
+        "ambiguous_count": amb_cnt,
+        "topology_error_count": err_cnt,
+    }
+
+    # 3. Decision validation & normalization
     dec = str(res.get("decision", "")).strip().upper()
+    if dec == "BLOCK":
+        dec = "BLOCKED"
     if dec not in VALID_DECISIONS:
-        susp_cnt = len([n for n in (working_nodes or []) if (n.get("review_status") or n.get("status")) == "SUSPICIOUS"])
-        miss_cnt = len([c for c in (missing_candidates or []) if c.get("status") == "OPEN"])
-        amb_cnt = len([l for l in (working_lines or []) if (l.get("review_status") or l.get("status")) == "AMBIGUOUS"])
-        err_cnt = len(topology_issues or [])
-        if susp_cnt > 0 or miss_cnt > 0 or amb_cnt > 0 or err_cnt > 0:
-            dec = "HUMAN_CHECK"
-        else:
-            dec = "PROCEED"
+        dec = "HUMAN_CHECK" if has_issues else "PROCEED"
+    elif dec == "PROCEED" and has_issues:
+        # Prevent PROCEED when actual evidence contradicts it
+        dec = "HUMAN_CHECK"
     res["decision"] = dec
 
-    # 3. Action Mode & Semantic Safety Guards
+    # 4. Intent normalization
+    intent = str(res.get("intent", "")).strip()
+    if not intent:
+        intent = "GENERAL_CHAT"
+    res["intent"] = intent
+
+    # 5. Action Mode & Semantic Safety Guards
     act_mode = str(res.get("action_mode", "")).strip().upper()
     if act_mode not in VALID_ACTION_MODES:
         act_mode = "NONE"
@@ -116,9 +174,7 @@ def sanitize_and_validate_agent_response(
         "어디", "어떻게", "뭐눌러", "뭘눌러", "무엇을눌러", "어느버튼", "버튼어디", "위치", "방법", "어디야", "어디서", "어디에"
     ])
     # Circuit mutations must be CONFIRM_REQUIRED
-    is_mutation = any(k in msg_norm for k in [
-        "바꿔", "변경", "수정", "삭제", "지워", "바꿔줘", "바꿔라", "제외해", "추가해", "클래스변경"
-    ])
+    is_mutation = is_circuit_mutation_request(user_message)
 
     if is_mutation:
         act_mode = "CONFIRM_REQUIRED"
@@ -129,7 +185,7 @@ def sanitize_and_validate_agent_response(
 
     res["action_mode"] = act_mode
 
-    # 4. Action ID allow-listing
+    # 6. Action ID allow-listing
     act_id = res.get("action_id")
     if act_id and isinstance(act_id, str):
         act_id_upper = act_id.strip().upper()
@@ -146,48 +202,11 @@ def sanitize_and_validate_agent_response(
     if "action_params" not in res or not isinstance(res["action_params"], dict):
         res["action_params"] = {}
 
-    # 5. Fabricated Target Prevention (Section 17)
-    valid_node_ids = {str(n.get("id")) for n in (working_nodes or []) if n.get("id")}
-    valid_line_ids = {str(l.get("line_id", l.get("id"))) for l in (working_lines or []) if l.get("line_id", l.get("id"))}
-    valid_cand_ids = {str(c.get("id", c.get("candidate_id"))) for c in (missing_candidates or []) if c.get("id", c.get("candidate_id"))}
-    valid_issue_ids = {str(i.get("id", i.get("line_id", i.get("node_id")))) for i in (topology_issues or []) if i.get("id", i.get("line_id", i.get("node_id")))}
-    valid_ui_ids = {
-        "object_batch_approve", "missing_candidates", "object_approve", "object_gate",
-        "bus_input", "bus_gate", "connection_priority", "connection_gate",
-        "final_excel_upload", "final_canvas_handoff", "final_powerflow", "result_flow",
-        "home_upload", "sample_diagram", "cad_excel_import", "canvas_node", "canvas_line"
-    }
-
-    raw_focus = res.get("focus_targets", [])
-    sanitized_focus = []
-    if isinstance(raw_focus, list):
-        for item in raw_focus:
-            if not isinstance(item, dict):
-                continue
-            tid = str(item.get("id", "")).strip()
-            ttype = str(item.get("type", "")).upper()
-            if not tid:
-                continue
-            if ttype == "OBJECT" and tid in valid_node_ids:
-                sanitized_focus.append(item)
-            elif ttype == "LINE" and tid in valid_line_ids:
-                sanitized_focus.append(item)
-            elif ttype in ("CANDIDATE", "MISSING") and tid in valid_cand_ids:
-                sanitized_focus.append(item)
-            elif ttype == "ISSUE" and tid in valid_issue_ids:
-                sanitized_focus.append(item)
-            elif ttype == "UI" and tid in valid_ui_ids:
-                sanitized_focus.append(item)
-            elif tid in valid_node_ids or tid in valid_line_ids or tid in valid_cand_ids or tid in valid_issue_ids:
-                sanitized_focus.append(item)
-            # Unknown / fabricated targets like node_999 or line_fake are dropped here!
-    res["focus_targets"] = sanitized_focus
-
-    # 6. Highlight target validation
+    # 7. Highlight target validation against allow-list
     hl = res.get("highlight_target")
     if hl and isinstance(hl, str):
         hl_clean = hl.strip()
-        if hl_clean.lower() in ("null", "none", ""):
+        if hl_clean.lower() in ("null", "none", "") or hl_clean not in VALID_HIGHLIGHT_TARGETS:
             res["highlight_target"] = None
         else:
             res["highlight_target"] = hl_clean
@@ -197,21 +216,49 @@ def sanitize_and_validate_agent_response(
     if res.get("action_id") == "RUN_POWER_FLOW" and not res.get("highlight_target"):
         res["highlight_target"] = "final_powerflow"
 
-    # 7. Evidence Summary computation
-    ev_summary = res.get("evidence_summary")
-    if not isinstance(ev_summary, dict) or not ev_summary:
-        susp_cnt = len([n for n in (working_nodes or []) if (n.get("review_status") or n.get("status")) == "SUSPICIOUS"])
-        miss_cnt = len([c for c in (missing_candidates or []) if c.get("status") == "OPEN"])
-        amb_cnt = len([l for l in (working_lines or []) if (l.get("review_status") or l.get("status")) == "AMBIGUOUS"])
-        err_cnt = len(topology_issues or [])
-        res["evidence_summary"] = {
-            "suspicious_count": susp_cnt,
-            "missing_count": miss_cnt,
-            "ambiguous_count": amb_cnt,
-            "topology_error_count": err_cnt,
-        }
+    # 8. Strict focus targets validation (Type & ID matching)
+    valid_node_ids = {str(n.get("id")) for n in w_nodes if n.get("id")}
+    valid_line_ids = {str(l.get("line_id", l.get("id"))) for l in w_lines if l.get("line_id", l.get("id"))}
+    valid_cand_ids = {str(c.get("id", c.get("candidate_id"))) for c in cands if c.get("id", c.get("candidate_id"))}
+    valid_issue_ids = {str(i.get("id", i.get("line_id", i.get("node_id")))) for i in issues if i.get("id", i.get("line_id", i.get("node_id")))}
 
-    # 8. Backward compatibility
+    raw_focus = res.get("focus_targets", [])
+    sanitized_focus = []
+    if isinstance(raw_focus, list):
+        for item in raw_focus:
+            if not isinstance(item, dict):
+                continue
+            tid = str(item.get("id", "")).strip()
+            ttype = str(item.get("type", "")).upper()
+            if not tid or not ttype:
+                continue
+
+            # Canonical type normalization
+            if ttype == "BUS":
+                ttype = "OBJECT"
+            elif ttype == "MISSING":
+                ttype = "CANDIDATE"
+
+            clean_item = dict(item)
+            clean_item["type"] = ttype
+            clean_item["id"] = tid
+
+            # Strict type and ID matching
+            if ttype == "OBJECT" and tid in valid_node_ids:
+                sanitized_focus.append(clean_item)
+            elif ttype == "LINE" and tid in valid_line_ids:
+                sanitized_focus.append(clean_item)
+            elif ttype == "CANDIDATE" and tid in valid_cand_ids:
+                sanitized_focus.append(clean_item)
+            elif ttype == "ISSUE" and tid in valid_issue_ids:
+                sanitized_focus.append(clean_item)
+            elif ttype == "UI" and tid in VALID_HIGHLIGHT_TARGETS:
+                sanitized_focus.append(clean_item)
+            # Fabricated targets or type mismatches (e.g. LINE with node ID) are dropped.
+
+    res["focus_targets"] = sanitized_focus
+
+    # 9. Backward compatibility
     if not res.get("summary_text"):
         res["summary_text"] = res.get("reply_ko", "")
     return res
@@ -688,10 +735,23 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
             }
             return sanitize_and_validate_agent_response(res, message, w_nodes, w_lines, cands, issues, stage)
 
-        # Mutation check (without selected node or general mutation request)
-        if any(k in msg_norm for k in ["바꿔", "변경", "수정", "삭제", "지워", "바꿔줘", "추가해"]):
+        # Safe Resource Request: Excel file picker / upload
+        if any(k in msg_norm for k in ["엑셀추가", "엑셀파일", "엑셀불러", "엑셀가져", "엑셀열어", "엑셀업로드", "openexcel", "importexcel"]) or ("엑셀" in msg and any(v in msg for v in ["추가", "열어", "가져", "불러", "선택"])):
             res = {
-                "reply_ko": "회로 설비 속성 변경이나 삭제는 계통 토폴로지에 직접적인 영향을 미치므로 사용자 확인(Confirm)이 필요합니다.",
+                "reply_ko": "계통 제원 엑셀(.xlsx) 파일을 선택할 수 있는 파일 선택창을 엽니다.",
+                "decision": "PROCEED",
+                "intent": "OPEN_EXCEL_PICKER",
+                "action_mode": "EXECUTE",
+                "action_id": "OPEN_EXCEL_PICKER",
+                "highlight_target": "final_excel_upload" if ("final" in stage_upper or "verified" in stage_upper) else "cad_excel_import",
+                "agent_status": "LOCAL_DETERMINISTIC",
+            }
+            return sanitize_and_validate_agent_response(res, message, w_nodes, w_lines, cands, issues, stage)
+
+        # Mutation check (requires actual circuit target noun + mutation verb)
+        if is_circuit_mutation_request(message):
+            res = {
+                "reply_ko": "회로 설비 속성 변경이나 삭제/추가는 계통 토폴로지에 직접적인 영향을 미치므로 사용자 확인(Confirm)이 필요합니다.",
                 "decision": "HUMAN_CHECK",
                 "intent": "MUTATE_CIRCUIT_REQUEST",
                 "action_mode": "CONFIRM_REQUIRED",
