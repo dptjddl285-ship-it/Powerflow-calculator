@@ -95,6 +95,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   bool _showAllLinesList = false;
   bool _connectionVisualSweepStarted = false;
   bool _connectionVisualSweepComplete = false;
+  final Set<String> _visitedConnectionLineIds = <String>{};
   bool _coachTargetSyncQueued = false;
   String? _queuedCoachHighlightTarget;
   bool _showTopologyDetails = false;
@@ -119,6 +120,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   String? _completenessAssessment;
   String? _completenessMessageKo;
   bool _humanCompletenessConfirmed = false;
+  bool _objectHumanCheckDone = false;
+  final Set<String> _reviewedObjectIds = <String>{};
 
   // Object Gate & Final Gate States
   bool _isObjectVerified = false;
@@ -169,6 +172,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     workingNodes: _workingNodes,
     missingCandidates: _missingCandidates,
   );
+
+  bool get _objectGateReadyForUser =>
+      _canVerifyObjectGate && (_objectHumanCheckDone || _objectHumanCheckReady);
 
   List<String> get _objectGateBlockers => ObjectReviewGateEvaluator.getBlockers(
     workingNodes: _workingNodes,
@@ -616,6 +622,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         return _showConnectionLinesOnlyForAgent();
       case PowerLensAppAction.connectionNextLine:
         return _showConnectionNextLineForAgent();
+      case PowerLensAppAction.confirmBusNumber:
+        return _confirmBusNumberFromAgent(params?['bus_number']);
+      case PowerLensAppAction.confirmObjectCompleteness:
+        return _confirmObjectCompletenessFromAgent();
       case PowerLensAppAction.handoffToCanvas:
         return _handoffToFlutterCanvas();
       case PowerLensAppAction.goToNextStage:
@@ -642,6 +652,81 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         // lets the root canvas handler receive them through the handler stack.
         return false;
     }
+  }
+
+  Future<bool> _confirmObjectCompletenessFromAgent() async {
+    if (_currentPhase != ReviewPhase.objectReview || _isLoading) return false;
+    if (!_objectHumanCheckReady) {
+      _focusNextReviewTask();
+      if (mounted) {
+        setState(() {
+          _stageGateMessage = '주요 객체를 도면에서 한 번 선택해 확인한 뒤 다시 “확인했어”라고 알려주세요.';
+        });
+      }
+      return false;
+    }
+    setState(() {
+      _objectHumanCheckDone = true;
+      _humanCompletenessConfirmed = true;
+      _stageGateMessage = '주요 객체 확인을 기록했어요. 객체 검수 완료 버튼을 확인해주세요.';
+    });
+    _announceReviewStage();
+    return true;
+  }
+
+  Future<bool> _confirmBusNumberFromAgent(Object? rawNumber) async {
+    if (_currentPhase != ReviewPhase.busMappingReview || _isLoading)
+      return false;
+    final number = rawNumber is num
+        ? rawNumber.toInt()
+        : int.tryParse(rawNumber?.toString() ?? '');
+    final active = _selectedNode;
+    if (number == null ||
+        number < 1 ||
+        number > 50 ||
+        active == null ||
+        active.className.toLowerCase() != 'bus') {
+      setState(() {
+        _stageGateMessage = '모선 번호는 1부터 50 사이에서 입력하고, 도면에서 모선을 먼저 선택해주세요.';
+      });
+      return false;
+    }
+    final duplicate = _busNodes.any(
+      (node) => node.id != active.id && node.busNumber == number,
+    );
+    if (duplicate) {
+      setState(() {
+        _stageGateMessage = '이미 사용 중인 모선 번호라 적용하지 않았어요. 중복되지 않는 번호를 입력해주세요.';
+      });
+      return false;
+    }
+    _handleApplyBusNumber(active, number);
+    return true;
+  }
+
+  bool get _objectHumanCheckReady {
+    final suspicious = _workingNodes
+        .where((node) => node.reviewStatus == 'SUSPICIOUS')
+        .toList();
+    final targets = suspicious.isNotEmpty
+        ? suspicious
+        : _workingNodes
+              .where((node) => node.reviewStatus != 'REJECTED')
+              .toList();
+    return targets.isNotEmpty &&
+        targets.every((node) => _reviewedObjectIds.contains(node.id));
+  }
+
+  void _selectReviewNode(ReviewNodeItem node) {
+    setState(() {
+      _selectedNode = node;
+      _reviewedObjectIds.add(node.id);
+      _isObjectEditExpanded = false;
+    });
+    if (node.reviewStatus == 'SUSPICIOUS' && node.agentExplanation == null) {
+      _triggerAgentReviewNode(node);
+    }
+    _announceReviewStage();
   }
 
   bool _focusReviewIssueForAgent() {
@@ -853,6 +938,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           : _currentPhase == ReviewPhase.busMappingReview
           ? _busGateBlockers
           : connectionBlockers,
+      objectHumanCompletenessConfirmed:
+          _objectHumanCheckDone ||
+          _humanCompletenessConfirmed ||
+          _objectHumanCheckReady,
+      busMappingAiReading: _isLinkingBusNumbers,
+      activeBusId: _selectedNode?.className.toLowerCase() == 'bus'
+          ? _selectedNode?.id
+          : null,
+      busModelUsed: _busModelUsed,
+      busFallbackUsed: _busFallbackUsed,
+      busFailureCode: _busHttpCode?.toString(),
     );
   }
 
@@ -885,6 +981,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _completenessAssessment = null;
         _completenessMessageKo = null;
         _humanCompletenessConfirmed = false;
+        _objectHumanCheckDone = false;
+        _reviewedObjectIds.clear();
+        _visitedConnectionLineIds.clear();
+        _busModelUsed = null;
+        _busFallbackUsed = false;
+        _busHttpCode = null;
         _objFilterStatus = 'ALL';
         _objFilterClass = 'ALL';
         _nodePage = 0;
@@ -911,9 +1013,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _isLoading = false;
 
         // Greeting and Proactive Summary in Chat
-        final summaryMsg =
-            doc.proactiveSummary?.summaryText ??
-            "안녕하세요! PowerLens AI 도면 어시스턴트입니다.\n도면 검수 상태, 선택 객체/선로의 판정 근거, 누락 후보 등을 즉시 안내해 드립니다.";
+        final suspiciousCount = suspiciousNodes.length;
+        final summaryMsg = suspiciousCount == 0
+            ? 'AI 1차 검수 결과: 의심 객체 0개입니다. 주요 객체를 한 번 확인한 뒤 “확인했어”라고 알려주세요.'
+            : 'AI 1차 검수 결과: 의심 객체 ${suspiciousCount}개입니다. 표시된 객체를 순서대로 확인해주세요.';
 
         _chatHistory.add(
           ChatMessageItem(
@@ -978,6 +1081,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _completenessAssessment = res.assessment;
         _completenessMessageKo = res.messageKo;
       });
+      _announceReviewStage();
     } catch (e) {
       print("완결성 검사 호출 오류: $e");
     }
@@ -1030,6 +1134,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         node.agentExplanation = (res['explanation_ko'] ?? res['message_ko'])
             ?.toString();
         node.recommendedAction = res['recommended_action']?.toString();
+        if (res['review_reasons'] is List) {
+          node.reviewReasons = (res['review_reasons'] as List)
+              .map((reason) => reason.toString())
+              .toList();
+        }
+        if (res['evidence'] is Map) {
+          node.evidence = Map<String, dynamic>.from(res['evidence'] as Map);
+        }
+        if (res['metadata'] is Map) {
+          node.metadata = Map<String, dynamic>.from(res['metadata'] as Map);
+        }
         if (res['suggested_classes'] is List) {
           node.suggestedClasses = (res['suggested_classes'] as List)
               .map((e) => e.toString())
@@ -1042,6 +1157,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   void _rejectNode(ReviewNodeItem node) {
+    _reviewedObjectIds.add(node.id);
     final removedLineIds = _workingLines
         .where((line) => line.connectedTo.contains(node.id))
         .map((line) => line.lineId)
@@ -1089,6 +1205,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   void _changeNodeClass(ReviewNodeItem node, String newClass) {
+    _reviewedObjectIds.add(node.id);
     setState(() {
       node.className = newClass;
       node.reviewStatus = 'CONFIRMED';
@@ -1140,8 +1257,21 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   // --- Bus Mapping V2 Methods ---
+  String? _validateBusNumberInput(ReviewNodeItem busNode, int num) {
+    if (num < 1 || num > 50) return '모선 번호는 1부터 50 사이에서 입력해주세요.';
+    final duplicate = _busNodes.any(
+      (other) => other.id != busNode.id && other.busNumber == num,
+    );
+    if (duplicate) return '이미 사용 중인 모선 번호라 적용하지 않았어요. 중복되지 않는 번호를 입력해주세요.';
+    return null;
+  }
+
   void _handleApplyBusNumber(ReviewNodeItem busNode, int num) {
-    if (num <= 0) return;
+    final validationMessage = _validateBusNumberInput(busNode, num);
+    if (validationMessage != null) {
+      setState(() => _stageGateMessage = validationMessage);
+      return;
+    }
 
     // A human edit resolves the current agent focus for this node. The
     // deterministic Bus evaluator will add it back only if the edit leaves a
@@ -1155,40 +1285,15 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           ? busNode.source
           : '${busNode.source}_human_modified';
 
-      // Check conflict with other buses
-      final otherBusesWithNum = _busNodes
-          .where((b) => b.id != busNode.id && b.busNumber == num)
-          .toList();
-
-      if (otherBusesWithNum.isNotEmpty) {
-        // Both current and existing buses become UNCERTAIN
-        busNode.busNumberStatus = 'UNCERTAIN';
-        busNode.displayLabel = "Bus $num (중복)";
-        if (!busNode.busNumberReasons.contains('DUPLICATE_BUS_NUMBER_$num')) {
-          busNode.busNumberReasons.add('DUPLICATE_BUS_NUMBER_$num');
-        }
-
-        for (final ob in otherBusesWithNum) {
-          ob.busNumberStatus = 'UNCERTAIN';
-          ob.displayLabel = "Bus $num (중복)";
-          if (!ob.busNumberReasons.contains('DUPLICATE_BUS_NUMBER_$num')) {
-            ob.busNumberReasons.add('DUPLICATE_BUS_NUMBER_$num');
-          }
-          _propagateBusNumber(ob, num, isDuplicate: true);
-        }
-        _propagateBusNumber(busNode, num, isDuplicate: true);
-      } else {
-        // Unique and valid
-        busNode.busNumberStatus = 'VERIFIED';
-        busNode.displayLabel = "Bus $num";
-        busNode.busNumberReasons.removeWhere(
-          (r) =>
-              r.startsWith('DUPLICATE_BUS_NUMBER_') ||
-              r == 'NO_BUS_NUMBER_FOUND' ||
-              r.startsWith('INVALID_BUS_NUMBER_'),
-        );
-        _propagateBusNumber(busNode, num, isDuplicate: false);
-      }
+      busNode.busNumberStatus = 'VERIFIED';
+      busNode.displayLabel = "Bus $num";
+      busNode.busNumberReasons.removeWhere(
+        (r) =>
+            r.startsWith('DUPLICATE_BUS_NUMBER_') ||
+            r == 'NO_BUS_NUMBER_FOUND' ||
+            r.startsWith('INVALID_BUS_NUMBER_'),
+      );
+      _propagateBusNumber(busNode, num, isDuplicate: false);
 
       // Check if previous duplicate for oldNum got resolved
       if (oldNum != null && oldNum != num) {
@@ -1208,6 +1313,27 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         }
       }
     });
+
+    final next = _filteredAndSortedBusNodes.firstWhere(
+      (bus) => BusReviewGateEvaluator.computeGuideBusIds(
+        workingNodes: _workingNodes,
+      ).contains(bus.id),
+      orElse: () => _filteredAndSortedBusNodes.firstWhere(
+        (bus) => bus.id != busNode.id,
+        orElse: () => busNode,
+      ),
+    );
+    setState(() {
+      _selectedNode = next;
+      _busNumberEditController.text = next.busNumber?.toString() ?? '';
+      _stageGateMessage = _canVerifyBusGate
+          ? '모든 모선 번호가 확인됐어요. 결선 검수로 자동 이동합니다.'
+          : '번호를 적용했어요. 다음 확인 모선을 표시했습니다.';
+    });
+    _announceReviewStage();
+    if (_canVerifyBusGate && mounted && !_isLoading) {
+      _verifyBusGate();
+    }
   }
 
   List<ReviewNodeItem> _getConnectedGensForBus(ReviewNodeItem busNode) {
@@ -1268,6 +1394,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     setState(() {
       _connectionVisualSweepStarted = true;
       _connectionVisualSweepComplete = ordered.length == 1;
+      _visitedConnectionLineIds.clear();
       _lineFocusOnly = true;
       _connFilterStatus = ConnectionReviewGateEvaluator.filterAll;
       _showAllLinesList = false;
@@ -1294,6 +1421,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     if (next == null) return;
     final index = ConnectionVisualSweep.indexOf(ordered, next.lineId);
     setState(() {
+      if (_selectedLine != null && _selectedLine!.lineId != next.lineId) {
+        _visitedConnectionLineIds.add(_selectedLine!.lineId);
+      }
       _lineFocusOnly = true;
       _connFilterStatus = ConnectionReviewGateEvaluator.filterAll;
       _showAllLinesList = false;
@@ -1514,6 +1644,15 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   Future<void> _completeObjectReview() async {
     if (_document == null || _isLoading) return;
 
+    if (!_objectHumanCheckDone && !_objectHumanCheckReady) {
+      setState(() {
+        _stageGateMessage =
+            'AI 결과만으로는 완료할 수 없어요. 도면의 주요 객체를 직접 확인한 뒤 완료 버튼을 눌러주세요.';
+      });
+      _focusNextReviewTask();
+      return;
+    }
+
     if (!_canVerifyObjectGate) {
       final blockers = _objectGateBlockers;
       final blockerCount = _objSuspiciousCount + _unresolvedCandidatesCount;
@@ -1527,6 +1666,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     }
 
     _humanCompletenessConfirmed = true;
+    _objectHumanCheckDone = true;
     await _verifyObjectGate();
   }
 
@@ -1735,6 +1875,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       _connectionFastMode = false;
       _connectionVisualSweepStarted = false;
       _connectionVisualSweepComplete = false;
+      _visitedConnectionLineIds.clear();
       _lineFocusOnly = false;
       _selectedLine = null;
       _selectedNode = null;
@@ -1778,6 +1919,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _connectionFastMode = false;
         _connectionVisualSweepStarted = false;
         _connectionVisualSweepComplete = false;
+        _visitedConnectionLineIds.clear();
         _lineFocusOnly = false;
       });
 
@@ -2920,8 +3062,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       if (_unresolvedCandidatesCount > 0) {
         return '누락 의심 설비 $_unresolvedCandidatesCount개를 복구하거나 문제없음 처리하세요.';
       }
-      if (!_humanCompletenessConfirmed && !_isCleanAuto) {
-        return '원본 도면과 객체 목록이 일치하는지 확인해 주세요.';
+      if (!_objectHumanCheckDone && !_objectHumanCheckReady) {
+        return 'AI 결과를 확인했으면 도면의 주요 객체를 직접 선택해 확인해 주세요.';
       }
       return '객체 확인이 완료되었습니다. 모선 번호 매핑으로 이동할 수 있습니다.';
     }
@@ -2939,7 +3081,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _currentPhase == ReviewPhase.objectReview &&
         _objSuspiciousCount == 0 &&
         _unresolvedCandidatesCount == 0 &&
-        !_humanCompletenessConfirmed;
+        !_objectHumanCheckDone &&
+        !_objectHumanCheckReady;
     setState(() {
       if (_currentPhase == ReviewPhase.objectReview) {
         final suspicious = _workingNodes
@@ -3483,6 +3626,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                                 focusTargets,
                                               )
                                             : const {},
+                                        currentCoachNodeId:
+                                            _reviewCoachDecision.focusNodeId,
                                         openMissingCandidates:
                                             (_currentPhase ==
                                                 ReviewPhase.objectReview)
@@ -3500,6 +3645,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                         onSelectNode: (node) {
                                           setState(() {
                                             _selectedNode = node;
+                                            if (_currentPhase ==
+                                                ReviewPhase.objectReview) {
+                                              _reviewedObjectIds.add(node.id);
+                                            }
                                             _isObjectEditExpanded = false;
                                             if (_isManualAddLineMode &&
                                                 _manualLineStartNode == null) {
@@ -3531,6 +3680,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                                   'SUSPICIOUS' &&
                                               node.agentExplanation == null) {
                                             _triggerAgentReviewNode(node);
+                                          }
+                                          if (_currentPhase ==
+                                              ReviewPhase.objectReview) {
+                                            _announceReviewStage();
                                           }
                                         },
                                         onNodeOffsetChanged: (nodeId, dx, dy) {
@@ -3564,8 +3717,20 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                             ? const []
                                             : _workingLines,
                                         selectedLine: _selectedLine,
+                                        visitedLineIds:
+                                            _visitedConnectionLineIds,
                                         onSelectLine: (line) {
                                           setState(() {
+                                            if (_currentPhase ==
+                                                    ReviewPhase
+                                                        .connectionReview &&
+                                                _selectedLine != null &&
+                                                _selectedLine!.lineId !=
+                                                    line.lineId) {
+                                              _visitedConnectionLineIds.add(
+                                                _selectedLine!.lineId,
+                                              );
+                                            }
                                             _selectedLine = line;
                                             if (_currentPhase ==
                                                 ReviewPhase.connectionReview) {
@@ -3625,8 +3790,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                                       .map((e) => e.toString()),
                                             )
                                             .toSet(),
-                                        currentCoachNodeId:
-                                            _reviewCoachDecision.focusNodeId,
                                       );
                                     },
                                   ),
@@ -4293,11 +4456,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               onTap: () {
                 setState(() {
                   _selectedNode = n;
+                  _reviewedObjectIds.add(n.id);
                   _nodePage = currentPage;
                 });
                 if (isSuspicious && n.agentExplanation == null) {
                   _triggerAgentReviewNode(n);
                 }
+                _announceReviewStage();
               },
               child: Container(
                 padding: const EdgeInsets.symmetric(
@@ -4614,6 +4779,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       isEditExpanded: _isObjectEditExpanded,
       onMatch: () {
         setState(() {
+          _reviewedObjectIds.add(node.id);
           node.reviewStatus = 'CONFIRMED';
           node.source = '${node.source}_human_confirmed';
         });
@@ -7251,13 +7417,18 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   // --- Phase 2: Bus Number Mapping & Review ---
 
   bool _isLinkingBusNumbers = false;
+  String? _busModelUsed;
+  bool _busFallbackUsed = false;
+  int? _busHttpCode;
 
   Future<void> _triggerAiBusLinking() async {
     if (_document == null) return;
     setState(() {
       _isLinkingBusNumbers = true;
       _busMappingFeedback = BusMappingFeedback.processing(_busNodes.length);
+      _stageGateMessage = _busMappingFeedback!.message;
     });
+    _announceReviewStage();
     try {
       final res = await _apiService.linkBusNumbers(
         documentId: _document!.documentId,
@@ -7283,6 +7454,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         final report = res['bus_number_report'] is Map
             ? Map<String, dynamic>.from(res['bus_number_report'] as Map)
             : <String, dynamic>{};
+        for (final key in const [
+          'model_used',
+          'primary_model',
+          'fallback_model',
+          'fallback_used',
+          'http_code',
+        ]) {
+          if (!report.containsKey(key) && res.containsKey(key)) {
+            report[key] = res[key];
+          }
+        }
         if (report.isEmpty) {
           final verifiedFallback = rawNodes
               .whereType<Map>()
@@ -7304,6 +7486,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           uncertainReasons: uncertainReasons,
         );
         setState(() {
+          _busModelUsed = feedback.modelUsed;
+          _busFallbackUsed = feedback.fallbackUsed;
+          _busHttpCode = feedback.httpCode;
           for (
             int i = 0;
             i < rawNodes.length && i < _workingNodes.length;
@@ -7335,21 +7520,39 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             _busNumberEditController.clear();
           }
           _busMappingFeedback = feedback;
+          _stageGateMessage = feedback.message;
         });
+        _announceReviewStage();
         _showBusMappingFeedback(feedback);
       } else {
-        final feedback = BusMappingFeedback.failed(total: _busNodes.length);
-        setState(() => _busMappingFeedback = feedback);
+        final code = int.tryParse(res['http_code']?.toString() ?? '');
+        final feedback = BusMappingFeedback.failed(
+          total: _busNodes.length,
+          httpCode: code,
+        );
+        setState(() {
+          _busMappingFeedback = feedback;
+          _busHttpCode = code;
+          _stageGateMessage = feedback.message;
+        });
+        _announceReviewStage();
         _showBusMappingFeedback(feedback);
       }
     } catch (_) {
       if (mounted) {
         final feedback = BusMappingFeedback.failed(total: _busNodes.length);
-        setState(() => _busMappingFeedback = feedback);
+        setState(() {
+          _busMappingFeedback = feedback;
+          _stageGateMessage = feedback.message;
+        });
+        _announceReviewStage();
         _showBusMappingFeedback(feedback);
       }
     } finally {
-      if (mounted) setState(() => _isLinkingBusNumbers = false);
+      if (mounted) {
+        setState(() => _isLinkingBusNumbers = false);
+        _announceReviewStage();
+      }
     }
   }
 
@@ -7375,6 +7578,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       _selectedLine = null;
       _busFilterStatus = 'ALL';
       _busPage = 0;
+      _busModelUsed = null;
+      _busFallbackUsed = false;
+      _busHttpCode = null;
       final buses = _filteredAndSortedBusNodes;
       _selectedNode = buses.isNotEmpty ? buses.first : null;
       if (_selectedNode != null && _selectedNode!.busNumber != null) {
@@ -7459,6 +7665,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             connectedGens: _getConnectedGensForBus(_selectedNode!),
             connectedLoads: _getConnectedLoadsForBus(_selectedNode!),
             onApplyNumber: (num) => _handleApplyBusNumber(_selectedNode!, num),
+            validateNumber: (num) =>
+                _validateBusNumberInput(_selectedNode!, num),
           )
         else if (buses.isNotEmpty)
           BusInspectorView(
@@ -7468,6 +7676,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             connectedGens: _getConnectedGensForBus(buses.first),
             connectedLoads: _getConnectedLoadsForBus(buses.first),
             onApplyNumber: (num) => _handleApplyBusNumber(buses.first, num),
+            validateNumber: (num) => _validateBusNumberInput(buses.first, num),
           )
         else
           _buildNoSelectionPrompt("모선(Bus)"),
@@ -7699,6 +7908,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               backgroundColor: Color(0xFFDBEAFE),
             ),
           ],
+          if (feedback.modelUsed != null || feedback.httpCode != null) ...[
+            const SizedBox(height: 5),
+            Text(
+              [
+                if (feedback.modelUsed != null)
+                  '실제 모델: ${feedback.modelUsed}${feedback.fallbackUsed ? ' (fallback)' : ''}',
+                if (feedback.httpCode != null) 'HTTP ${feedback.httpCode}',
+              ].join(' · '),
+              style: const TextStyle(color: Color(0xFF64748B), fontSize: 9.5),
+            ),
+          ],
         ],
       ),
     );
@@ -7915,7 +8135,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     }
 
     for (var line in lines) {
-      final isLead = line.traceMethod == 'equipment_lead' ||
+      final isLead =
+          line.traceMethod == 'equipment_lead' ||
           line.evidence['is_equipment_lead'] == true ||
           line.evidence['is_transformer_lead'] == true ||
           line.evidence['electricalBranch'] == false;
@@ -8051,7 +8272,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     final excelData = proposal['excel_data'] is Map
         ? Map<String, dynamic>.from(proposal['excel_data'] as Map)
         : <String, dynamic>{};
-    final displayLabel = excelData['label']?.toString() ??
+    final displayLabel =
+        excelData['label']?.toString() ??
         (isGen ? "G_$busNum" : "Load_$busNum");
 
     final newNode = ReviewNodeItem(
@@ -8357,7 +8579,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        "의심 객체가 없습니다. 도면을 마지막으로 확인한 후 [객체 검수 완료]를 누르세요.",
+                        "AI 1차 검수에서 의심 객체가 없습니다. 주요 객체를 확인한 뒤 [객체 검수 완료]가 활성화됩니다.",
                         style: TextStyle(
                           color: Color(0xFF15803D),
                           fontSize: 11,
@@ -8397,7 +8619,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     guideLabel: "✨ 객체 검수 완료",
                     child: ElevatedButton.icon(
                       key: const ValueKey('ObjectCompleteButton'),
-                      onPressed: _completeObjectReview,
+                      onPressed: _objectGateReadyForUser
+                          ? _completeObjectReview
+                          : null,
                       icon: const Icon(Icons.check_circle_outline, size: 16),
                       label: const Text(
                         "객체 검수 완료",
@@ -8407,7 +8631,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                         ),
                       ),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: _canVerifyObjectGate
+                        backgroundColor: _objectGateReadyForUser
                             ? const Color(0xFF2563EB)
                             : const Color(0xFF94A3B8),
                         foregroundColor: Colors.white,

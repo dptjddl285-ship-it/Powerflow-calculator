@@ -118,11 +118,11 @@ class ReviewNodeItem {
       reviewReasons: reasons,
       agentExplanation: json['agent_explanation']?.toString(),
       recommendedAction: json['recommended_action']?.toString(),
-      evidence: json['evidence'] is Map<String, dynamic>
-          ? json['evidence']
+      evidence: json['evidence'] is Map
+          ? Map<String, dynamic>.from(json['evidence'] as Map)
           : {},
-      metadata: json['metadata'] is Map<String, dynamic>
-          ? json['metadata']
+      metadata: json['metadata'] is Map
+          ? Map<String, dynamic>.from(json['metadata'] as Map)
           : {},
       displayLabel:
           json['display_name']?.toString() ?? json['display_label']?.toString(),
@@ -398,6 +398,7 @@ class BusReviewGateEvaluator {
 
     final missingNumberBuses = <String>[];
     final invalidNumberBuses = <String>[];
+    final outOfRangeBuses = <String>[];
     final duplicateBuses = <String>[];
     final uncertainStatusBuses = <String>[];
 
@@ -413,6 +414,8 @@ class BusReviewGateEvaluator {
         missingNumberBuses.add(b.id);
       } else if (num <= 0) {
         invalidNumberBuses.add(b.id);
+      } else if (num > 50) {
+        outOfRangeBuses.add(b.id);
       } else if (duplicates.contains(num) || hasActiveDupReason) {
         duplicateBuses.add(b.id);
       } else if (status == 'UNCERTAIN') {
@@ -432,6 +435,11 @@ class BusReviewGateEvaluator {
     if (invalidNumberBuses.isNotEmpty) {
       blockers.add(
         "유효하지 않은 번호(0 이하)를 가진 모선(${invalidNumberBuses.length}개)이 있습니다.",
+      );
+    }
+    if (outOfRangeBuses.isNotEmpty) {
+      blockers.add(
+        "허용 범위(1~50)를 벗어난 번호를 가진 모선(${outOfRangeBuses.length}개)이 있습니다.",
       );
     }
     if (uncertainStatusBuses.isNotEmpty) {
@@ -481,6 +489,7 @@ class BusReviewGateEvaluator {
 
       if (num == null ||
           num <= 0 ||
+          num > 50 ||
           duplicates.contains(num) ||
           status == 'UNCERTAIN' ||
           hasActiveDupReason) {

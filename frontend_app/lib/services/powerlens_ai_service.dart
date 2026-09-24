@@ -20,6 +20,8 @@ enum PowerLensAppAction {
   connectionFullReview,
   connectionLinesOnly,
   connectionNextLine,
+  confirmBusNumber,
+  confirmObjectCompleteness,
   handoffToCanvas,
   runPowerFlow,
   showPowerFlowResults,
@@ -385,6 +387,9 @@ class PowerLensAIService extends ChangeNotifier {
         return PowerLensAppAction.showValueLabels;
       case 'HIDE_VALUE_LABELS':
         return PowerLensAppAction.hideValueLabels;
+      case 'BUS_CONFIRM':
+      case 'CONFIRM_BUS_NUMBER':
+        return PowerLensAppAction.confirmBusNumber;
       case 'NO_ACTION':
       default:
         return null;
@@ -470,6 +475,20 @@ class PowerLensAIService extends ChangeNotifier {
         stage == 'LINE_REVIEW';
   }
 
+  int? _explicitBusNumber(String text, PowerLensAssistantContext? context) {
+    final stage = context?.workflowStage.toUpperCase();
+    if (stage != 'BUS_MAPPING' && stage != 'BUS_MAPPING_REVIEW') return null;
+    final matches = RegExp(r'(?<!\d)(\d{1,3})(?!\d)').allMatches(text);
+    if (matches.length != 1) return null;
+    return int.tryParse(matches.first.group(1)!);
+  }
+
+  bool _mentionsBusNumber(String text, PowerLensAssistantContext? context) {
+    final stage = context?.workflowStage.toUpperCase();
+    if (stage != 'BUS_MAPPING' && stage != 'BUS_MAPPING_REVIEW') return false;
+    return RegExp(r'(?<!\d)\d{1,3}(?!\d)').hasMatch(text);
+  }
+
   bool requiresCircuitMutationConfirmation(String text) {
     final query = _normalizeQuery(text).replaceAll('캔버스', '');
     const circuitNouns = [
@@ -534,6 +553,18 @@ class PowerLensAIService extends ChangeNotifier {
   ]) {
     final q = _normalizeQuery(text);
     if (q.isEmpty) return const [];
+    // One explicit number during Bus Mapping is a local confirmation intent.
+    // It must never be delegated to free-form agent mutation.
+    if (_mentionsBusNumber(text, context)) {
+      return _explicitBusNumber(text, context) == null
+          ? const []
+          : const [PowerLensAppAction.confirmBusNumber];
+    }
+    final stage = context?.workflowStage.toUpperCase();
+    if (stage == 'OBJECT_REVIEW' &&
+        _containsAny(q, const ['확인했어', '주요객체확인', '객체확인끝'])) {
+      return const [PowerLensAppAction.confirmObjectCompleteness];
+    }
     if (requiresCircuitMutationConfirmation(q)) return const [];
 
     // If the user is asking a question (where to click, how to do, what button to press),
@@ -825,7 +856,6 @@ class PowerLensAIService extends ChangeNotifier {
     if (_containsAny(q, const ['이전', '전단계', '뒤로', '돌아가'])) {
       return const [PowerLensAppAction.goToPreviousStage];
     }
-    final stage = context?.workflowStage.toUpperCase();
     final stageCompletionTerms = switch (stage) {
       'OBJECT_REVIEW' => const ['객체검수완료', '객체검수끝', '객체확인완료', '객체확인끝', '검수완료해'],
       'BUS_MAPPING' || 'BUS_MAPPING_REVIEW' => const [
@@ -1110,6 +1140,70 @@ class PowerLensAIService extends ChangeNotifier {
           ),
         );
         finalMascotState = 'blocked';
+        return;
+      }
+
+      // Bus-number confirmation is handled locally and deterministically. A
+      // numeric utterance is never sent to the free-form agent endpoint.
+      if (_mentionsBusNumber(trimmed, context)) {
+        final matches = RegExp(
+          r'(?<!\d)(\d{1,3})(?!\d)',
+        ).allMatches(trimmed).toList();
+        String reply;
+        var handled = false;
+        var requiresSafeConfirmation = false;
+        if (matches.length != 1) {
+          reply = '모선 번호는 한 번에 하나만 입력해주세요. 예: 14';
+        } else {
+          final busNumber = int.tryParse(matches.single.group(1)!);
+          final inRange =
+              busNumber != null && busNumber >= 1 && busNumber <= 50;
+          final selectedBusId =
+              context.activeBusId ?? context.selectedNode?['id']?.toString();
+          final duplicate =
+              busNumber != null &&
+              context.workingNodes.any(
+                (node) =>
+                    _isActiveBusMap(node) &&
+                    node['id']?.toString() != selectedBusId &&
+                    int.tryParse(
+                          (node['bus_number'] ?? node['busNumber'] ?? '')
+                              .toString(),
+                        ) ==
+                        busNumber,
+              );
+          if (!inRange) {
+            reply = '모선 번호는 1부터 50 사이에서 입력해주세요.';
+          } else if (selectedBusId == null || selectedBusId.isEmpty) {
+            requiresSafeConfirmation = true;
+            reply =
+                '회로 구조 변경은 안전을 위해 자동 실행하지 않아요. 도면에서 모선을 직접 선택한 뒤 번호를 확인해주세요.';
+          } else if (duplicate) {
+            reply = '이미 사용 중인 모선 번호라 적용하지 않았어요. 중복되지 않는 번호를 입력해주세요.';
+          } else {
+            handled = await dispatchAction(
+              PowerLensAppAction.confirmBusNumber,
+              params: {'bus_number': busNumber},
+              context: context,
+            );
+            reply = handled
+                ? '모선 번호 $busNumber을(를) 적용했어요. 다음 확인 모선으로 이동합니다.'
+                : '현재 모선 번호를 적용하지 못했어요. 선택된 모선과 입력값을 확인해주세요.';
+          }
+        }
+        _messages.add(
+          PowerLensAIMessageItem(
+            id: 'ai_bus_confirm_${DateTime.now().millisecondsSinceEpoch}',
+            sender: 'assistant',
+            text: reply,
+            stage: context.workflowStage,
+            suggestedActions: _getQuickActions(context.workflowStage, context),
+            agentStatus: requiresSafeConfirmation
+                ? 'LOCAL_CONFIRM_REQUIRED'
+                : 'LOCAL_DETERMINISTIC',
+          ),
+        );
+        finalMascotState = handled ? 'success' : 'speaking';
         return;
       }
 
@@ -1412,6 +1506,14 @@ class PowerLensAIService extends ChangeNotifier {
         return handled
             ? '자동 선로 이동은 사용하지 않아요. 확인이 필요한 결선을 도면에서 선택해주세요.'
             : '확인할 결선이 없어요.';
+      case PowerLensAppAction.confirmBusNumber:
+        return handled
+            ? '모선 번호를 적용했어요. 다음 확인 모선으로 이동합니다.'
+            : '모선 번호를 적용하지 못했어요. 선택된 모선과 입력값을 확인해주세요.';
+      case PowerLensAppAction.confirmObjectCompleteness:
+        return handled
+            ? '주요 객체 확인을 기록했어요. 이제 객체 검수 완료 버튼을 확인해주세요.'
+            : '아직 확인할 객체나 누락 후보가 남아 있어요.';
       case PowerLensAppAction.handoffToCanvas:
         return handled
             ? '캔버스로 이동했어요. 여기서 조류계산을 시작할 수 있어요.'
@@ -1972,7 +2074,7 @@ class PowerLensAIService extends ChangeNotifier {
             (ctx?.unresolvedMissingCandidates ?? 0) > 0;
         if (!hasIssues && ctx != null) {
           return "🔍 **객체 검수 단계입니다.**\n"
-              "도면 내 모든 객체 인식이 정상적으로 완료되었어요! 검토가 필요한 항목이 없으니 **[객체 검수 완료]**를 눌러 모선 매핑으로 넘어가시면 됩니다.";
+              "AI 1차 검수에서 의심 객체는 발견되지 않았어요. 도면의 주요 객체를 한 번 확인한 뒤 **“확인했어”**라고 알려주세요.";
         }
         return "🔍 **객체 검수 단계입니다.**\n"
             "객체를 확인해봤어요. 제가 다시 봤으면 하는 의심 객체를 도면 위에 표시해둘게요. "
@@ -1989,11 +2091,15 @@ class PowerLensAIService extends ChangeNotifier {
               "${BusReviewUiState.noActiveBusMessage}\n"
               "객체 검수에서 모선 인식을 확인해주세요.";
         }
+        if (ctx.busMappingAiReading) {
+          return "🔢 **AI 번호 판독 중...**\n"
+              "지금 Lensy가 도면의 모선 번호를 확인하고 있어요. 잠시만 기다려 주세요.";
+        }
         final hasBusIssues =
             ctx.unresolvedBusNumbers > 0 || ctx.duplicateBusNumbers > 0;
         if (!hasBusIssues) {
           return "🔢 **모선 번호 확인 단계입니다.**\n"
-              "제가 다시 확인할 모선은 이제 없어요. 전체 번호를 한번 확인한 뒤 **[모선 검수 완료]**를 눌러주세요.";
+              "모든 모선 번호를 확인했어요. 조건을 만족하면 결선 검수로 자동 이동합니다.";
         }
         final count = ctx.unresolvedBusNumbers + ctx.duplicateBusNumbers;
         final countStr = count > 0 ? " $count개" : "";
@@ -2058,7 +2164,9 @@ class PowerLensAIService extends ChangeNotifier {
             ctx.suspiciousObjects > 0 || ctx.unresolvedMissingCandidates > 0;
         return hasIssues
             ? "객체를 확인해봤어요. 다시 확인이 필요한 곳을 도면 위에 표시해둘게요."
-            : "제가 따로 의심하는 객체는 없어요. 도면을 확인한 뒤 [객체 검수 완료]를 눌러주세요.";
+            : (ctx.objectHumanCompletenessConfirmed
+                  ? "주요 객체 확인이 끝났어요. 객체 검수 완료 버튼이 활성화됐습니다."
+                  : "AI 1차 검수에서 의심 객체는 발견되지 않았어요. 주요 객체를 확인한 뒤 “확인했어”라고 알려주세요.");
       case 'BUS_MAPPING':
       case 'BUS_MAPPING_REVIEW':
         if (_activeBusCount(ctx) == 0) {
@@ -2068,9 +2176,12 @@ class PowerLensAIService extends ChangeNotifier {
             ctx.unresolvedBusNumbers > 0 || ctx.duplicateBusNumbers > 0;
         final count = ctx.unresolvedBusNumbers + ctx.duplicateBusNumbers;
         final countStr = count > 0 ? " $count개" : "";
+        if (ctx.busMappingAiReading) {
+          return "AI 번호 판독 중... 지금 Lensy가 도면의 모선 번호를 확인하고 있어요. 잠시만 기다려 주세요.";
+        }
         return hasBusIssues
             ? "모선 번호를 전체 확인했어요. 다시 확인하면 좋은 모선이$countStr 있어요. 도면에 표시해둘게요."
-            : "제가 다시 확인할 모선은 이제 없어요. 전체 번호를 한번 확인한 뒤 [모선 검수 완료]를 눌러주세요.";
+            : "모든 모선 번호를 확인했어요. 조건을 만족하면 결선 검수로 자동 이동합니다.";
       case 'CONNECTION_REVIEW':
         final connectionLines = ctx.workingLines
             .map((raw) => ReviewLineItem.fromJson(raw))
@@ -2135,7 +2246,13 @@ class PowerLensAIService extends ChangeNotifier {
         if (hasIssues) {
           return ['검토 필요 항목 보기', '다음에 뭐 해?', '누락 후보 확인'];
         }
-        return ['객체 검수 완료하기', '다음 단계로 이동', '다음에 뭐 해?'];
+        if (ctx == null ||
+            (ctx.totalObjects == 0 && ctx.selectedNode == null)) {
+          return ['객체 검수 완료하기', '다음 단계로 이동', '다음에 뭐 해?'];
+        }
+        return ctx?.objectHumanCompletenessConfirmed == true
+            ? ['객체 검수 완료하기', '다음에 뭐 해?', '현재 상태 요약']
+            : ['도면 주요 객체 확인', '확인했어', '다음에 뭐 해?'];
       case 'BUS_MAPPING':
       case 'BUS_MAPPING_REVIEW':
         if (ctx == null) {
@@ -2146,10 +2263,13 @@ class PowerLensAIService extends ChangeNotifier {
         }
         final hasBusIssues =
             ctx.unresolvedBusNumbers > 0 || ctx.duplicateBusNumbers > 0;
+        if (ctx.busMappingAiReading) {
+          return ['AI 번호 판독 중...', '현재 상태 요약'];
+        }
         return [
-          hasBusIssues ? '미지정 모선 확인' : '모선 검수 완료',
+          hasBusIssues ? '미지정 모선 확인' : '모선 번호 확인 완료',
           '다음에 뭐 해?',
-          '다음 단계로 이동',
+          '현재 상태 요약',
         ];
       case 'CONNECTION_REVIEW':
         final connectionLines =

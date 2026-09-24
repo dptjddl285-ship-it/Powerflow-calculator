@@ -149,6 +149,7 @@ def link_and_validate_bus_numbers(
 
     candidates = {}
     last_err = None
+    last_http_code = None
     model_used = None
     fallback_used = False
 
@@ -168,6 +169,7 @@ def link_and_validate_bus_numbers(
                     method='POST'
                 )
                 with urllib.request.urlopen(req, timeout=45) as resp:
+                    last_http_code = getattr(resp, 'status', 200)
                     data = json.loads(resp.read().decode('utf-8'))
                     txt = data['candidates'][0]['content']['parts'][0]['text']
                     import re
@@ -193,6 +195,7 @@ def link_and_validate_bus_numbers(
                     break
             except urllib.error.HTTPError as e:
                 last_err = e
+                last_http_code = e.code
                 print(f"[BusLinker] Model {m_name} attempt {attempt+1} failed: {e}")
                 if e.code == 429:
                     break
@@ -200,6 +203,7 @@ def link_and_validate_bus_numbers(
                     time.sleep(2.0)
             except Exception as e:
                 last_err = e
+                last_http_code = None
                 print(f"[BusLinker] Model {m_name} attempt {attempt+1} failed: {e}")
                 if attempt == 0:
                     time.sleep(2.0)
@@ -223,6 +227,7 @@ def link_and_validate_bus_numbers(
             'fallback_used': False,
             'primary_model': active_model,
             'fallback_model': fallback_m,
+            'http_code': last_http_code,
             'error': str(last_err)
         }
 
@@ -295,6 +300,7 @@ def link_and_validate_bus_numbers(
         'fallback_used': fallback_used,
         'primary_model': active_model,
         'fallback_model': fallback_m,
+        'http_code': 200,
     }
     return nodes, report
 

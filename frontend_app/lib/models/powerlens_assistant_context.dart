@@ -42,6 +42,16 @@ class PowerLensAssistantContext {
   final List<Map<String, dynamic>> topologyIssues;
   final List<String> currentBlockers;
 
+  // Review-stage state used by the deterministic Lensy coach. These fields
+  // keep the guide honest about whether a human check or AI bus read is still
+  // in progress; they are optional so existing callers remain compatible.
+  final bool objectHumanCompletenessConfirmed;
+  final bool busMappingAiReading;
+  final String? activeBusId;
+  final String? busModelUsed;
+  final bool busFallbackUsed;
+  final String? busFailureCode;
+
   const PowerLensAssistantContext({
     this.currentScreen = 'HOME',
     this.workflowStage = 'HOME',
@@ -74,6 +84,12 @@ class PowerLensAssistantContext {
     this.missingCandidates = const [],
     this.topologyIssues = const [],
     this.currentBlockers = const [],
+    this.objectHumanCompletenessConfirmed = false,
+    this.busMappingAiReading = false,
+    this.activeBusId,
+    this.busModelUsed,
+    this.busFallbackUsed = false,
+    this.busFailureCode,
   });
 
   Map<String, dynamic> toJson() => {
@@ -108,6 +124,12 @@ class PowerLensAssistantContext {
     'missing_candidates': missingCandidates,
     'topology_issues': topologyIssues,
     'current_blockers': currentBlockers,
+    'object_human_completeness_confirmed': objectHumanCompletenessConfirmed,
+    'bus_mapping_ai_reading': busMappingAiReading,
+    if (activeBusId != null) 'active_bus_id': activeBusId,
+    if (busModelUsed != null) 'bus_model_used': busModelUsed,
+    'bus_fallback_used': busFallbackUsed,
+    if (busFailureCode != null) 'bus_failure_code': busFailureCode,
   };
 
   PowerLensAssistantContext copyWith({
@@ -142,6 +164,12 @@ class PowerLensAssistantContext {
     List<Map<String, dynamic>>? missingCandidates,
     List<Map<String, dynamic>>? topologyIssues,
     List<String>? currentBlockers,
+    bool? objectHumanCompletenessConfirmed,
+    bool? busMappingAiReading,
+    String? activeBusId,
+    String? busModelUsed,
+    bool? busFallbackUsed,
+    String? busFailureCode,
   }) {
     return PowerLensAssistantContext(
       currentScreen: currentScreen ?? this.currentScreen,
@@ -178,6 +206,14 @@ class PowerLensAssistantContext {
       missingCandidates: missingCandidates ?? this.missingCandidates,
       topologyIssues: topologyIssues ?? this.topologyIssues,
       currentBlockers: currentBlockers ?? this.currentBlockers,
+      objectHumanCompletenessConfirmed:
+          objectHumanCompletenessConfirmed ??
+          this.objectHumanCompletenessConfirmed,
+      busMappingAiReading: busMappingAiReading ?? this.busMappingAiReading,
+      activeBusId: activeBusId ?? this.activeBusId,
+      busModelUsed: busModelUsed ?? this.busModelUsed,
+      busFallbackUsed: busFallbackUsed ?? this.busFallbackUsed,
+      busFailureCode: busFailureCode ?? this.busFailureCode,
     );
   }
 }

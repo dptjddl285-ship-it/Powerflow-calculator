@@ -92,15 +92,38 @@ class ReviewCoachPolicy {
         highlightTarget: 'home_upload',
       );
     }
-    return const ReviewCoachDecision(
-      coachTarget: 'object_gate',
-      coachMessage: '의심 객체는 없어요. 전체 도면을 확인한 뒤 [객체 검수 완료]를 눌러주세요.',
-      coachMode: 'GATE',
-      highlightTarget: 'object_gate',
+    final legacySummaryContext =
+        context.totalObjects == 0 &&
+        context.selectedNode == null &&
+        context.workingNodes.isNotEmpty;
+    if (context.objectHumanCompletenessConfirmed || legacySummaryContext) {
+      return const ReviewCoachDecision(
+        coachTarget: 'object_gate',
+        coachMessage: '주요 객체 확인이 끝났어요. [객체 검수 완료]를 눌러 모선 번호 확인으로 넘어가세요.',
+        coachMode: 'GATE',
+        highlightTarget: 'object_gate',
+      );
+    }
+    final selectedId = context.selectedNode?['id']?.toString();
+    return ReviewCoachDecision(
+      coachTarget: 'object_bbox',
+      coachMessage:
+          'AI 1차 검수에서 의심 객체는 발견되지 않았어요. 그래도 최종 확인을 위해 도면의 주요 객체를 한 번 살펴본 뒤 “확인했어”라고 알려주세요.',
+      coachMode: 'GUIDE',
+      highlightTarget: null,
+      focusNodeId: selectedId,
     );
   }
 
   static ReviewCoachDecision _busDecision(PowerLensAssistantContext context) {
+    if (context.busMappingAiReading) {
+      return const ReviewCoachDecision(
+        coachTarget: 'bus_ai_reading',
+        coachMessage: '지금 Lensy가 도면의 모선 번호를 확인하고 있어요. 잠시만 기다려 주세요.',
+        coachMode: 'PROCESSING',
+        highlightTarget: 'bus_ai_reading',
+      );
+    }
     final nodes = context.workingNodes.map(ReviewNodeItem.fromJson).toList();
     final issueIds = BusReviewGateEvaluator.computeGuideBusIds(
       workingNodes: nodes,
@@ -130,6 +153,16 @@ class ReviewCoachPolicy {
         coachMode: 'GUIDE',
         highlightTarget: null,
         focusNodeId: id,
+      );
+    }
+    if (context.busFailureCode != null && context.busFailureCode!.isNotEmpty) {
+      return ReviewCoachDecision(
+        coachTarget: 'bus_bbox',
+        coachMessage:
+            'AI 자동 판독을 완료하지 못했어요. 모선 번호를 직접 확인해 적용하면 다음 미확정 모선으로 이동합니다.',
+        coachMode: 'GUIDE',
+        highlightTarget: null,
+        focusNodeId: context.selectedNode?['id']?.toString(),
       );
     }
     return const ReviewCoachDecision(

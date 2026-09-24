@@ -161,6 +161,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
       case PowerLensAppAction.connectionFullReview:
       case PowerLensAppAction.connectionLinesOnly:
       case PowerLensAppAction.connectionNextLine:
+      case PowerLensAppAction.confirmBusNumber:
+      case PowerLensAppAction.confirmObjectCompleteness:
       case PowerLensAppAction.handoffToCanvas:
         // ReviewPage owns review evidence and its gate state. Returning false
         // lets the visible ReviewPage handler consume these actions while the
@@ -5373,7 +5375,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                     ),
                     const Divider(indent: 8, endIndent: 8, height: 16),
                     GlowingTargetWrapper(
-                      targetId: 'home_upload',
+                      targetId: 'canvas_ai_upload',
                       borderRadius: BorderRadius.circular(10),
                       guideLabel: "✨ 도면 분석",
                       child: _actionPaletteItem(

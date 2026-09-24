@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../powerlens_ai/glowing_target_wrapper.dart';
 
 class PowerLensHomeEmptyState extends StatelessWidget {
   final VoidCallback onStartAnalysis;
@@ -55,7 +56,11 @@ class PowerLensHomeEmptyState extends StatelessWidget {
                       ),
                       borderRadius: BorderRadius.circular(12),
                     ),
-                    child: const Icon(Icons.bolt, color: Colors.amberAccent, size: 24),
+                    child: const Icon(
+                      Icons.bolt,
+                      color: Colors.amberAccent,
+                      size: 24,
+                    ),
                   ),
                   const SizedBox(width: 10),
                   const Column(
@@ -97,50 +102,67 @@ class PowerLensHomeEmptyState extends StatelessWidget {
               const SizedBox(height: 24),
 
               // 1. Primary CTA: [도면 사진으로 시작]
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: isLoading ? null : onPickImage,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF2563EB),
-                    elevation: 3,
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.add_photo_alternate_rounded, size: 22, color: Colors.white),
-                      const SizedBox(width: 10),
-                      Flexible(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Text(
-                              "도면 사진으로 시작",
-                              style: TextStyle(
-                                fontSize: 15.5,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                              ),
-                            ),
-                            Text(
-                              "내 컴퓨터나 스마트폰의 단선도 이미지 파일 선택",
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: Colors.white.withValues(alpha: 0.85),
-                                fontWeight: FontWeight.normal,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ],
-                        ),
+              GlowingTargetWrapper(
+                targetId: 'home_upload',
+                guideLabel: '✨ 가운데 도면 사진으로 시작',
+                borderRadius: BorderRadius.circular(14),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    key: const ValueKey('HomePhotoUploadButton'),
+                    onPressed: isLoading ? null : onPickImage,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF2563EB),
+                      elevation: 3,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 16,
                       ),
-                      const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: Colors.white70),
-                    ],
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(
+                          Icons.add_photo_alternate_rounded,
+                          size: 22,
+                          color: Colors.white,
+                        ),
+                        const SizedBox(width: 10),
+                        Flexible(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Text(
+                                "도면 사진으로 시작",
+                                style: TextStyle(
+                                  fontSize: 15.5,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              Text(
+                                "내 컴퓨터나 스마트폰의 단선도 이미지 파일 선택",
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.white.withValues(alpha: 0.85),
+                                  fontWeight: FontWeight.normal,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
+                        ),
+                        const Icon(
+                          Icons.arrow_forward_ios_rounded,
+                          size: 14,
+                          color: Colors.white70,
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -154,8 +176,14 @@ class PowerLensHomeEmptyState extends StatelessWidget {
                   style: OutlinedButton.styleFrom(
                     foregroundColor: const Color(0xFFD97706),
                     backgroundColor: const Color(0xFFFFFBEB),
-                    side: const BorderSide(color: Color(0xFFFDE68A), width: 1.2),
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+                    side: const BorderSide(
+                      color: Color(0xFFFDE68A),
+                      width: 1.2,
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 14,
+                    ),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(14),
                     ),
@@ -163,7 +191,11 @@ class PowerLensHomeEmptyState extends StatelessWidget {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Icon(Icons.flash_on_rounded, size: 22, color: Color(0xFFD97706)),
+                      const Icon(
+                        Icons.flash_on_rounded,
+                        size: 22,
+                        color: Color(0xFFD97706),
+                      ),
                       const SizedBox(width: 10),
                       Flexible(
                         child: Column(
@@ -190,7 +222,11 @@ class PowerLensHomeEmptyState extends StatelessWidget {
                           ],
                         ),
                       ),
-                      const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: Color(0xFFD97706)),
+                      const Icon(
+                        Icons.arrow_forward_ios_rounded,
+                        size: 14,
+                        color: Color(0xFFD97706),
+                      ),
                     ],
                   ),
                 ),
@@ -201,8 +237,14 @@ class PowerLensHomeEmptyState extends StatelessWidget {
               SizedBox(
                 width: double.infinity,
                 child: TextButton.icon(
-                  onPressed: isLoading ? null : (onDrawManually ?? onStartAnalysis),
-                  icon: const Icon(Icons.edit_road_rounded, size: 18, color: Color(0xFF64748B)),
+                  onPressed: isLoading
+                      ? null
+                      : (onDrawManually ?? onStartAnalysis),
+                  icon: const Icon(
+                    Icons.edit_road_rounded,
+                    size: 18,
+                    color: Color(0xFF64748B),
+                  ),
                   label: const Text(
                     "직접 회로도 그리기 (빈 캔버스 열기)",
                     style: TextStyle(
@@ -223,7 +265,10 @@ class PowerLensHomeEmptyState extends StatelessWidget {
               // Simple 3-step Guide Card
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 12,
+                ),
                 decoration: BoxDecoration(
                   color: const Color(0xFFF8FAFC),
                   borderRadius: BorderRadius.circular(14),
@@ -245,7 +290,11 @@ class PowerLensHomeEmptyState extends StatelessWidget {
                     const SizedBox(height: 6),
                     _guideRow("2", "AI가 객체와 연결 확인", "기호와 선로를 확인하고 번호를 매깁니다."),
                     const SizedBox(height: 6),
-                    _guideRow("3", "확인 후 회로도 생성 & 조류계산", "전압과 전력 조류 흐름을 수치해석합니다."),
+                    _guideRow(
+                      "3",
+                      "확인 후 회로도 생성 & 조류계산",
+                      "전압과 전력 조류 흐름을 수치해석합니다.",
+                    ),
                   ],
                 ),
               ),

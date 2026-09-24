@@ -27,6 +27,7 @@ class ReviewOverlayView extends StatefulWidget {
   final ReviewLineItem? selectedLine;
   final Function(ReviewLineItem)? onSelectLine;
   final Function(String lineId, double dx, double dy)? onLineOffsetChanged;
+  final Set<String> visitedLineIds;
 
   // Manual Object Mode
   final bool isManualAddMode;
@@ -68,6 +69,7 @@ class ReviewOverlayView extends StatefulWidget {
     this.selectedLine,
     this.onSelectLine,
     this.onLineOffsetChanged,
+    this.visitedLineIds = const {},
     this.isManualAddMode = false,
     this.manualAddClass = 'bus',
     this.onManualAddComplete,
@@ -348,6 +350,7 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                               scaleY: scaleY,
                               pulseValue: pulseVal,
                               lineFocusOnly: widget.lineFocusOnly,
+                              visitedLineIds: widget.visitedLineIds,
                             ),
                           ),
                         ),
@@ -564,14 +567,26 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                           node.reviewStatus,
                         );
 
-                        final double labelBaseX =
-                            renderLeft + node.labelOffsetDx;
-                        final double labelBaseY =
-                            renderTop -
-                            (widget.busFocusOnly && isBus && isSelected
-                                ? 20
-                                : 12) +
-                            node.labelOffsetDy;
+                        final bool isBusCallout = isBus;
+                        double labelBaseX = isBusCallout
+                            ? renderLeft + renderW + 8 + node.labelOffsetDx
+                            : renderLeft + node.labelOffsetDx;
+                        double labelBaseY = isBusCallout
+                            ? renderTop + renderH / 2 - 8 + node.labelOffsetDy
+                            : renderTop -
+                                  (widget.busFocusOnly && isBus && isSelected
+                                      ? 20
+                                      : 12) +
+                                  node.labelOffsetDy;
+                        if (isBusCallout && labelBaseX + 112 > renderedW) {
+                          labelBaseX = renderLeft - 112 + node.labelOffsetDx;
+                        }
+                        labelBaseX = labelBaseX
+                            .clamp(2.0, math.max(2.0, renderedW - 112))
+                            .toDouble();
+                        labelBaseY = labelBaseY
+                            .clamp(2.0, math.max(2.0, renderedH - 22))
+                            .toDouble();
 
                         final bool isHumanAdded = node.source.contains(
                           'human_added',
@@ -1142,6 +1157,7 @@ class _ConnectionOverlayPainter extends CustomPainter {
   final double scaleY;
   final double pulseValue;
   final bool lineFocusOnly;
+  final Set<String> visitedLineIds;
 
   _ConnectionOverlayPainter({
     required this.lines,
@@ -1150,6 +1166,7 @@ class _ConnectionOverlayPainter extends CustomPainter {
     required this.scaleY,
     required this.pulseValue,
     this.lineFocusOnly = false,
+    this.visitedLineIds = const {},
   });
 
   @override
@@ -1158,12 +1175,20 @@ class _ConnectionOverlayPainter extends CustomPainter {
       if (line.path.length < 2) continue;
 
       final bool isSelected = selectedLine?.lineId == line.lineId;
+      final bool isVisited =
+          visitedLineIds.contains(line.lineId) && !isSelected;
       final status = line.reviewStatus.toUpperCase();
 
       Color strokeColor;
       double strokeWidth;
 
-      if (ConnectionReviewGateEvaluator.lineHasCriticalIssue(line)) {
+      if (isSelected) {
+        strokeColor = Colors.cyanAccent;
+        strokeWidth = 4.2 + pulseValue * 1.5;
+      } else if (isVisited) {
+        strokeColor = const Color(0xFFF59E0B);
+        strokeWidth = 3.2;
+      } else if (ConnectionReviewGateEvaluator.lineHasCriticalIssue(line)) {
         strokeColor = const Color(0xFFDC2626); // critical electrical error
         strokeWidth = isSelected ? 4.2 + pulseValue * 1.5 : 3.2;
       } else if (ConnectionReviewGateEvaluator.isUnresolvedCrossing(line)) {
@@ -1180,7 +1205,7 @@ class _ConnectionOverlayPainter extends CustomPainter {
         strokeWidth = isSelected ? 4.2 + pulseValue * 1.5 : 2.2;
       }
 
-      if (lineFocusOnly && selectedLine != null && !isSelected) {
+      if (lineFocusOnly && selectedLine != null && !isSelected && !isVisited) {
         strokeColor = Colors.grey.withValues(alpha: 0.18);
         strokeWidth = 1.0;
       }

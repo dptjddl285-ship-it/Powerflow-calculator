@@ -89,14 +89,33 @@ class ObjectInspectorView extends StatelessWidget {
     }
 
     // Determine evidence text
-    final List<String> reasons =
-        node.reviewReasons.where((r) => r.trim().isNotEmpty).toList();
+    final List<String> reasons = node.reviewReasons
+        .where((r) => r.trim().isNotEmpty)
+        .toList();
     final String? explanation =
-        (node.agentExplanation != null && node.agentExplanation!.trim().isNotEmpty)
-            ? node.agentExplanation
-            : null;
-    final bool hasEvidence = reasons.isNotEmpty || explanation != null;
+        (node.agentExplanation != null &&
+            node.agentExplanation!.trim().isNotEmpty)
+        ? node.agentExplanation
+        : null;
+    String evidenceKey(String key) {
+      const labels = {
+        'detector': '검출기',
+        'model': '모델',
+        'validation': '검증',
+        'topology': '토폴로지',
+        'reason': '사유',
+        'source': '출처',
+        'confidence': '신뢰도',
+      };
+      return labels[key.toLowerCase()] ?? key;
+    }
 
+    final evidenceRows = <MapEntry<String, String>>[];
+    for (final entry in {...node.evidence, ...node.metadata}.entries) {
+      final value = entry.value;
+      if (value == null || value.toString().trim().isEmpty) continue;
+      evidenceRows.add(MapEntry(evidenceKey(entry.key), value.toString()));
+    }
     return Column(
       key: const ValueKey('ObjectInspector'),
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -244,19 +263,39 @@ class ObjectInspectorView extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 8),
-              Text(
-                explanation ??
-                    (hasEvidence ? "" : "추가 판정 근거가 기록되지 않았습니다."),
-                style: TextStyle(
-                  color: explanation != null
-                      ? const Color(0xFF1E293B)
-                      : const Color(0xFF94A3B8),
-                  fontSize: 12,
-                  height: 1.4,
-                  fontStyle:
-                      explanation != null ? FontStyle.normal : FontStyle.italic,
+              if (explanation != null)
+                Text(
+                  explanation,
+                  style: const TextStyle(
+                    color: Color(0xFF1E293B),
+                    fontSize: 12,
+                    height: 1.4,
+                  ),
+                )
+              else if (evidenceRows.isNotEmpty)
+                ...evidenceRows.map(
+                  (entry) => Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Text(
+                      '${entry.key}: ${entry.value}',
+                      style: const TextStyle(
+                        color: Color(0xFF334155),
+                        fontSize: 11,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                )
+              else
+                const Text(
+                  "추가 판정 근거가 기록되지 않았습니다.",
+                  style: TextStyle(
+                    color: Color(0xFF94A3B8),
+                    fontSize: 12,
+                    height: 1.4,
+                    fontStyle: FontStyle.italic,
+                  ),
                 ),
-              ),
               if (node.recommendedAction != null) ...[
                 const SizedBox(height: 8),
                 Text(
@@ -308,11 +347,17 @@ class ObjectInspectorView extends StatelessWidget {
                   ),
                   label: Text(
                     isEditExpanded ? "닫기" : "수정",
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
                   ),
                   style: OutlinedButton.styleFrom(
                     foregroundColor: const Color(0xFF2563EB),
-                    side: const BorderSide(color: Color(0xFF3B82F6), width: 1.2),
+                    side: const BorderSide(
+                      color: Color(0xFF3B82F6),
+                      width: 1.2,
+                    ),
                     minimumSize: const Size(0, 40),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(8),
@@ -346,7 +391,9 @@ class ObjectInspectorView extends StatelessWidget {
                   Wrap(
                     spacing: 6,
                     runSpacing: 6,
-                    children: ['bus', 'generator', 'load', 'transformer'].map((cls) {
+                    children: ['bus', 'generator', 'load', 'transformer'].map((
+                      cls,
+                    ) {
                       final isCurrent = node.className.toLowerCase() == cls;
                       return ChoiceChip(
                         label: Text(
@@ -359,7 +406,9 @@ class ObjectInspectorView extends StatelessWidget {
                             onClassChanged!(cls);
                           }
                         },
-                        selectedColor: getClassColor(cls).withValues(alpha: 0.25),
+                        selectedColor: getClassColor(
+                          cls,
+                        ).withValues(alpha: 0.25),
                         backgroundColor: Colors.white,
                         side: BorderSide(
                           color: isCurrent
@@ -382,7 +431,10 @@ class ObjectInspectorView extends StatelessWidget {
                         ),
                         label: const Text(
                           "객체 제외/삭제",
-                          style: TextStyle(fontSize: 11, color: Color(0xFFDC2626)),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Color(0xFFDC2626),
+                          ),
                         ),
                       ),
                     ),
@@ -436,7 +488,9 @@ class ObjectInspectorView extends StatelessWidget {
               Wrap(
                 spacing: 6,
                 runSpacing: 6,
-                children: ['bus', 'generator', 'load', 'transformer'].map((cls) {
+                children: ['bus', 'generator', 'load', 'transformer'].map((
+                  cls,
+                ) {
                   final isCurrent = node.className.toLowerCase() == cls;
                   return ChoiceChip(
                     label: Text(

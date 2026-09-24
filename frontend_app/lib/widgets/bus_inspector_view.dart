@@ -10,6 +10,7 @@ import '../models/review_models.dart';
 class BusInspectorView extends StatefulWidget {
   final ReviewNodeItem node;
   final ValueChanged<int> onApplyNumber;
+  final String? Function(int number)? validateNumber;
   final List<ReviewNodeItem> allBuses;
   final List<ReviewNodeItem> connectedGens;
   final List<ReviewNodeItem> connectedLoads;
@@ -18,6 +19,7 @@ class BusInspectorView extends StatefulWidget {
     super.key,
     required this.node,
     required this.onApplyNumber,
+    this.validateNumber,
     this.allBuses = const [],
     this.connectedGens = const [],
     this.connectedLoads = const [],
@@ -66,6 +68,11 @@ class _BusInspectorViewState extends State<BusInspectorView> {
       });
       return;
     }
+    final validationMessage = widget.validateNumber?.call(num);
+    if (validationMessage != null) {
+      setState(() => _errorMessage = validationMessage);
+      return;
+    }
 
     setState(() {
       _errorMessage = null;
@@ -85,9 +92,13 @@ class _BusInspectorViewState extends State<BusInspectorView> {
         counts[b.busNumber!] = (counts[b.busNumber!] ?? 0) + 1;
       }
     }
-    final isDuplicate = node.busNumber != null && (counts[node.busNumber!] ?? 0) > 1;
-    final hasActiveDupReason = node.busNumberReasons.any((r) => r.startsWith('DUPLICATE_BUS_NUMBER_'));
-    final isUncertain = node.busNumber == null ||
+    final isDuplicate =
+        node.busNumber != null && (counts[node.busNumber!] ?? 0) > 1;
+    final hasActiveDupReason = node.busNumberReasons.any(
+      (r) => r.startsWith('DUPLICATE_BUS_NUMBER_'),
+    );
+    final isUncertain =
+        node.busNumber == null ||
         node.busNumber! <= 0 ||
         node.busNumberStatus == 'UNCERTAIN' ||
         isDuplicate ||
@@ -236,10 +247,7 @@ class _BusInspectorViewState extends State<BusInspectorView> {
                   const SizedBox(height: 4),
                   const Text(
                     "✓ 고유 번호가 확인되어 자동으로 통과되었습니다.",
-                    style: TextStyle(
-                      color: Color(0xFF16A34A),
-                      fontSize: 11,
-                    ),
+                    style: TextStyle(color: Color(0xFF16A34A), fontSize: 11),
                   ),
                 ],
               ),
@@ -303,7 +311,10 @@ class _BusInspectorViewState extends State<BusInspectorView> {
                         ...candidates.map(
                           (c) => ActionChip(
                             visualDensity: VisualDensity.compact,
-                            label: Text("#$c", style: const TextStyle(fontSize: 10.5)),
+                            label: Text(
+                              "#$c",
+                              style: const TextStyle(fontSize: 10.5),
+                            ),
                             backgroundColor: const Color(0xFFEFF6FF),
                             onPressed: () {
                               _controller.text = c.toString();
@@ -331,7 +342,7 @@ class _BusInspectorViewState extends State<BusInspectorView> {
                               fontWeight: FontWeight.bold,
                             ),
                             decoration: InputDecoration(
-                              hintText: "모선 번호 (예: 14)",
+                              hintText: "모선 번호 (1~50, 예: 14)",
                               hintStyle: const TextStyle(
                                 color: Color(0xFF94A3B8),
                                 fontSize: 11,
@@ -370,7 +381,10 @@ class _BusInspectorViewState extends State<BusInspectorView> {
                         const SizedBox(width: 4),
                         TextButton(
                           onPressed: () => setState(() => _isEditing = false),
-                          child: const Text("취소", style: TextStyle(fontSize: 11)),
+                          child: const Text(
+                            "취소",
+                            style: TextStyle(fontSize: 11),
+                          ),
                         ),
                       ],
                     ],
@@ -392,7 +406,8 @@ class _BusInspectorViewState extends State<BusInspectorView> {
           const SizedBox(height: 10),
 
           // 4. Connected Devices Info
-          if (widget.connectedGens.isNotEmpty || widget.connectedLoads.isNotEmpty) ...[
+          if (widget.connectedGens.isNotEmpty ||
+              widget.connectedLoads.isNotEmpty) ...[
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
