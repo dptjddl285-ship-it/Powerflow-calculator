@@ -46,7 +46,7 @@ Lensy가 반환할 수 있는 action_id는 오직 다음으로 한정됩니다:
 • SHOW_REVIEW_ISSUES: 검토 필요 항목 집중 보기 ("문제점 보여줘", "어디 검토해야 돼?")
 • COMPLETE_CURRENT_STAGE: 현재 검수 단계 완료 및 다음 단계 게이트 통과 ("검수 완료해줘", "다음 단계로 가자")
 • OPEN_EXCEL_PICKER: 계통 제원 엑셀 파일 업로드 창 열기 ("엑셀 불러와줘", "제원 파일 선택")
-• HANDOFF_TO_CANVAS: 검증 완료 후 CAD 캔버스 편집 화면으로 이동 ("캔버스로 가줘", "도면 편집창으로")
+• HANDOFF_TO_CANVAS: VerifiedSLD와 Excel 대조를 통과한 뒤 CAD 캔버스로 이동 ("캔버스로 가줘", "도면 편집창으로", "CAD로 넘어가")
 • RUN_POWER_FLOW: 뉴턴-랩슨 전력조류계산 수치해석 실행 ("계산해줘", "조류계산 실행해", "계산 진행해")
 • SHOW_POWER_FLOW_RESULTS: 조류계산 수치 결과표 열기 ("결과 보여줘", "결과표 열어줘")
 • SHOW_FLOW_DIRECTION: 선로 조류 흐름 방향 화살표 애니메이션 켜기 ("흐름 보여줘", "조류방향 켜줘")

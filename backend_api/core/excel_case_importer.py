@@ -85,6 +85,16 @@ class ExcelCaseImporter:
                     'va_deg': va,
                     'max_vm': max_vm,
                     'min_vm': min_vm,
+                    'provided_fields': [
+                        name for name, column in (
+                            ('type', type_col),
+                            ('is_slack', type_col),
+                            ('pload_pu', pload_col),
+                            ('qload_pu', qload_col),
+                            ('vm_pu', vm_col),
+                            ('va_deg', va_col),
+                        ) if column is not None and pd.notna(row[column])
+                    ],
                 }
                 bus_dict[str(b_no)] = bus_info
 
@@ -109,6 +119,13 @@ class ExcelCaseImporter:
                 pg = float(row[pg_col]) if pg_col and pd.notna(row[pg_col]) else 0.0
                 qg = float(row[qg_col]) if qg_col and pd.notna(row[qg_col]) else 0.0
                 vset = float(row[vset_col]) if vset_col and pd.notna(row[vset_col]) else 1.0
+                provided_gen_fields = [
+                    name for name, column in (
+                        ('pg_pu', pg_col),
+                        ('qg_pu', qg_col),
+                        ('voltage_setpoint', vset_col),
+                    ) if column is not None and pd.notna(row[column])
+                ]
 
                 s_b_no = str(b_no)
                 if s_b_no not in gen_by_bus:
@@ -118,8 +135,11 @@ class ExcelCaseImporter:
                         'pg_mw': 0.0,
                         'qg_mvar': 0.0,
                         'voltage_setpoint': vset,
-                        'gen_count': 0
+                        'gen_count': 0,
+                        'provided_fields': set(provided_gen_fields),
                     }
+                else:
+                    gen_by_bus[s_b_no]['provided_fields'].intersection_update(provided_gen_fields)
                 # For slack generator, P and Q are determined by power flow balance, not input constraints
                 if b_no != slack_bus_no:
                     gen_by_bus[s_b_no]['pg_mw'] += pg
@@ -131,6 +151,7 @@ class ExcelCaseImporter:
             for s_b_no, g in gen_by_bus.items():
                 g['pg_pu'] = round(g['pg_mw'] / sbase, 5)
                 g['qg_pu'] = round(g['qg_mvar'] / sbase, 5)
+                g['provided_fields'] = sorted(g['provided_fields'])
 
         # 4. Branch / Line Sheet
         branch_dict = {}
@@ -142,6 +163,7 @@ class ExcelCaseImporter:
                 r_col = next((c for c in df_br.columns if c.strip().lower().startswith('r')), None)
                 x_col = next((c for c in df_br.columns if c.strip().lower().startswith('x')), None)
                 b_col = next((c for c in df_br.columns if c.strip().lower().startswith('b')), None)
+                tap_col = next((c for c in df_br.columns if 'tap' in c.lower() or 'ratio' in c.lower()), None)
 
                 pair_branches = {}
                 for _, row in df_br.iterrows():
@@ -152,30 +174,54 @@ class ExcelCaseImporter:
                         continue
                     r_val = float(row[r_col]) if r_col and pd.notna(row[r_col]) else None
                     x_val = float(row[x_col]) if x_col and pd.notna(row[x_col]) else None
-                    b_val = float(row[b_col]) if b_col and pd.notna(row[b_col]) else 0.0
+                    b_provided = bool(b_col and pd.notna(row[b_col]))
+                    b_val = float(row[b_col]) if b_provided else 0.0
+                    tap_provided = bool(tap_col and pd.notna(row[tap_col]))
+                    tap_val = float(row[tap_col]) if tap_provided else None
                     pair_key = (min(f_b, t_b), max(f_b, t_b))
-                    pair_branches.setdefault(pair_key, []).append({'r': r_val, 'x': x_val, 'b': b_val})
+                    pair_branches.setdefault(pair_key, []).append({
+                        'r': r_val,
+                        'x': x_val,
+                        'b': b_val,
+                        'b_provided': b_provided,
+                        'tap': tap_val,
+                        'tap_provided': tap_provided,
+                    })
 
                 for (fb, tb), c_list in pair_branches.items():
                     has_missing = any(c['r'] is None or c['x'] is None for c in c_list)
                     if has_missing:
-                        r_eq, x_eq, b_eq = None, None, None
+                        r_eq, x_eq = None, None
                     elif len(c_list) == 1:
-                        r_eq, x_eq, b_eq = c_list[0]['r'], c_list[0]['x'], c_list[0]['b']
+                        r_eq, x_eq = c_list[0]['r'], c_list[0]['x']
                     else:
                         if any(abs(c['r']) < 1e-9 and abs(c['x']) < 1e-9 for c in c_list):
-                            r_eq, x_eq, b_eq = 0.0, 0.0, sum(c['b'] for c in c_list)
+                            r_eq, x_eq = 0.0, 0.0
                         else:
                             y_tot = sum(1.0 / complex(c['r'], c['x']) for c in c_list)
                             z_eq = 1.0 / y_tot
                             r_eq = z_eq.real
                             x_eq = z_eq.imag
-                            b_eq = sum(c['b'] for c in c_list)
+                    b_eq = sum(c['b'] for c in c_list) if all(c['b_provided'] for c in c_list) else None
+                    provided_taps = [c['tap'] for c in c_list if c['tap_provided']]
+                    tap_is_consistent = (
+                        len(provided_taps) == len(c_list)
+                        and bool(provided_taps)
+                        and all(abs(value - provided_taps[0]) <= 1e-9 for value in provided_taps)
+                    )
+                    tap_eq = provided_taps[0] if tap_is_consistent else None
 
                     br_info = {
                         'from_bus': fb, 'to_bus': tb,
                         'r_pu': r_eq, 'x_pu': x_eq, 'b_pu': b_eq,
-                        'circuit_count': len(c_list)
+                        'circuit_count': len(c_list),
+                        'tap': tap_eq,
+                        'requires_tap': bool(provided_taps),
+                        'provided_fields': [
+                            name for name, value in (
+                                ('r_pu', r_eq), ('x_pu', x_eq), ('b_pu', b_eq), ('tap', tap_eq),
+                            ) if value is not None
+                        ],
                     }
                     branch_dict[f"{fb}_{tb}"] = br_info
                     branch_dict[f"{tb}_{fb}"] = br_info
@@ -198,10 +244,20 @@ class ExcelCaseImporter:
                         t_b = int(row[to_col])
                     except (ValueError, TypeError):
                         continue
-                    tap = float(row[tap_col]) if tap_col and pd.notna(row[tap_col]) else 1.0
+                    tap_provided = bool(tap_col and pd.notna(row[tap_col]))
+                    tap = float(row[tap_col]) if tap_provided else 1.0
                     r_val = float(row[r_col]) if r_col and pd.notna(row[r_col]) else None
                     x_val = float(row[x_col]) if x_col and pd.notna(row[x_col]) else None
                     b_val = float(row[b_col]) if b_col and pd.notna(row[b_col]) else None
+                    provided_tr_fields = set()
+                    if tap_provided:
+                        provided_tr_fields.add('tap')
+                    if r_val is not None:
+                        provided_tr_fields.add('r_pu')
+                    if x_val is not None:
+                        provided_tr_fields.add('x_pu')
+                    if b_val is not None:
+                        provided_tr_fields.add('b_pu')
 
                     # If r, x, b were not in transformer sheet, look up in branch_dict
                     if r_val is None or x_val is None:
@@ -210,6 +266,13 @@ class ExcelCaseImporter:
                             r_val = br.get('r_pu') if r_val is None else r_val
                             x_val = br.get('x_pu') if x_val is None else x_val
                             b_val = br.get('b_pu', 0.0) if b_val is None else b_val
+                            branch_fields = set(br.get('provided_fields', []))
+                            for field in ('r_pu', 'x_pu', 'b_pu'):
+                                if field in branch_fields:
+                                    provided_tr_fields.add(field)
+                            if 'tap' not in provided_tr_fields and 'tap' in branch_fields:
+                                tap = br.get('tap')
+                                provided_tr_fields.add('tap')
 
                     tr_info = {
                         'from_bus': f_b,
@@ -218,6 +281,7 @@ class ExcelCaseImporter:
                         'r_pu': r_val,
                         'x_pu': x_val,
                         'b_pu': b_val if b_val is not None else 0.0,
+                        'provided_fields': sorted(provided_tr_fields),
                     }
                     trans_dict[f"{f_b}_{t_b}"] = tr_info
                     trans_dict[f"{t_b}_{f_b}"] = tr_info
@@ -234,7 +298,9 @@ class ExcelCaseImporter:
                         try:
                             f_b = int(row[from_col])
                             t_b = int(row[to_col])
-                            tap_val = float(row[tap_col]) if pd.notna(row[tap_col]) else 1.0
+                            if not pd.notna(row[tap_col]):
+                                continue
+                            tap_val = float(row[tap_col])
                         except (ValueError, TypeError):
                             continue
                         if abs(tap_val - 1.0) > 1e-4 and f"{f_b}_{t_b}" not in trans_dict:
@@ -246,6 +312,9 @@ class ExcelCaseImporter:
                                 'r_pu': br.get('r_pu') if br else None,
                                 'x_pu': br.get('x_pu') if br else None,
                                 'b_pu': br.get('b_pu', 0.0) if br else 0.0,
+                                'provided_fields': sorted(
+                                    set(br.get('provided_fields', [])) | {'tap'} if br else {'tap'}
+                                ),
                             }
                             trans_dict[f"{f_b}_{t_b}"] = tr_info
                             trans_dict[f"{t_b}_{f_b}"] = tr_info
@@ -848,6 +917,364 @@ class ExcelCaseImporter:
             'bus_validation_passed': bus_validation_passed,
         }
         return elements, summary
+
+    def apply_verified_sld_to_elements(
+        self,
+        elements: List[Dict[str, Any]],
+        excel_data: Dict[str, Any],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """Bind parsed Excel values using only explicit IDs and bus numbers.
+
+        Unlike the legacy canvas importer this method never creates topology,
+        derives numbers from labels/IDs, or changes element geometry.
+        """
+        from copy import deepcopy
+
+        updated = deepcopy(elements)
+        buses = excel_data.get('buses', {}) or {}
+        generators = excel_data.get('generators', {}) or {}
+        branches = excel_data.get('branches', {}) or {}
+        transformers = excel_data.get('transformers', {}) or {}
+        elements_by_id = {
+            str(element['id']): element
+            for element in updated
+            if isinstance(element, dict) and element.get('id') is not None
+        }
+
+        def element_type(element: Dict[str, Any]) -> str:
+            return str(element.get('type') or '').lower().replace('tool.', '')
+
+        def explicit_bus_number(element: Dict[str, Any]) -> int | None:
+            value = element.get('bus_number')
+            if value is None:
+                value = element.get('connected_bus_number')
+            if value is None:
+                value = element.get('busNumber')
+            try:
+                return int(value) if value is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        def explicit_node_bus_number(element: Dict[str, Any]) -> int | None:
+            value = element.get('bus_number')
+            if value is None:
+                value = element.get('busNumber')
+            try:
+                return int(value) if value is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        bus_number_counts: Dict[int, int] = {}
+        bus_id_to_number: Dict[str, int] = {}
+        for element in updated:
+            if element_type(element) != 'bus':
+                continue
+            bus_number = explicit_node_bus_number(element)
+            if bus_number is None:
+                continue
+            bus_number_counts[bus_number] = bus_number_counts.get(bus_number, 0) + 1
+            if element.get('id') is not None:
+                bus_id_to_number[str(element['id'])] = bus_number
+
+        def unique_bus_number(element: Dict[str, Any]) -> int | None:
+            bus_number = explicit_bus_number(element)
+            if bus_number is None or bus_number_counts.get(bus_number) != 1:
+                return None
+            parent_id = element.get('parentBusId')
+            if parent_id is not None:
+                parent_number = bus_id_to_number.get(str(parent_id))
+                if parent_number is None or parent_number != bus_number:
+                    return None
+            return bus_number
+
+        def record_for_pair(records: Dict[str, Any], first: int, second: int) -> Dict[str, Any] | None:
+            matches = []
+            seen_records = set()
+            for record in records.values():
+                if not isinstance(record, dict):
+                    continue
+                try:
+                    from_bus = int(record.get('from_bus'))
+                    to_bus = int(record.get('to_bus'))
+                except (TypeError, ValueError):
+                    continue
+                if {from_bus, to_bus} == {first, second} and first != second:
+                    signature = (
+                        from_bus,
+                        to_bus,
+                        record.get('r_pu'),
+                        record.get('x_pu'),
+                        record.get('b_pu'),
+                        record.get('tap'),
+                        record.get('requires_tap'),
+                        tuple(sorted(record.get('provided_fields', [])))
+                        if isinstance(record.get('provided_fields'), (list, tuple, set))
+                        else None,
+                    )
+                    if signature not in seen_records:
+                        seen_records.add(signature)
+                        matches.append(record)
+            return matches[0] if len(matches) == 1 else None
+
+        def has_excel_value(record: Dict[str, Any] | None, field: str) -> bool:
+            if not isinstance(record, dict):
+                return False
+            if isinstance(record.get('provided_fields'), (list, tuple, set)):
+                return field in record['provided_fields']
+            return record.get(field) is not None
+
+        missing_parameters_by_id: Dict[str, List[str]] = {}
+
+        def set_missing_parameters(element: Dict[str, Any], fields: List[str]) -> None:
+            if fields:
+                element['parameterStatus'] = 'MISSING'
+                element['parameterMissingFields'] = fields
+                missing_parameters_by_id[str(element.get('id') or '<unknown>')] = fields
+            else:
+                element['parameterStatus'] = 'VALID'
+                element['parameterMissingFields'] = []
+
+        def bind_branch_values(
+            element: Dict[str, Any], record: Dict[str, Any] | None, *, include_tap: bool
+        ) -> bool:
+            required = ['r_pu', 'x_pu', 'b_pu'] + (['tap'] if include_tap else [])
+            missing = [
+                {'r_pu': 'rPu', 'x_pu': 'xPu', 'b_pu': 'bPu', 'tap': 'tapRatio'}[field]
+                for field in required if not has_excel_value(record, field)
+            ]
+            r_value = record.get('r_pu') if has_excel_value(record, 'r_pu') else None
+            x_value = record.get('x_pu') if has_excel_value(record, 'x_pu') else None
+            if has_excel_value(record, 'b_pu'):
+                element['bPu'] = record['b_pu']
+            else:
+                element['bPu'] = None
+            if include_tap:
+                tap = record.get('tap') if has_excel_value(record, 'tap') else None
+                element['tapRatio'] = tap
+                element['tap'] = tap
+                if record:
+                    element['from_bus'] = record.get('from_bus')
+                    element['to_bus'] = record.get('to_bus')
+                    element['tapFromBus'] = record.get('from_bus')
+                    element['tapToBus'] = record.get('to_bus')
+                else:
+                    element['from_bus'] = None
+                    element['to_bus'] = None
+                    element['tapFromBus'] = None
+                    element['tapToBus'] = None
+            element['rPu'] = r_value
+            element['xPu'] = x_value
+            set_missing_parameters(element, missing)
+            if missing:
+                return False
+            return True
+
+        applied = {'bus': 0, 'generator': 0, 'load': 0, 'line': 0, 'transformer': 0}
+        missing_parameter_ids: List[str] = []
+        unresolved_topology_ids: List[str] = []
+        device_counts: Dict[tuple[str, int], int] = {}
+        for element in updated:
+            element_kind = element_type(element)
+            if element_kind in {'generator', 'load'}:
+                bus_number = unique_bus_number(element)
+                if bus_number is not None:
+                    key = (element_kind, bus_number)
+                    device_counts[key] = device_counts.get(key, 0) + 1
+
+        for element in updated:
+            kind = element_type(element)
+            element_id = str(element.get('id') or '<unknown>')
+            if kind == 'bus':
+                bus_number = explicit_node_bus_number(element)
+                if bus_number is None or bus_number_counts.get(bus_number) != 1:
+                    set_missing_parameters(element, ['bus_number'])
+                    unresolved_topology_ids.append(element_id)
+                    missing_parameter_ids.append(element_id)
+                    continue
+                bus_data = buses.get(str(bus_number), buses.get(bus_number))
+                if not isinstance(bus_data, dict):
+                    set_missing_parameters(element, ['bus_data'])
+                    unresolved_topology_ids.append(element_id)
+                    missing_parameter_ids.append(element_id)
+                    continue
+                for source_key, target_key in (
+                    ('is_slack', 'isSlack'),
+                    ('vm_pu', 'vPu'),
+                    ('va_deg', 'thetaDeg'),
+                    ('pload_pu', 'pPu'),
+                    ('qload_pu', 'qPu'),
+                ):
+                    if has_excel_value(bus_data, source_key):
+                        element[target_key] = bus_data[source_key]
+                bus_missing = [
+                    target_key for source_key, target_key in (
+                        ('is_slack', 'isSlack'),
+                        ('type', 'bus_type'),
+                        ('vm_pu', 'vPu'),
+                        ('va_deg', 'thetaDeg'),
+                        ('pload_pu', 'pPu'),
+                        ('qload_pu', 'qPu'),
+                    ) if not has_excel_value(bus_data, source_key)
+                ]
+                set_missing_parameters(element, bus_missing)
+                if bus_missing:
+                    missing_parameter_ids.append(element_id)
+                if has_excel_value(bus_data, 'type') or has_excel_value(bus_data, 'bus_type'):
+                    element['bus_type'] = bus_data.get('type') or bus_data.get('bus_type')
+                if not bus_missing:
+                    applied['bus'] += 1
+
+            elif kind in {'generator', 'load'}:
+                bus_number = unique_bus_number(element)
+                count_key = (kind, bus_number) if bus_number is not None else None
+                if bus_number is None or device_counts.get(count_key, 0) != 1:
+                    set_missing_parameters(element, ['bus_number', 'pPu', 'qPu'])
+                    unresolved_topology_ids.append(element_id)
+                    missing_parameter_ids.append(element_id)
+                    continue
+                if kind == 'generator':
+                    data = generators.get(str(bus_number), generators.get(bus_number))
+                    fields = (('pg_pu', 'pPu'), ('qg_pu', 'qPu'), ('voltage_setpoint', 'vPu'))
+                else:
+                    bus_data = buses.get(str(bus_number), buses.get(bus_number))
+                    data = bus_data if isinstance(bus_data, dict) else None
+                    fields = (('pload_pu', 'pPu'), ('qload_pu', 'qPu'))
+                if not isinstance(data, dict):
+                    set_missing_parameters(element, ['pPu', 'qPu'])
+                    missing_parameter_ids.append(element_id)
+                    continue
+                missing_device_fields = []
+                for source_key, target_key in fields:
+                    if has_excel_value(data, source_key):
+                        element[target_key] = data[source_key]
+                    else:
+                        missing_device_fields.append(target_key)
+                if kind == 'generator' and not has_excel_value(data, 'voltage_setpoint'):
+                    missing_device_fields.append('vPu')
+                elif kind == 'generator':
+                    element['vPu'] = data['voltage_setpoint']
+                if kind == 'generator' and data.get('is_slack') is not None:
+                    element['isSlack'] = bool(data['is_slack'])
+                set_missing_parameters(element, missing_device_fields)
+                if not missing_device_fields:
+                    applied[kind] += 1
+                else:
+                    missing_parameter_ids.append(element_id)
+
+        # Transformer branches are bound from the two exact bus IDs reached by
+        # their verified incident line endpoints. No labels or ID patterns are
+        # considered, and ambiguous degree remains explicitly missing.
+        for element in updated:
+            if element_type(element) != 'transformer':
+                continue
+            element_id = str(element.get('id') or '<unknown>')
+            connected_bus_numbers = []
+            for line in updated:
+                if element_type(line) != 'line':
+                    continue
+                endpoints = [
+                    line.get('startElementId'),
+                    line.get('endElementId'),
+                ]
+                if endpoints[0] is None or endpoints[1] is None:
+                    connected = line.get('connected_to')
+                    if isinstance(connected, list) and len(connected) == 2:
+                        endpoints = connected
+                if element_id not in {str(endpoint) for endpoint in endpoints if endpoint is not None}:
+                    continue
+                other_id = str(endpoints[1] if str(endpoints[0]) == element_id else endpoints[0])
+                other_number = bus_id_to_number.get(other_id)
+                if other_number is not None and bus_number_counts.get(other_number) == 1:
+                    if other_number not in connected_bus_numbers:
+                        connected_bus_numbers.append(other_number)
+            if len(connected_bus_numbers) != 2:
+                bind_branch_values(element, None, include_tap=True)
+                unresolved_topology_ids.append(element_id)
+                missing_parameter_ids.append(element_id)
+                continue
+            record = record_for_pair(transformers, connected_bus_numbers[0], connected_bus_numbers[1])
+            if bind_branch_values(element, record, include_tap=True):
+                applied['transformer'] += 1
+            else:
+                missing_parameter_ids.append(element_id)
+
+        # A verified line is an electrical branch only when its explicit
+        # endpoint IDs name two uniquely numbered buses.
+        for element in updated:
+            if element_type(element) != 'line':
+                continue
+            element_id = str(element.get('id') or '<unknown>')
+            endpoints = [element.get('startElementId'), element.get('endElementId')]
+            if endpoints[0] is None or endpoints[1] is None:
+                connected = element.get('connected_to')
+                if isinstance(connected, list) and len(connected) == 2:
+                    endpoints = connected
+            start_id, end_id = (str(value) if value is not None else None for value in endpoints)
+            start = elements_by_id.get(start_id) if start_id is not None else None
+            end = elements_by_id.get(end_id) if end_id is not None else None
+            if element.get('electricalBranch') is False or not start or not end or \
+                    element_type(start) != 'bus' or element_type(end) != 'bus':
+                element['electricalBranch'] = False
+                element['isEquipmentLead'] = True
+                element['parameterStatus'] = 'NOT_APPLICABLE'
+                continue
+            first = bus_id_to_number.get(start_id)
+            second = bus_id_to_number.get(end_id)
+            if first is None or second is None or first == second or \
+                    bus_number_counts.get(first) != 1 or bus_number_counts.get(second) != 1:
+                element['parameterStatus'] = 'MISSING'
+                element['rPu'] = None
+                element['xPu'] = None
+                element['bPu'] = None
+                unresolved_topology_ids.append(element_id)
+                missing_parameter_ids.append(element_id)
+                continue
+            element['from_bus'] = first
+            element['to_bus'] = second
+            branch_record = record_for_pair(branches, first, second)
+            transformer_record = record_for_pair(transformers, first, second)
+            record = transformer_record or branch_record
+            include_tap = transformer_record is not None or bool(
+                branch_record and branch_record.get('requires_tap')
+            )
+            if not bind_branch_values(element, record, include_tap=include_tap):
+                missing_parameter_ids.append(element_id)
+            else:
+                applied['line'] += 1
+
+        return updated, {
+            'binding_mode': 'verified_sld_strict',
+            'topology_mutated': False,
+            'applied_counts': applied,
+            'missing_parameter_ids': sorted(set(missing_parameter_ids)),
+            'missing_parameters_by_id': missing_parameters_by_id,
+            'unresolved_topology_ids': sorted(set(unresolved_topology_ids)),
+            'power_flow_ready': not missing_parameter_ids and not unresolved_topology_ids,
+        }
+
+    def apply_verified_sld_with_excel(
+        self,
+        elements: List[Dict[str, Any]],
+        excel_data: Dict[str, Any],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Dict[str, Any]]:
+        mismatch_report = self.compare_elements_with_excel(
+            elements,
+            excel_data,
+            structured_bus_numbers_only=True,
+        )
+        if not mismatch_report.get('is_matched'):
+            from copy import deepcopy
+            return deepcopy(elements), {
+                'binding_mode': 'verified_sld_strict',
+                'blocked': True,
+                'topology_mutated': False,
+                'power_flow_ready': False,
+            }, mismatch_report
+
+        updated, summary = self.apply_verified_sld_to_elements(elements, excel_data)
+        summary['blocked'] = False
+        summary['mismatch_report'] = mismatch_report
+        return updated, summary, mismatch_report
 
     def compare_elements_with_excel(
         self,

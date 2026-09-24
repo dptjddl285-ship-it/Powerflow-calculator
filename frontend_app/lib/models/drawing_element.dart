@@ -19,6 +19,7 @@ class DrawingElement {
 
   List<Offset>? aiPath;
   List<Offset>? rawAiPath;
+  List<Offset>? sourceAiPath;
 
   bool showInfo = false;
 
@@ -35,6 +36,12 @@ class DrawingElement {
   String? busType;
   String? source;
   int? busNumber;
+  int? connectedBusNumber;
+  int? fromBus;
+  int? toBus;
+  String? verifiedClass;
+  String? parameterStatus;
+  List<String> parameterMissingFields;
   bool isEquipmentLead = false;
   bool isGenLead = false;
   bool electricalBranch = true;
@@ -82,15 +89,23 @@ class DrawingElement {
     this.infoOffset = const Offset(40, -40),
     this.aiPath,
     this.rawAiPath,
+    this.sourceAiPath,
     this.circuitCount,
     this.busType,
     this.source,
     this.isSynchronousCondenserExplicit,
     this.busNumber,
+    this.connectedBusNumber,
+    this.fromBus,
+    this.toBus,
+    this.verifiedClass,
+    this.parameterStatus,
+    this.parameterMissingFields = const [],
     this.isEquipmentLead = false,
     this.isGenLead = false,
     this.electricalBranch = true,
   }) {
+    parameterMissingFields = List<String>.from(parameterMissingFields);
     if (type == Tool.generator && isSynchronousCondenserExplicit == null) {
       if (label.startsWith("SC_") || label.startsWith("SC ") || label == "SC" || label.contains("동기조상기") || id.startsWith("sc_") || id.startsWith("SC_")) {
         isSynchronousCondenserExplicit = true;
@@ -119,10 +134,17 @@ class DrawingElement {
       infoOffset: infoOffset,
       aiPath: aiPath != null ? List.from(aiPath!) : null,
       rawAiPath: rawAiPath != null ? List.from(rawAiPath!) : null,
+      sourceAiPath: sourceAiPath != null ? List.from(sourceAiPath!) : null,
       circuitCount: circuitCount,
       busType: busType,
       source: source,
       busNumber: busNumber,
+      connectedBusNumber: connectedBusNumber,
+      fromBus: fromBus,
+      toBus: toBus,
+      verifiedClass: verifiedClass,
+      parameterStatus: parameterStatus,
+      parameterMissingFields: List<String>.from(parameterMissingFields),
       isEquipmentLead: isEquipmentLead,
       isGenLead: isGenLead,
       electricalBranch: electricalBranch,
@@ -147,19 +169,25 @@ class DrawingElement {
       'label': label,
       'type': type.name,
       'bus_number': busNumber,
+      'connected_bus_number': connectedBusNumber,
       'parentBusId': parentBusId,
       'startElementId': startElementId,
       'endElementId': endElementId,
       'isSlack': isSlack,
       'isSynchronousCondenser': isSynchronousCondenser,
-      'vPu': vPu,
+      'vPu': _isParameterMissing('vPu') ? null : vPu,
       'thetaDeg': thetaDeg,
-      'pPu': pPu,
-      'qPu': qPu,
-      'rPu': rPu,
-      'xPu': xPu,
-      'bPu': bPu,
-      'tapRatio': tapRatio,
+      'pPu': _isParameterMissing('pPu') ? null : pPu,
+      'qPu': _isParameterMissing('qPu') ? null : qPu,
+      'rPu': _isParameterMissing('rPu') ? null : rPu,
+      'xPu': _isParameterMissing('xPu') ? null : xPu,
+      'bPu': _isParameterMissing('bPu') ? null : bPu,
+      'tapRatio': _isParameterMissing('tapRatio') ? null : tapRatio,
+      'parameterStatus': parameterStatus,
+      'parameterMissingFields': parameterMissingFields,
+      'from_bus': fromBus,
+      'to_bus': toBus,
+      'verifiedClass': verifiedClass,
       'circuitCount': circuitCount,
       'bus_type': busType,
       'source': source,
@@ -168,6 +196,10 @@ class DrawingElement {
       'electricalBranch': electricalBranch,
     };
   }
+
+  bool _isParameterMissing(String field) =>
+      parameterMissingFields.contains(field) ||
+      (parameterStatus == 'MISSING' && parameterMissingFields.isEmpty);
 
   void updateFromJson(Map<String, dynamic> json) {
     if (json.containsKey('label') && json['label'] != null) {
@@ -242,6 +274,27 @@ class DrawingElement {
     if (json.containsKey('endElementId') && json['endElementId'] != null) {
       endElementId = json['endElementId'].toString();
     }
+    if (json.containsKey('from_bus') && json['from_bus'] != null) {
+      fromBus = (json['from_bus'] as num).toInt();
+    } else if (json.containsKey('fromBus') && json['fromBus'] != null) {
+      fromBus = (json['fromBus'] as num).toInt();
+    }
+    if (json.containsKey('to_bus') && json['to_bus'] != null) {
+      toBus = (json['to_bus'] as num).toInt();
+    } else if (json.containsKey('toBus') && json['toBus'] != null) {
+      toBus = (json['toBus'] as num).toInt();
+    }
+    if (json.containsKey('parameterStatus') && json['parameterStatus'] != null) {
+      parameterStatus = json['parameterStatus'].toString();
+    }
+    if (json['parameterMissingFields'] is List) {
+      parameterMissingFields = (json['parameterMissingFields'] as List)
+          .map((field) => field.toString())
+          .toList();
+    }
+    if (json.containsKey('verifiedClass') && json['verifiedClass'] != null) {
+      verifiedClass = json['verifiedClass'].toString();
+    }
     if (json.containsKey('source') && json['source'] != null) {
       source = json['source'].toString();
     }
@@ -249,6 +302,13 @@ class DrawingElement {
       busNumber = (json['bus_number'] as num).toInt();
     } else if (json.containsKey('busNumber') && json['busNumber'] != null) {
       busNumber = (json['busNumber'] as num).toInt();
+    }
+    if (json.containsKey('connected_bus_number') &&
+        json['connected_bus_number'] != null) {
+      connectedBusNumber = (json['connected_bus_number'] as num).toInt();
+    } else if (json.containsKey('connectedBusNumber') &&
+        json['connectedBusNumber'] != null) {
+      connectedBusNumber = (json['connectedBusNumber'] as num).toInt();
     }
     if (json.containsKey('isEquipmentLead') && json['isEquipmentLead'] != null) {
       isEquipmentLead = json['isEquipmentLead'] == true;

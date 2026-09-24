@@ -204,6 +204,179 @@ class TestExcelCaseImporter(unittest.TestCase):
         self.assertEqual(report['stats']['diagram']['buses'], 0)
         self.assertTrue(any(d['type'] == 'unmapped' for d in report['discrepancies']))
 
+    def test_verified_sld_apply_binds_exact_ids_and_preserves_topology(self):
+        elements = [
+            {'id': 'bus-west', 'type': 'bus', 'bus_number': 10, 'label': 'Bus 99', 'position': [1, 2]},
+            {'id': 'bus-east', 'type': 'bus', 'bus_number': 20, 'label': 'Bus 10', 'position': [3, 4]},
+            {
+                'id': 'gen-west', 'type': 'generator', 'bus_number': 10,
+                'connected_bus_number': 10, 'parentBusId': 'bus-west', 'label': 'G 99',
+            },
+            {
+                'id': 'load-east', 'type': 'load', 'bus_number': 20,
+                'connected_bus_number': 20, 'parentBusId': 'bus-east',
+            },
+            {
+                'id': 'edge-west-east', 'type': 'line',
+                'startElementId': 'bus-west', 'endElementId': 'bus-east',
+                'ai_path': [[1, 2], [2, 3], [3, 4]],
+            },
+        ]
+        excel_data = {
+            'buses': {
+                '10': {'type': 'Swing', 'is_slack': True, 'vm_pu': 1.02, 'va_deg': 0.0, 'pload_pu': 0.1, 'qload_pu': 0.02},
+                '20': {'type': 'PQ', 'is_slack': False, 'vm_pu': 1.0, 'va_deg': -2.0, 'pload_pu': 0.3, 'qload_pu': 0.05},
+            },
+            'generators': {
+                '10': {'pg_pu': 0.7, 'qg_pu': 0.12, 'voltage_setpoint': 1.02, 'is_slack': True},
+            },
+            'branches': {
+                '10_20': {'from_bus': 10, 'to_bus': 20, 'r_pu': 0.012, 'x_pu': 0.08, 'b_pu': 0.004},
+                '20_10': {'from_bus': 10, 'to_bus': 20, 'r_pu': 0.012, 'x_pu': 0.08, 'b_pu': 0.004},
+            },
+            'transformers': {},
+        }
+        original = deepcopy(elements)
+
+        updated, summary = self.importer.apply_verified_sld_to_elements(elements, excel_data)
+
+        self.assertEqual([e['id'] for e in updated], [e['id'] for e in original])
+        self.assertEqual(updated[0]['isSlack'], True)
+        self.assertEqual(updated[0]['bus_type'], 'Swing')
+        self.assertEqual(updated[0]['vPu'], 1.02)
+        self.assertEqual(updated[0]['thetaDeg'], 0.0)
+        self.assertEqual(updated[2]['pPu'], 0.7)
+        self.assertEqual(updated[3]['qPu'], 0.05)
+        self.assertEqual(updated[4]['startElementId'], 'bus-west')
+        self.assertEqual(updated[4]['endElementId'], 'bus-east')
+        self.assertEqual(updated[4]['ai_path'], original[4]['ai_path'])
+        self.assertEqual(updated[4]['parameterStatus'], 'VALID')
+        self.assertEqual(updated[4]['rPu'], 0.012)
+        self.assertEqual(updated[4]['xPu'], 0.08)
+        self.assertEqual(updated[4]['bPu'], 0.004)
+        self.assertFalse(summary['topology_mutated'])
+        self.assertTrue(summary['power_flow_ready'])
+        self.assertEqual(summary['applied_counts']['line'], 1)
+        self.assertEqual(elements, original)
+
+    def test_verified_sld_apply_binds_transformer_only_from_two_verified_bus_endpoints(self):
+        elements = [
+            {'id': 'bus-alpha', 'type': 'bus', 'bus_number': 3},
+            {'id': 'bus-beta', 'type': 'bus', 'bus_number': 24},
+            {'id': 'tx-exact-id', 'type': 'transformer', 'label': 'T 88-99'},
+            {
+                'id': 'lead-alpha-tx', 'type': 'line', 'startElementId': 'bus-alpha',
+                'endElementId': 'tx-exact-id', 'electricalBranch': False,
+            },
+            {
+                'id': 'lead-tx-beta', 'type': 'line', 'startElementId': 'tx-exact-id',
+                'endElementId': 'bus-beta', 'electricalBranch': False,
+            },
+        ]
+        excel_data = {
+            'buses': {'3': {}, '24': {}},
+            'generators': {},
+            'branches': {},
+            'transformers': {
+                '3_24': {'from_bus': 3, 'to_bus': 24, 'r_pu': 0.0023, 'x_pu': 0.0839, 'b_pu': 0.0, 'tap': 1.03},
+                '24_3': {'from_bus': 3, 'to_bus': 24, 'r_pu': 0.0023, 'x_pu': 0.0839, 'b_pu': 0.0, 'tap': 1.03},
+            },
+        }
+
+        updated, summary = self.importer.apply_verified_sld_to_elements(elements, excel_data)
+
+        transformer = next(e for e in updated if e['id'] == 'tx-exact-id')
+        self.assertEqual(transformer['from_bus'], 3)
+        self.assertEqual(transformer['to_bus'], 24)
+        self.assertAlmostEqual(transformer['rPu'], 0.0023)
+        self.assertAlmostEqual(transformer['xPu'], 0.0839)
+        self.assertAlmostEqual(transformer['tapRatio'], 1.03)
+        self.assertEqual(transformer['parameterStatus'], 'VALID')
+        self.assertTrue(all(e['parameterStatus'] == 'NOT_APPLICABLE' for e in updated[3:]))
+        self.assertEqual(summary['applied_counts']['transformer'], 1)
+
+    def test_verified_sld_apply_never_infers_numbers_and_marks_missing_parameters(self):
+        elements = [
+            {'id': 'bus_17', 'type': 'bus', 'label': 'Bus 17'},
+            {'id': 'bus_18', 'type': 'bus', 'label': 'Bus 18'},
+            {
+                'id': 'line_17_18', 'type': 'line', 'label': 'Line 17-18',
+                'startElementId': 'bus_17', 'endElementId': 'bus_18',
+                'rPu': 0.01, 'xPu': 0.05,
+            },
+        ]
+        excel_data = {
+            'buses': {'17': {}, '18': {}},
+            'generators': {},
+            'branches': {'17_18': {'from_bus': 17, 'to_bus': 18, 'r_pu': 0.02, 'x_pu': 0.09}},
+            'transformers': {},
+        }
+
+        updated, summary = self.importer.apply_verified_sld_to_elements(elements, excel_data)
+
+        self.assertEqual([e['id'] for e in updated], ['bus_17', 'bus_18', 'line_17_18'])
+        self.assertNotIn('bus_number', updated[0])
+        self.assertEqual(updated[2]['parameterStatus'], 'MISSING')
+        self.assertIsNone(updated[2]['rPu'])
+        self.assertIsNone(updated[2]['xPu'])
+        self.assertIn('line_17_18', summary['missing_parameter_ids'])
+        self.assertEqual(summary['applied_counts']['line'], 0)
+
+    def test_verified_sld_apply_does_not_treat_excel_default_values_as_provided(self):
+        elements = [
+            {'id': 'bus-a', 'type': 'bus', 'bus_number': 1},
+            {'id': 'bus-b', 'type': 'bus', 'bus_number': 2},
+            {
+                'id': 'edge-a-b', 'type': 'line', 'startElementId': 'bus-a',
+                'endElementId': 'bus-b', 'rPu': 0.01, 'xPu': 0.05, 'bPu': 0.0,
+            },
+        ]
+        excel_data = {
+            'buses': {'1': {}, '2': {}},
+            'generators': {},
+            'branches': {
+                '1_2': {
+                    'from_bus': 1, 'to_bus': 2, 'r_pu': 0.02, 'x_pu': 0.08,
+                    'b_pu': 0.0, 'provided_fields': ['r_pu', 'x_pu'],
+                },
+            },
+            'transformers': {},
+        }
+
+        updated, summary = self.importer.apply_verified_sld_to_elements(elements, excel_data)
+
+        line = updated[2]
+        self.assertEqual(line['rPu'], 0.02)
+        self.assertEqual(line['xPu'], 0.08)
+        self.assertIsNone(line['bPu'])
+        self.assertEqual(line['parameterStatus'], 'MISSING')
+        self.assertEqual(line['parameterMissingFields'], ['bPu'])
+        self.assertIn('edge-a-b', summary['missing_parameter_ids'])
+        self.assertFalse(summary['power_flow_ready'])
+
+    def test_verified_sld_excel_mismatch_blocks_normal_handoff_without_repair(self):
+        elements = [
+            {'id': 'node-1', 'type': 'bus', 'bus_number': 1, 'label': 'Bus 1'},
+        ]
+        excel_data = {
+            'buses': {'2': {}},
+            'generators': {},
+            'branches': {},
+            'transformers': {},
+        }
+        original = deepcopy(elements)
+
+        updated, summary, mismatch = self.importer.apply_verified_sld_with_excel(
+            elements,
+            excel_data,
+        )
+
+        self.assertTrue(summary['blocked'])
+        self.assertFalse(summary['topology_mutated'])
+        self.assertFalse(mismatch['is_matched'])
+        self.assertEqual(updated, original)
+        self.assertEqual(elements, original)
+
 if __name__ == '__main__':
     unittest.main()
 

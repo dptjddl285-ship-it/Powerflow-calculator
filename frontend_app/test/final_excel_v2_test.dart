@@ -1,6 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:circuit_solver/models/review_final_contract.dart';
 import 'package:circuit_solver/models/review_models.dart';
+import 'package:circuit_solver/models/powerlens_assistant_context.dart';
+import 'package:circuit_solver/services/powerlens_ai_service.dart';
 
 VerifiedSLD verifiedSld({String status = 'VERIFIED'}) => VerifiedSLD.fromJson({
   'document_id': 'verified-doc',
@@ -12,6 +14,20 @@ VerifiedSLD verifiedSld({String status = 'VERIFIED'}) => VerifiedSLD.fromJson({
 
 void main() {
   group('Final Excel V2 contract', () {
+    test('C8: CAD로 넘어가 resolves to the gated canvas handoff action', () {
+      const context = PowerLensAssistantContext(
+        currentScreen: 'REVIEW_PAGE',
+        workflowStage: 'FINAL',
+        finalVerified: true,
+        excelLoaded: true,
+        excelMappingStatus: 'MATCHED',
+      );
+      expect(
+        PowerLensAIService.instance.resolveIntentActions('CAD로 넘어가', context),
+        [PowerLensAppAction.handoffToCanvas],
+      );
+    });
+
     test('F1: Excel import is available only in verified final phase', () {
       expect(
         ReviewFinalContract.canImportExcel(

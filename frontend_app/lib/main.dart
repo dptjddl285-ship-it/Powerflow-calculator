@@ -12,6 +12,7 @@ import 'package:image_picker/image_picker.dart';
 import 'screens/review_page.dart';
 import 'models/drawing_element.dart';
 import 'models/powerlens_assistant_context.dart';
+import 'models/verified_sld_canvas_mapper.dart';
 import 'services/powerlens_ai_service.dart';
 import 'services/review_api_service.dart';
 import 'widgets/inspector_panel.dart';
@@ -3132,6 +3133,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
   }
 
   void _applyAiDataToCanvas(Map<String, dynamic> aiData) {
+    if (aiData['status'] == 'VERIFIED') {
+      _applyVerifiedSldDataToCanvas(aiData);
+      return;
+    }
     _saveState();
     setState(() {
       elements.clear();
@@ -3486,6 +3491,123 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         _showPostCircuitCreationProposal();
       }
     });
+  }
+
+  Future<void> _applyVerifiedSldDataToCanvas(
+    Map<String, dynamic> verifiedData,
+  ) async {
+    final excelData = verifiedData['excel_data'];
+    if (excelData is! Map<String, dynamic>) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('검증된 Excel 제원이 없어 CAD로 이동할 수 없습니다.')),
+        );
+      }
+      return;
+    }
+
+    final mapping = VerifiedSldCanvasMapper.map(
+      verifiedData,
+      canvasCenter: const Offset(CANVAS_CENTER, CANVAS_CENTER),
+    );
+    if (!mapping.isValid) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('검증된 도면 handoff를 중단했습니다: ${mapping.error}')),
+        );
+      }
+      return;
+    }
+
+    try {
+      final response = await http.post(
+        Uri.parse('http://127.0.0.1:8000/apply_excel_to_elements'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'elements': mapping.elements.map((element) => element.toJson()).toList(),
+          'excel_data': excelData,
+          'verified_sld_apply': true,
+        }),
+      );
+      if (!mounted) return;
+      if (response.statusCode != 200) {
+        throw StateError('Excel strict binding HTTP ${response.statusCode}');
+      }
+      final result = jsonDecode(response.body);
+      if (result is! Map || result['status'] != 'success') {
+        throw StateError('Excel strict binding 응답이 올바르지 않습니다.');
+      }
+      final summary = result['summary'] is Map
+          ? Map<String, dynamic>.from(result['summary'] as Map)
+          : <String, dynamic>{};
+      final mismatch = result['mismatch_report'];
+      if (summary['blocked'] == true) {
+        if (mismatch is Map<String, dynamic>) {
+          _showMismatchDialog(mismatch, Map<String, dynamic>.from(excelData));
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Excel/도면 불일치로 CAD handoff가 차단되었습니다.')),
+          );
+        }
+        return;
+      }
+      final returnedElements = result['elements'];
+      if (returnedElements is! List ||
+          returnedElements.length != mapping.elements.length) {
+        throw StateError('strict binding이 도면 요소 목록을 변경했습니다.');
+      }
+      final mappedById = {for (final element in mapping.elements) element.id: element};
+      final returnedIds = <String>{};
+      for (final raw in returnedElements) {
+        if (raw is! Map) throw StateError('strict binding 요소 응답 형식이 올바르지 않습니다.');
+        final id = raw['id']?.toString();
+        final element = id == null ? null : mappedById[id];
+        if (element == null || !returnedIds.add(id!)) {
+          throw StateError('strict binding이 ID를 추가, 제거 또는 변경했습니다.');
+        }
+        element.updateFromJson(Map<String, dynamic>.from(raw));
+      }
+      if (returnedIds.length != mappedById.length || summary['topology_mutated'] != false) {
+        throw StateError('strict binding이 검증된 토폴로지를 보존하지 않았습니다.');
+      }
+
+      _saveState();
+      setState(() {
+        elements = mapping.elements;
+        selectedElement = null;
+        lastSimulationResult = null;
+        showResultOverlay = false;
+        final branchCount = excelData['total_branches'];
+        excelBranchCount = branchCount is num ? branchCount.toInt() : null;
+        _resetCamera();
+      });
+      isInspectorOpen = true;
+      PowerLensAIService.instance.onStageChanged('FINAL_CAD');
+      final missing = summary['missing_parameter_ids'] as List? ?? const [];
+      if (missing.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('CAD로 이동했습니다. Excel 전기 제원이 누락되어 계산은 차단됩니다: ${missing.join(', ')}'),
+            backgroundColor: Colors.orange.shade800,
+            duration: const Duration(seconds: 6),
+          ),
+        );
+      }
+      Future.delayed(const Duration(milliseconds: 600), () {
+        if (mounted && lastSimulationResult == null) {
+          _showPostCircuitCreationProposal();
+        }
+      });
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Excel 제원 strict binding 실패로 CAD handoff를 중단했습니다: $error'),
+          backgroundColor: Colors.red.shade700,
+          duration: const Duration(seconds: 6),
+        ),
+      );
+    }
   }
 
   void _showPostCircuitCreationProposal() {
@@ -3879,6 +4001,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         (lastSimulationResult != null
             ? (lastSimulationResult!['total_branches'] as num?)?.toInt() ?? 0
             : elements.where(_isActualTransmissionOrTransformerLine).length);
+    final missingExcelParameters = elements
+        .where((element) => element.parameterStatus == 'MISSING')
+        .map((element) => element.label.isNotEmpty ? element.label : element.id)
+        .toList();
     final bool hasElements = elements.isNotEmpty;
     final bool hasResults = lastSimulationResult != null;
     final bool converged = lastSimulationResult?['converged'] == true;
@@ -3914,7 +4040,11 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
       totalBuses: busCount,
       totalConnections: lineCount,
       excelLoaded: excelBranchCount != null && excelBranchCount! > 0,
-      powerflowReady: busCount > 0 && lineCount > 0,
+      powerflowReady: busCount > 0 &&
+          lineCount > 0 &&
+          excelBranchCount != null &&
+          excelBranchCount! > 0 &&
+          missingExcelParameters.isEmpty,
       powerflowRunning: isSimulating,
       powerflowConverged: hasResults ? converged : null,
       selectedElement: selectedElement?.label,
@@ -3926,6 +4056,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           ? ['단선도 도면 불러오기 또는 AI 분석']
           : (excelBranchCount == null || excelBranchCount == 0)
           ? ['엑셀 계통 제원(임피던스, P, Q, V) 연결']
+          : missingExcelParameters.isNotEmpty
+          ? ['Excel 필수 제원 누락: ${missingExcelParameters.join(', ')}']
           : [],
     );
   }

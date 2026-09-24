@@ -165,6 +165,17 @@ async def apply_excel_to_elements(request: Request):
         body = await request.json()
         elements = body.get("elements", [])
         excel_data = body.get("excel_data", {})
+        if body.get("verified_sld_apply") is True:
+            updated_elements, summary, mismatch_report = excel_importer.apply_verified_sld_with_excel(
+                elements,
+                excel_data,
+            )
+            return {
+                "status": "success",
+                "elements": updated_elements,
+                "summary": summary,
+                "mismatch_report": mismatch_report,
+            }
         if body.get("verified_sld_review") is True:
             # Final review is a read-only comparison. The canvas importer may
             # add missing generators/leads, which must never alter or mask the

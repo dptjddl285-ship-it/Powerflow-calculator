@@ -77,19 +77,38 @@ class _InspectorPanelState extends State<InspectorPanel> {
     }
 
     labelCtrl = TextEditingController(text: e.label.isNotEmpty ? e.label : e.id);
-    vCtrl = TextEditingController(text: e.vPu.toString());
+    vCtrl = TextEditingController(
+      text: _isMissingParameter(e, 'vPu') ? '' : e.vPu.toString(),
+    );
 
     final double pVal = useMw ? (e.pPu * widget.sBase) : e.pPu;
     final double qVal = useMw ? (e.qPu * widget.sBase) : e.qPu;
-    pCtrl = TextEditingController(text: _formatNum(pVal));
-    qCtrl = TextEditingController(text: _formatNum(qVal));
+    pCtrl = TextEditingController(
+      text: _isMissingParameter(e, 'pPu') ? '' : _formatNum(pVal),
+    );
+    qCtrl = TextEditingController(
+      text: _isMissingParameter(e, 'qPu') ? '' : _formatNum(qVal),
+    );
 
-    rCtrl = TextEditingController(text: e.rPu.toString());
-    xCtrl = TextEditingController(text: e.xPu.toString());
-    bCtrl = TextEditingController(text: e.bPu.toString());
+    rCtrl = TextEditingController(
+      text: _isMissingParameter(e, 'rPu') ? '' : e.rPu.toString(),
+    );
+    xCtrl = TextEditingController(
+      text: _isMissingParameter(e, 'xPu') ? '' : e.xPu.toString(),
+    );
+    bCtrl = TextEditingController(
+      text: _isMissingParameter(e, 'bPu') ? '' : e.bPu.toString(),
+    );
     thetaCtrl = TextEditingController(text: e.thetaDeg.toString());
-    tapCtrl = TextEditingController(text: e.tapRatio.toString());
+    tapCtrl = TextEditingController(
+      text: _isMissingParameter(e, 'tapRatio') ? '' : e.tapRatio.toString(),
+    );
   }
+
+  bool _isMissingParameter(DrawingElement element, String field) =>
+      element.parameterMissingFields.contains(field) ||
+      (element.parameterStatus == 'MISSING' &&
+          element.parameterMissingFields.isEmpty);
 
   String _formatNum(double v) {
     if (v == v.roundToDouble()) return v.toInt().toString();
@@ -124,16 +143,20 @@ class _InspectorPanelState extends State<InspectorPanel> {
       }
     }
 
-    updateIfDifferent(vCtrl, e.vPu);
+    if (!_isMissingParameter(e, 'vPu')) updateIfDifferent(vCtrl, e.vPu);
     final double pVal = useMw ? (e.pPu * widget.sBase) : e.pPu;
     final double qVal = useMw ? (e.qPu * widget.sBase) : e.qPu;
-    updateIfDifferent(pCtrl, pVal);
-    updateIfDifferent(qCtrl, qVal);
-    updateIfDifferent(rCtrl, e.rPu);
-    updateIfDifferent(xCtrl, e.xPu);
-    updateIfDifferent(bCtrl, e.bPu);
-    updateIfDifferent(thetaCtrl, e.thetaDeg);
-    updateIfDifferent(tapCtrl, e.tapRatio);
+    if (!_isMissingParameter(e, 'pPu')) updateIfDifferent(pCtrl, pVal);
+    if (!_isMissingParameter(e, 'qPu')) updateIfDifferent(qCtrl, qVal);
+    if (!_isMissingParameter(e, 'rPu')) updateIfDifferent(rCtrl, e.rPu);
+    if (!_isMissingParameter(e, 'xPu')) updateIfDifferent(xCtrl, e.xPu);
+    if (!_isMissingParameter(e, 'bPu')) updateIfDifferent(bCtrl, e.bPu);
+    if (!_isMissingParameter(e, 'thetaDeg')) {
+      updateIfDifferent(thetaCtrl, e.thetaDeg);
+    }
+    if (!_isMissingParameter(e, 'tapRatio')) {
+      updateIfDifferent(tapCtrl, e.tapRatio);
+    }
   }
 
   @override
@@ -976,6 +999,29 @@ class _InspectorPanelState extends State<InspectorPanel> {
                     },
                   ),
                 ],
+              ),
+            ),
+          ],
+
+          if (e.parameterStatus == 'MISSING') ...[
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.orange.shade300),
+              ),
+              child: Text(
+                'Excel 원본에 필수 제원이 누락되었습니다'
+                '${e.parameterMissingFields.isEmpty ? '' : ': ${e.parameterMissingFields.join(', ')}'}.'
+                ' 표시용 기본값은 계산 입력으로 사용하지 않습니다.',
+                style: TextStyle(
+                  color: Colors.orange.shade900,
+                  fontSize: 11,
+                  height: 1.35,
+                ),
               ),
             ),
           ],

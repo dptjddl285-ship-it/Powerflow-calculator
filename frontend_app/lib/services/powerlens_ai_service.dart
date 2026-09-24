@@ -559,7 +559,14 @@ class PowerLensAIService extends ChangeNotifier {
           '이선봐',
         ]);
 
-    if (_containsAny(q, const ['캔버스로이동', '캔버스이동', '캔버스편집', '도면편집화면'])) {
+    if (_containsAny(q, const [
+      '캔버스로이동',
+      '캔버스이동',
+      '캔버스편집',
+      '도면편집화면',
+      'cad로넘어가',
+      'cad로이동',
+    ])) {
       return const [PowerLensAppAction.handoffToCanvas];
     }
 
