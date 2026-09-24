@@ -21,6 +21,7 @@ import 'widgets/inspector_panel.dart';
 import 'widgets/home/powerlens_home_empty_state.dart';
 import 'widgets/powerlens_ai/powerlens_ai_button.dart';
 import 'widgets/powerlens_ai/powerlens_ai_panel.dart';
+import 'widgets/powerlens_ai/powerlens_companion_layout.dart';
 import 'widgets/powerlens_ai/glowing_target_wrapper.dart';
 
 // 절대 끊기지 않는 무한 캔버스의 크기 (10만 픽셀)
@@ -79,6 +80,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
   final GlobalKey _powerFlowButtonKey = GlobalKey();
   final GlobalKey _resultButtonKey = GlobalKey();
   Alignment? _manualLensyAlignment;
+  bool _isLensyDragging = false;
   String? _manualLensyTarget;
   Alignment? _measuredLensyAlignment;
   String? _measuredLensyTarget;
@@ -4400,77 +4402,163 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                   Positioned.fill(
                     child: AnimatedBuilder(
                       animation: PowerLensAIService.instance,
-                      builder: (context, _) {
-                        final isMobile =
-                            MediaQuery.of(context).size.width < 768;
-                        final coachTarget = elements.isEmpty
-                            ? 'home_upload'
-                            : (lastSimulationResult == null
-                                  ? 'final_powerflow'
-                                  : 'result_flow');
-                        _scheduleLensyTargetSync(coachTarget);
-                        return AnimatedAlign(
-                          alignment: _effectiveLensyAlignment(
+                      builder: (context, _) => LayoutBuilder(
+                        builder: (context, constraints) {
+                          final viewport = Size(
+                            constraints.maxWidth,
+                            constraints.maxHeight,
+                          );
+                          final isMobile = viewport.width < 768;
+                          final coachTarget = elements.isEmpty
+                              ? 'home_upload'
+                              : (lastSimulationResult == null
+                                    ? 'final_powerflow'
+                                    : 'result_flow');
+                          _scheduleLensyTargetSync(coachTarget);
+                          final speechBubbleText = elements.isEmpty
+                              ? "도면 사진 업로드 버튼을 눌러 시작해볼까요? ⚡"
+                              : (lastSimulationResult == null
+                                    ? "회로도가 완성됐어요. 조류계산을 실행해볼까요? ⚡"
+                                    : "계산이 끝났어요. 결과를 보여드릴게요! 🌊");
+                          if (isMobile) {
+                            return AnimatedAlign(
+                              alignment: _effectiveLensyAlignment(
+                                coachTarget,
+                                isMobile: true,
+                              ),
+                              duration: _isLensyDragging
+                                  ? Duration.zero
+                                  : const Duration(milliseconds: 200),
+                              curve: Curves.easeOutCubic,
+                              child: PowerLensAIFloatingButton(
+                                coachTarget: coachTarget,
+                                onDragDelta: (delta) => _handleLensyDrag(
+                                  delta,
+                                  coachTarget,
+                                  isMobile: true,
+                                ),
+                                onDragStart: _handleLensyDragStart,
+                                onDragEnd: _handleLensyDragEnd,
+                                onResetPosition: _resetLensyPosition,
+                                speechBubbleText: speechBubbleText,
+                                coachMessage: speechBubbleText,
+                                presenceState:
+                                    PowerLensAIService.instance.mascotState,
+                                onPressed: () {
+                                  showModalBottomSheet(
+                                    context: context,
+                                    isScrollControlled: true,
+                                    backgroundColor: Colors.transparent,
+                                    builder: (ctx) => PowerLensAIPanel(
+                                      assistantContext:
+                                          _buildAssistantContext(),
+                                      onClose: () => Navigator.pop(ctx),
+                                      isMobile: true,
+                                    ),
+                                  );
+                                },
+                                isOpen: false,
+                                isMobile: true,
+                              ),
+                            );
+                          }
+
+                          final panelBounds = _lensyPanelBounds(viewport);
+                          final alignment = _effectiveLensyAlignment(
                             coachTarget,
-                            isMobile: isMobile,
-                          ),
-                          duration: const Duration(milliseconds: 650),
-                          curve: Curves.easeInOutCubic,
-                          child: PowerLensAIFloatingButton(
-                            coachTarget: coachTarget,
-                            onDragDelta: (delta) => _handleLensyDrag(
-                              delta,
-                              coachTarget,
-                              isMobile: isMobile,
-                            ),
-                            speechBubbleText: elements.isEmpty
-                                ? "도면 사진 업로드 버튼을 눌러 시작해볼까요? ⚡"
-                                : (lastSimulationResult == null
-                                      ? "회로도가 완성됐어요. 조류계산을 실행해볼까요? ⚡"
-                                      : "계산이 끝났어요. 결과를 보여드릴게요! 🌊"),
-                            coachMessage: elements.isEmpty
-                                ? "도면 사진 업로드 버튼을 눌러 시작해볼까요? ⚡"
-                                : (lastSimulationResult == null
-                                      ? "회로도가 완성됐어요. 조류계산을 실행해볼까요? ⚡"
-                                      : "계산이 끝났어요. 결과를 보여드릴게요! 🌊"),
-                            presenceState:
-                                PowerLensAIService.instance.mascotState,
-                            onPressed: () {
-                              if (isMobile) {
-                                showModalBottomSheet(
-                                  context: context,
-                                  isScrollControlled: true,
-                                  backgroundColor: Colors.transparent,
-                                  builder: (ctx) => PowerLensAIPanel(
-                                    assistantContext: _buildAssistantContext(),
-                                    onClose: () => Navigator.pop(ctx),
-                                    isMobile: true,
-                                  ),
-                                );
-                              } else {
-                                setState(
-                                  () => _isAiPanelOpen = !_isAiPanelOpen,
-                                );
-                              }
-                            },
-                            isOpen: _isAiPanelOpen,
-                            isMobile: isMobile,
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                  if (_isAiPanelOpen &&
-                      MediaQuery.of(context).size.width >= 768)
-                    Positioned(
-                      right: 20,
-                      bottom: 70,
-                      child: PowerLensAIPanel(
-                        assistantContext: _buildAssistantContext(),
-                        onClose: () => setState(() => _isAiPanelOpen = false),
-                        isMobile: false,
+                            isMobile: false,
+                          );
+                          final groupRect =
+                              PowerLensCompanionLayout.groupRect(
+                                viewport: viewport,
+                                robotCenterAlignment: alignment,
+                                panelOpen: _isAiPanelOpen,
+                                panelBounds: panelBounds,
+                              );
+                          return Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              AnimatedPositioned(
+                                left: groupRect.left,
+                                top: groupRect.top,
+                                width: groupRect.width,
+                                height: groupRect.height,
+                                duration: _isLensyDragging
+                                    ? Duration.zero
+                                    : const Duration(milliseconds: 210),
+                                curve: Curves.easeOutCubic,
+                                child: Stack(
+                                  clipBehavior: Clip.none,
+                                  children: [
+                                    if (_isAiPanelOpen)
+                                      Positioned(
+                                        right: 0,
+                                        bottom:
+                                            PowerLensCompanionLayout
+                                                .robotAnchorHeight +
+                                            PowerLensCompanionLayout.panelGap,
+                                        child: PowerLensAIPanel(
+                                          assistantContext:
+                                              _buildAssistantContext(),
+                                          onClose: () =>
+                                              _setLensyPanelOpen(
+                                                false,
+                                                viewport,
+                                              ),
+                                          isMobile: false,
+                                          onCompanionDragDelta: (delta) =>
+                                              _handleLensyDrag(
+                                                delta,
+                                                coachTarget,
+                                                isMobile: false,
+                                              ),
+                                          onCompanionDragStart:
+                                              _handleLensyDragStart,
+                                          onCompanionDragEnd:
+                                              _handleLensyDragEnd,
+                                          onCompanionReset:
+                                              _resetLensyPosition,
+                                          isCompanionMoved:
+                                              _manualLensyAlignment != null,
+                                          desktopMaxSize: panelBounds,
+                                        ),
+                                      ),
+                                    Positioned(
+                                      right: 0,
+                                      bottom: 0,
+                                      child: PowerLensAIFloatingButton(
+                                        coachTarget: coachTarget,
+                                        onDragDelta: (delta) =>
+                                            _handleLensyDrag(
+                                              delta,
+                                              coachTarget,
+                                              isMobile: false,
+                                            ),
+                                        onDragStart: _handleLensyDragStart,
+                                        onDragEnd: _handleLensyDragEnd,
+                                        onResetPosition: _resetLensyPosition,
+                                        speechBubbleText: speechBubbleText,
+                                        coachMessage: speechBubbleText,
+                                        presenceState: PowerLensAIService
+                                            .instance
+                                            .mascotState,
+                                        onPressed: () => _setLensyPanelOpen(
+                                          !_isAiPanelOpen,
+                                          viewport,
+                                        ),
+                                        isOpen: _isAiPanelOpen,
+                                        isMobile: false,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          );
+                        },
                       ),
                     ),
+                  ),
                 ],
               ),
             ),
@@ -4727,14 +4815,104 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
   }
 
   void _handleLensyDrag(Offset delta, String target, {required bool isMobile}) {
-    final size = MediaQuery.of(context).size;
+    final size = _canvasStackKey.currentContext?.size ??
+        MediaQuery.of(context).size;
     final current = _effectiveLensyAlignment(target, isMobile: isMobile);
     double clampAlignment(double value) => value.clamp(-0.94, 0.94).toDouble();
+    if (!isMobile) {
+      final viewport = Size(size.width, size.height);
+      final panelBounds = _lensyPanelBounds(viewport);
+      final currentRect = PowerLensCompanionLayout.groupRect(
+        viewport: viewport,
+        robotCenterAlignment: current,
+        panelOpen: _isAiPanelOpen,
+        panelBounds: panelBounds,
+      );
+      final nextCenter = PowerLensCompanionLayout.robotCenter(currentRect) +
+          delta;
+      final proposed = PowerLensCompanionLayout.groupRect(
+        viewport: viewport,
+        robotCenterAlignment:
+            PowerLensCompanionLayout.alignmentForRobotCenter(
+              nextCenter,
+              viewport,
+            ),
+        panelOpen: _isAiPanelOpen,
+        panelBounds: panelBounds,
+      );
+      setState(() {
+        _manualLensyAlignment =
+            PowerLensCompanionLayout.alignmentForRobotCenter(
+              PowerLensCompanionLayout.robotCenter(proposed),
+              viewport,
+            );
+      });
+      return;
+    }
     setState(() {
       _manualLensyAlignment = Alignment(
         clampAlignment(current.x + delta.dx / math.max(size.width / 2, 1)),
         clampAlignment(current.y + delta.dy / math.max(size.height / 2, 1)),
       );
+    });
+  }
+
+  Size _lensyPanelBounds(Size viewport) {
+    final requestedWidth = (viewport.width * 0.76)
+        .clamp(380.0, 980.0)
+        .toDouble();
+    final width = math.min(
+      requestedWidth,
+      math.max(320.0, viewport.width - 24),
+    );
+    final reservedHeight =
+        PowerLensCompanionLayout.robotAnchorHeight +
+        PowerLensCompanionLayout.panelGap +
+        24;
+    final height = math.min(
+      760.0,
+      math.max(120.0, viewport.height - reservedHeight),
+    );
+    return Size(width, height);
+  }
+
+  void _setLensyPanelOpen(bool isOpen, Size viewport) {
+    final alignment = _effectiveLensyAlignment(
+      elements.isEmpty
+          ? 'home_upload'
+          : (lastSimulationResult == null ? 'final_powerflow' : 'result_flow'),
+      isMobile: false,
+    );
+    final proposed = PowerLensCompanionLayout.groupRect(
+      viewport: viewport,
+      robotCenterAlignment: alignment,
+      panelOpen: isOpen,
+      panelBounds: _lensyPanelBounds(viewport),
+    );
+    final center = PowerLensCompanionLayout.robotCenter(proposed);
+    setState(() {
+      _manualLensyAlignment =
+          PowerLensCompanionLayout.alignmentForRobotCenter(center, viewport);
+      _isAiPanelOpen = isOpen;
+    });
+  }
+
+  void _handleLensyDragStart() {
+    if (!mounted) return;
+    setState(() => _isLensyDragging = true);
+  }
+
+  void _handleLensyDragEnd() {
+    if (!mounted || !_isLensyDragging) return;
+    setState(() => _isLensyDragging = false);
+  }
+
+  void _resetLensyPosition() {
+    if (!mounted) return;
+    PowerLensAIService.instance.resetPanelOffset();
+    setState(() {
+      _manualLensyAlignment = null;
+      _isLensyDragging = false;
     });
   }
 

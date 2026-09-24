@@ -9,12 +9,14 @@ import 'package:flutter/services.dart';
 import '../models/review_models.dart';
 import '../models/review_final_contract.dart';
 import '../models/powerlens_assistant_context.dart';
+import '../models/bus_mapping_feedback.dart';
 import '../services/powerlens_ai_service.dart';
 import '../services/review_api_service.dart';
 import '../widgets/review_overlay.dart';
 import '../widgets/excel_mismatch_dialog.dart';
 import '../widgets/powerlens_ai/powerlens_ai_button.dart';
 import '../widgets/powerlens_ai/powerlens_ai_panel.dart';
+import '../widgets/powerlens_ai/powerlens_companion_layout.dart';
 import '../widgets/powerlens_ai/glowing_target_wrapper.dart';
 import '../widgets/object_inspector_view.dart';
 import '../widgets/bus_inspector_view.dart';
@@ -369,6 +371,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   final GlobalKey _finalExcelUploadKey = GlobalKey();
   final GlobalKey _finalCanvasHandoffKey = GlobalKey();
   Alignment? _manualLensyAlignment;
+  bool _isLensyDragging = false;
+  BusMappingFeedback? _busMappingFeedback;
   String? _stageGateMessage;
 
   String get _reviewLensyPresenceState {
@@ -414,14 +418,115 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     String target, {
     required bool isMobile,
   }) {
-    final size = MediaQuery.of(context).size;
+    final size =
+        _reviewStackKey.currentContext?.size ?? MediaQuery.of(context).size;
     final current = _effectiveReviewLensyAlignment(target, isMobile: isMobile);
     double clampAlignment(double value) => value.clamp(-0.94, 0.94).toDouble();
+    if (!isMobile) {
+      final viewport = Size(size.width, size.height);
+      final panelBounds = _panelBoundsForViewport(viewport);
+      final currentRect = _desktopLensyGroupRect(
+        viewport,
+        current,
+        panelOpen: _isAiPanelOpen,
+        panelBounds: panelBounds,
+      );
+      final nextCenter =
+          PowerLensCompanionLayout.robotCenter(currentRect) + delta;
+      final proposed = PowerLensCompanionLayout.groupRect(
+        viewport: viewport,
+        robotCenterAlignment: PowerLensCompanionLayout.alignmentForRobotCenter(
+          nextCenter,
+          viewport,
+        ),
+        panelOpen: _isAiPanelOpen,
+        panelBounds: panelBounds,
+      );
+      setState(() {
+        _manualLensyAlignment =
+            PowerLensCompanionLayout.alignmentForRobotCenter(
+              PowerLensCompanionLayout.robotCenter(proposed),
+              viewport,
+            );
+      });
+      return;
+    }
     setState(() {
       _manualLensyAlignment = Alignment(
         clampAlignment(current.x + delta.dx / math.max(size.width / 2, 1)),
         clampAlignment(current.y + delta.dy / math.max(size.height / 2, 1)),
       );
+    });
+  }
+
+  Size _panelBoundsForViewport(Size viewport) {
+    final requestedWidth = (viewport.width * 0.76)
+        .clamp(380.0, 980.0)
+        .toDouble();
+    final width = math.min(
+      requestedWidth,
+      math.max(320.0, viewport.width - 24),
+    );
+    final reservedHeight =
+        PowerLensCompanionLayout.robotAnchorHeight +
+        PowerLensCompanionLayout.panelGap +
+        24;
+    final height = math.min(
+      760.0,
+      math.max(120.0, viewport.height - reservedHeight),
+    );
+    return Size(width, height);
+  }
+
+  Rect _desktopLensyGroupRect(
+    Size viewport,
+    Alignment alignment, {
+    required bool panelOpen,
+    required Size panelBounds,
+  }) => PowerLensCompanionLayout.groupRect(
+    viewport: viewport,
+    robotCenterAlignment: alignment,
+    panelOpen: panelOpen,
+    panelBounds: panelBounds,
+  );
+
+  void _setAiPanelOpen(bool isOpen, Size viewport) {
+    final alignment = _effectiveReviewLensyAlignment(
+      _lensyCoachTarget,
+      isMobile: false,
+    );
+    final bounds = _panelBoundsForViewport(viewport);
+    final proposed = _desktopLensyGroupRect(
+      viewport,
+      alignment,
+      panelOpen: isOpen,
+      panelBounds: bounds,
+    );
+    final center = PowerLensCompanionLayout.robotCenter(proposed);
+    setState(() {
+      _manualLensyAlignment = PowerLensCompanionLayout.alignmentForRobotCenter(
+        center,
+        viewport,
+      );
+      _isAiPanelOpen = isOpen;
+    });
+  }
+
+  void _handleReviewLensyDragStart() {
+    if (!mounted) return;
+    setState(() => _isLensyDragging = true);
+  }
+
+  void _handleReviewLensyDragEnd() {
+    if (!mounted || !_isLensyDragging) return;
+    setState(() => _isLensyDragging = false);
+  }
+
+  void _resetReviewLensyPosition() {
+    PowerLensAIService.instance.resetPanelOffset();
+    setState(() {
+      _manualLensyAlignment = null;
+      _isLensyDragging = false;
     });
   }
 
@@ -2434,26 +2539,36 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 ),
               ),
             Positioned.fill(
-              child: Builder(
-                builder: (context) {
-                  final isMobile = MediaQuery.of(context).size.width < 768;
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final viewport = Size(
+                    constraints.maxWidth,
+                    constraints.maxHeight,
+                  );
+                  final isMobile = viewport.width < 768;
                   final coachTarget = _lensyCoachTarget;
-                  return AnimatedAlign(
-                    alignment: _effectiveReviewLensyAlignment(
-                      coachTarget,
-                      isMobile: isMobile,
-                    ),
-                    duration: const Duration(milliseconds: 650),
-                    curve: Curves.easeInOutCubic,
-                    child: PowerLensAIFloatingButton(
-                      coachTarget: coachTarget,
-                      onDragDelta: (delta) => _handleReviewLensyDrag(
-                        delta,
-                        coachTarget,
-                        isMobile: isMobile,
-                      ),
-                      onPressed: () {
-                        if (isMobile) {
+                  final alignment = _effectiveReviewLensyAlignment(
+                    coachTarget,
+                    isMobile: isMobile,
+                  );
+                  if (isMobile) {
+                    return AnimatedAlign(
+                      alignment: alignment,
+                      duration: _isLensyDragging
+                          ? Duration.zero
+                          : const Duration(milliseconds: 200),
+                      curve: Curves.easeOutCubic,
+                      child: PowerLensAIFloatingButton(
+                        coachTarget: coachTarget,
+                        onDragDelta: (delta) => _handleReviewLensyDrag(
+                          delta,
+                          coachTarget,
+                          isMobile: true,
+                        ),
+                        onDragStart: _handleReviewLensyDragStart,
+                        onDragEnd: _handleReviewLensyDragEnd,
+                        onResetPosition: _resetReviewLensyPosition,
+                        onPressed: () {
                           showModalBottomSheet(
                             context: context,
                             isScrollControlled: true,
@@ -2464,33 +2579,101 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                               isMobile: true,
                             ),
                           );
-                        } else {
-                          setState(() => _isAiPanelOpen = !_isAiPanelOpen);
-                        }
-                      },
-                      isOpen: _isAiPanelOpen,
-                      isMobile: isMobile,
-                      presenceState: _reviewLensyPresenceState,
-                      alertCount: _objSuspiciousCount > 0
-                          ? _objSuspiciousCount
-                          : null,
-                      speechBubbleText: _getReviewStageSpeechBubbleText(),
-                      coachMessage: _getReviewStageSpeechBubbleText(),
-                    ),
+                        },
+                        isOpen: false,
+                        isMobile: true,
+                        presenceState: _reviewLensyPresenceState,
+                        alertCount: _objSuspiciousCount > 0
+                            ? _objSuspiciousCount
+                            : null,
+                        speechBubbleText: _getReviewStageSpeechBubbleText(),
+                        coachMessage: _getReviewStageSpeechBubbleText(),
+                      ),
+                    );
+                  }
+
+                  final panelBounds = _panelBoundsForViewport(viewport);
+                  final groupRect = _desktopLensyGroupRect(
+                    viewport,
+                    alignment,
+                    panelOpen: _isAiPanelOpen,
+                    panelBounds: panelBounds,
+                  );
+                  return Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      AnimatedPositioned(
+                        left: groupRect.left,
+                        top: groupRect.top,
+                        width: groupRect.width,
+                        height: groupRect.height,
+                        duration: _isLensyDragging
+                            ? Duration.zero
+                            : const Duration(milliseconds: 210),
+                        curve: Curves.easeOutCubic,
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            if (_isAiPanelOpen)
+                              Positioned(
+                                right: 0,
+                                bottom:
+                                    PowerLensCompanionLayout.robotAnchorHeight +
+                                    PowerLensCompanionLayout.panelGap,
+                                child: PowerLensAIPanel(
+                                  assistantContext: _buildAssistantContext(),
+                                  onClose: () =>
+                                      _setAiPanelOpen(false, viewport),
+                                  isMobile: false,
+                                  onCompanionDragDelta: (delta) =>
+                                      _handleReviewLensyDrag(
+                                        delta,
+                                        coachTarget,
+                                        isMobile: false,
+                                      ),
+                                  onCompanionDragStart:
+                                      _handleReviewLensyDragStart,
+                                  onCompanionDragEnd: _handleReviewLensyDragEnd,
+                                  onCompanionReset: _resetReviewLensyPosition,
+                                  isCompanionMoved:
+                                      _manualLensyAlignment != null,
+                                  desktopMaxSize: panelBounds,
+                                ),
+                              ),
+                            Positioned(
+                              right: 0,
+                              bottom: 0,
+                              child: PowerLensAIFloatingButton(
+                                coachTarget: coachTarget,
+                                onDragDelta: (delta) => _handleReviewLensyDrag(
+                                  delta,
+                                  coachTarget,
+                                  isMobile: false,
+                                ),
+                                onDragStart: _handleReviewLensyDragStart,
+                                onDragEnd: _handleReviewLensyDragEnd,
+                                onResetPosition: _resetReviewLensyPosition,
+                                onPressed: () =>
+                                    _setAiPanelOpen(!_isAiPanelOpen, viewport),
+                                isOpen: _isAiPanelOpen,
+                                isMobile: false,
+                                presenceState: _reviewLensyPresenceState,
+                                alertCount: _objSuspiciousCount > 0
+                                    ? _objSuspiciousCount
+                                    : null,
+                                speechBubbleText:
+                                    _getReviewStageSpeechBubbleText(),
+                                coachMessage: _getReviewStageSpeechBubbleText(),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   );
                 },
               ),
             ),
-            if (_isAiPanelOpen && MediaQuery.of(context).size.width >= 768)
-              Positioned(
-                right: 20,
-                bottom: 130,
-                child: PowerLensAIPanel(
-                  assistantContext: _buildAssistantContext(),
-                  onClose: () => setState(() => _isAiPanelOpen = false),
-                  isMobile: false,
-                ),
-              ),
           ],
         ),
       ),
@@ -6845,7 +7028,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   Future<void> _triggerAiBusLinking() async {
     if (_document == null) return;
-    setState(() => _isLinkingBusNumbers = true);
+    setState(() {
+      _isLinkingBusNumbers = true;
+      _busMappingFeedback = BusMappingFeedback.processing(_busNodes.length);
+    });
     try {
       final res = await _apiService.linkBusNumbers(
         documentId: _document!.documentId,
@@ -6854,6 +7040,43 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       );
       if (res['status'] == 'success' && res['nodes'] is List) {
         final rawNodes = (res['nodes'] as List);
+        final uncertainReasons = rawNodes
+            .whereType<Map>()
+            .where(
+              (raw) =>
+                  raw['bus_number_status']?.toString().toUpperCase() !=
+                  'VERIFIED',
+            )
+            .expand(
+              (raw) => raw['bus_number_reasons'] is List
+                  ? (raw['bus_number_reasons'] as List).map(
+                      (reason) => reason.toString(),
+                    )
+                  : const <String>[],
+            );
+        final report = res['bus_number_report'] is Map
+            ? Map<String, dynamic>.from(res['bus_number_report'] as Map)
+            : <String, dynamic>{};
+        if (report.isEmpty) {
+          final verifiedFallback = rawNodes
+              .whereType<Map>()
+              .where(
+                (raw) =>
+                    raw['bus_number_status']?.toString().toUpperCase() ==
+                    'VERIFIED',
+              )
+              .length;
+          report.addAll({
+            'total_buses': _busNodes.length,
+            'verified_count': verifiedFallback,
+            'uncertain_count': math.max(0, _busNodes.length - verifiedFallback),
+          });
+        }
+        final feedback = BusMappingFeedback.fromReport(
+          report: report,
+          totalFallback: _busNodes.length,
+          uncertainReasons: uncertainReasons,
+        );
         setState(() {
           for (
             int i = 0;
@@ -6885,28 +7108,38 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           } else {
             _busNumberEditController.clear();
           }
+          _busMappingFeedback = feedback;
         });
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("✓ AI가 추가/수정된 모선을 포함한 모든 모선 번호를 도면에서 판독했습니다!"),
-              backgroundColor: Colors.green,
-            ),
-          );
-        }
+        _showBusMappingFeedback(feedback);
+      } else {
+        final feedback = BusMappingFeedback.failed(total: _busNodes.length);
+        setState(() => _busMappingFeedback = feedback);
+        _showBusMappingFeedback(feedback);
       }
-    } catch (e) {
+    } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text("모선 번호 AI 판독 중 알림: $e"),
-            backgroundColor: Colors.orange,
-          ),
-        );
+        final feedback = BusMappingFeedback.failed(total: _busNodes.length);
+        setState(() => _busMappingFeedback = feedback);
+        _showBusMappingFeedback(feedback);
       }
     } finally {
       if (mounted) setState(() => _isLinkingBusNumbers = false);
     }
+  }
+
+  void _showBusMappingFeedback(BusMappingFeedback feedback) {
+    if (!mounted) return;
+    final color = switch (feedback.kind) {
+      BusMappingFeedbackKind.complete => Colors.green,
+      BusMappingFeedbackKind.partial => Colors.orange,
+      BusMappingFeedbackKind.processing => const Color(0xFF2563EB),
+      BusMappingFeedbackKind.unavailable ||
+      BusMappingFeedbackKind.failed ||
+      BusMappingFeedbackKind.noEvidence => const Color(0xFFB45309),
+    };
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(feedback.message), backgroundColor: color),
+    );
   }
 
   void _proceedToBusMappingReview() {
@@ -7169,7 +7402,79 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             ),
           ],
         ),
+        if (_busMappingFeedback case final feedback?) ...[
+          const SizedBox(height: 8),
+          _buildBusMappingFeedbackBanner(feedback),
+        ],
       ],
+    );
+  }
+
+  Widget _buildBusMappingFeedbackBanner(BusMappingFeedback feedback) {
+    final color = switch (feedback.kind) {
+      BusMappingFeedbackKind.complete => const Color(0xFF15803D),
+      BusMappingFeedbackKind.partial => const Color(0xFFB45309),
+      BusMappingFeedbackKind.processing => const Color(0xFF1D4ED8),
+      BusMappingFeedbackKind.unavailable ||
+      BusMappingFeedbackKind.failed ||
+      BusMappingFeedbackKind.noEvidence => const Color(0xFFB91C1C),
+    };
+    final icon = switch (feedback.kind) {
+      BusMappingFeedbackKind.complete => Icons.check_circle_outline,
+      BusMappingFeedbackKind.partial => Icons.rule,
+      BusMappingFeedbackKind.processing => Icons.visibility_outlined,
+      BusMappingFeedbackKind.unavailable => Icons.cloud_off_outlined,
+      BusMappingFeedbackKind.failed => Icons.error_outline,
+      BusMappingFeedbackKind.noEvidence => Icons.search_off,
+    };
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.07),
+        borderRadius: BorderRadius.circular(7),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, size: 15, color: color),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  feedback.message,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              if (feedback.kind != BusMappingFeedbackKind.processing &&
+                  feedback.total > 0)
+                Text(
+                  '${feedback.verified}/${feedback.total}',
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+            ],
+          ),
+          if (feedback.kind == BusMappingFeedbackKind.processing) ...[
+            const SizedBox(height: 7),
+            const LinearProgressIndicator(
+              minHeight: 3,
+              color: Color(0xFF2563EB),
+              backgroundColor: Color(0xFFDBEAFE),
+            ),
+          ],
+        ],
+      ),
     );
   }
 

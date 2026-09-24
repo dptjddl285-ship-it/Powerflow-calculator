@@ -7,12 +7,24 @@ class PowerLensAIPanel extends StatefulWidget {
   final PowerLensAssistantContext assistantContext;
   final VoidCallback onClose;
   final bool isMobile;
+  final ValueChanged<Offset>? onCompanionDragDelta;
+  final VoidCallback? onCompanionDragStart;
+  final VoidCallback? onCompanionDragEnd;
+  final VoidCallback? onCompanionReset;
+  final bool isCompanionMoved;
+  final Size? desktopMaxSize;
 
   const PowerLensAIPanel({
     super.key,
     required this.assistantContext,
     required this.onClose,
     this.isMobile = false,
+    this.onCompanionDragDelta,
+    this.onCompanionDragStart,
+    this.onCompanionDragEnd,
+    this.onCompanionReset,
+    this.isCompanionMoved = false,
+    this.desktopMaxSize,
   });
 
   @override
@@ -127,14 +139,28 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
     final screenSize = MediaQuery.of(context).size;
-    final maxWidth = (screenSize.width * 0.76).clamp(380.0, 980.0).toDouble();
-    final maxHeight = (screenSize.height * 0.84).clamp(520.0, 760.0).toDouble();
+    final requestedMaxWidth = (screenSize.width * 0.76)
+        .clamp(380.0, 980.0)
+        .toDouble();
+    final maxWidth = (widget.desktopMaxSize?.width ?? requestedMaxWidth)
+        .clamp(320.0, requestedMaxWidth)
+        .toDouble();
+    final requestedMaxHeight = (screenSize.height * 0.84)
+        .clamp(220.0, 760.0)
+        .toDouble();
+    final maxHeight = widget.desktopMaxSize == null
+        ? requestedMaxHeight
+        : widget.desktopMaxSize!.height
+              .clamp(120.0, requestedMaxHeight)
+              .toDouble();
+    final minWidth = maxWidth < 320 ? maxWidth : 320.0;
+    final minHeight = maxHeight < 420 ? maxHeight : 420.0;
     final panelWidth = _isMaximized
         ? maxWidth
-        : _panelWidth.clamp(320.0, maxWidth).toDouble();
+        : _panelWidth.clamp(minWidth, maxWidth).toDouble();
     final panelHeight = _isMaximized
         ? maxHeight
-        : _panelHeight.clamp(420.0, maxHeight).toDouble();
+        : _panelHeight.clamp(minHeight, maxHeight).toDouble();
 
     final content = AnimatedBuilder(
       animation: _aiService,
@@ -180,10 +206,10 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: _panelOffset != Offset.zero
+          color: _isCompanionMoved
               ? const Color(0xFF38BDF8).withOpacity(0.6)
               : const Color(0xFFCBD5E1),
-          width: _panelOffset != Offset.zero ? 1.5 : 1,
+          width: _isCompanionMoved ? 1.5 : 1,
         ),
         boxShadow: [
           BoxShadow(
@@ -208,13 +234,20 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
       ),
     );
 
+    if (widget.onCompanionDragDelta != null) return desktopPanel;
     return Transform.translate(
       offset: _isMaximized ? Offset.zero : _panelOffset,
       child: desktopPanel,
     );
   }
 
+  bool get _isCompanionMoved => widget.onCompanionDragDelta != null
+      ? widget.isCompanionMoved
+      : _panelOffset != Offset.zero && !_isMaximized;
+
   Widget _buildResizeHandle(double maxWidth, double maxHeight) {
+    final minWidth = maxWidth < 320 ? maxWidth : 320.0;
+    final minHeight = maxHeight < 420 ? maxHeight : 420.0;
     return MouseRegion(
       cursor: SystemMouseCursors.resizeDownRight,
       child: GestureDetector(
@@ -232,13 +265,13 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
                 (_resizeOriginWidth +
                         details.globalPosition.dx -
                         _resizeOrigin!.dx)
-                    .clamp(320.0, maxWidth)
+                    .clamp(minWidth, maxWidth)
                     .toDouble();
             _panelHeight =
                 (_resizeOriginHeight +
                         details.globalPosition.dy -
                         _resizeOrigin!.dy)
-                    .clamp(420.0, maxHeight)
+                    .clamp(minHeight, maxHeight)
                     .toDouble();
           });
         },
@@ -264,7 +297,21 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
 
   Widget _buildHeader(Size screenSize, double panelWidth, double panelHeight) {
     final bool isGemini = _aiService.geminiStatus == 'CONNECTED';
-    final bool isMoved = _panelOffset != Offset.zero && !_isMaximized;
+    final bool isChecking = _aiService.geminiStatus == 'CHECKING';
+    final bool isFallback = _aiService.geminiStatus == 'LOCAL_FALLBACK';
+    final bool isMoved = _isCompanionMoved;
+    final statusLabel = isGemini
+        ? 'Gemini'
+        : isChecking
+        ? '확인 중'
+        : isFallback
+        ? '로컬 fallback'
+        : '로컬 AI';
+    final statusColor = isGemini
+        ? const Color(0xFF22C55E)
+        : isChecking
+        ? const Color(0xFFF59E0B)
+        : const Color(0xFF38BDF8);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -288,20 +335,37 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
                 onDoubleTap: widget.isMobile
                     ? null
                     : () {
-                        setState(() {
-                          _panelOffset = Offset.zero;
-                          _aiService.resetPanelOffset();
-                        });
+                        if (widget.onCompanionReset != null) {
+                          widget.onCompanionReset!();
+                        } else {
+                          setState(() {
+                            _panelOffset = Offset.zero;
+                            _aiService.resetPanelOffset();
+                          });
+                        }
                       },
+                onPanStart: widget.isMobile
+                    ? null
+                    : (_) => widget.onCompanionDragStart?.call(),
+                onPanEnd: widget.isMobile
+                    ? null
+                    : (_) => widget.onCompanionDragEnd?.call(),
+                onPanCancel: widget.isMobile
+                    ? null
+                    : () => widget.onCompanionDragEnd?.call(),
                 onPanUpdate: widget.isMobile
                     ? null
                     : (details) {
-                        _updatePanelOffset(
-                          details.delta,
-                          screenSize,
-                          panelWidth,
-                          panelHeight,
-                        );
+                        if (widget.onCompanionDragDelta != null) {
+                          widget.onCompanionDragDelta!(details.delta);
+                        } else {
+                          _updatePanelOffset(
+                            details.delta,
+                            screenSize,
+                            panelWidth,
+                            panelHeight,
+                          );
+                        }
                       },
                 child: Row(
                   children: [
@@ -354,52 +418,55 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
                                   letterSpacing: -0.2,
                                 ),
                               ),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 6,
-                                  vertical: 1.5,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: isGemini
-                                      ? const Color(0x3322C55E)
-                                      : const Color(0x3338BDF8),
-                                  borderRadius: BorderRadius.circular(10),
-                                  border: Border.all(
-                                    color: isGemini
-                                        ? const Color(0xFF22C55E)
-                                        : const Color(0xFF38BDF8),
-                                    width: 0.8,
+                              Tooltip(
+                                message: isGemini
+                                    ? 'Gemini provider 연결됨'
+                                          '${_aiService.primaryModel.isEmpty ? '' : ' · ${_aiService.primaryModel}'}'
+                                          '${_aiService.fallbackModel.isEmpty ? '' : ' · 예비 모델 ${_aiService.fallbackModel}'}'
+                                    : _aiService.providerDisplayMode.isNotEmpty
+                                    ? _aiService.providerDisplayMode
+                                    : statusLabel,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 1.5,
                                   ),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Container(
-                                      width: 6,
-                                      height: 6,
-                                      decoration: BoxDecoration(
-                                        color: isGemini
-                                            ? const Color(0xFF22C55E)
-                                            : const Color(0xFF38BDF8),
-                                        shape: BoxShape.circle,
-                                      ),
+                                  decoration: BoxDecoration(
+                                    color: statusColor.withOpacity(0.2),
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(
+                                      color: statusColor,
+                                      width: 0.8,
                                     ),
-                                    const SizedBox(width: 4),
-                                    Flexible(
-                                      child: Text(
-                                        isGemini ? "Gemini" : "로컬 AI",
-                                        style: TextStyle(
-                                          color: isGemini
-                                              ? const Color(0xFF86EFAC)
-                                              : const Color(0xFFBAE6FD),
-                                          fontSize: 9.5,
-                                          fontWeight: FontWeight.bold,
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Container(
+                                        width: 6,
+                                        height: 6,
+                                        decoration: BoxDecoration(
+                                          color: statusColor,
+                                          shape: BoxShape.circle,
                                         ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
                                       ),
-                                    ),
-                                  ],
+                                      const SizedBox(width: 4),
+                                      Flexible(
+                                        child: Text(
+                                          statusLabel,
+                                          style: TextStyle(
+                                            color: isGemini
+                                                ? const Color(0xFF86EFAC)
+                                                : const Color(0xFFBAE6FD),
+                                            fontSize: 9.5,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
                             ],
@@ -434,10 +501,12 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
                 size: 18,
               ),
               tooltip: "원래 위치로 복원",
-              onPressed: () => setState(() {
-                _panelOffset = Offset.zero;
-                _aiService.resetPanelOffset();
-              }),
+              onPressed:
+                  widget.onCompanionReset ??
+                  () => setState(() {
+                    _panelOffset = Offset.zero;
+                    _aiService.resetPanelOffset();
+                  }),
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(),
             ),
@@ -481,6 +550,15 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
   }
 
   void _showApiStatusDialog(BuildContext context, bool isGemini) {
+    final isChecking = _aiService.geminiStatus == 'CHECKING';
+    final isFallback = _aiService.geminiStatus == 'LOCAL_FALLBACK';
+    final statusText = isGemini
+        ? 'Gemini provider 연결됨'
+        : isChecking
+        ? '연결 상태 확인 중'
+        : isFallback
+        ? '로컬 fallback 사용 가능'
+        : '로컬 AI provider';
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -495,7 +573,7 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
             ),
             const SizedBox(width: 8),
             Text(
-              isGemini ? "Gemini AI 연결 상태" : "로컬 도우미 모드 동작 중",
+              isGemini ? "Gemini 연결 설정" : statusText,
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 16,
@@ -509,11 +587,12 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              isGemini
-                  ? "✅ 백엔드를 통해 Google Gemini 모델과 실시간 연결되어 자연스러운 심층 추론 대화를 제공하고 있습니다."
-                  : "⚡ 현재 백엔드 로컬 도우미 모드로 동작 중입니다.\n\n"
-                        "• 도면 이동, 샘플 불러오기, 단계 전환, 조류계산 실행 등 모든 앱 조작 명령은 로컬 규칙으로 100% 정상 작동합니다.\n"
-                        "• 백엔드 .env 파일에 GEMINI_API_KEY를 등록하시면 실시간 생성형 AI 추론 기능이 활성화됩니다.",
+              '$statusText\n'
+              '${_aiService.providerDisplayMode.isEmpty ? '' : '${_aiService.providerDisplayMode}\n'}'
+              '${_aiService.primaryModel.isEmpty ? '' : '주 모델: ${_aiService.primaryModel}\n'}'
+              '${_aiService.fallbackModel.isEmpty ? '' : '예비 모델 설정: ${_aiService.fallbackModel}\n'}'
+              '\nGemini provider 선택 상태와 실제 개별 요청의 성공 여부는 다를 수 있습니다. '
+              '모선 번호 판정 결과는 검수 화면의 확인/확인 필요 건수로 확인하세요.',
               style: const TextStyle(
                 color: Colors.white70,
                 fontSize: 13,

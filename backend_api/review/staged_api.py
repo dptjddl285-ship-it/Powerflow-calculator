@@ -846,11 +846,16 @@ async def review_provider_status():
     """
     try:
         provider = get_assistant_provider()
-        return {
+        response = {
             "status": "ok",
             "provider_mode": provider.provider_name,
             "display_mode": provider.display_mode_name,
         }
+        if provider.provider_name == "gemini":
+            response["primary_model"] = getattr(provider, "primary_model_name", None)
+            response["fallback_model"] = getattr(provider, "fallback_model_name", None)
+            response["fallback_configured"] = bool(response["fallback_model"])
+        return response
     except Exception as exc:
         return {"status": "error", "provider_mode": "local", "message": str(exc)}
 

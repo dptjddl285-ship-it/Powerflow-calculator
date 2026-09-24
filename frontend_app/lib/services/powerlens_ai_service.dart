@@ -115,9 +115,14 @@ class PowerLensAIService extends ChangeNotifier {
     notifyListeners();
   }
 
-  String _geminiStatus =
-      'LOCAL_READY'; // 'CONNECTED' | 'LOCAL_FALLBACK' | 'LOCAL_READY'
+  String _geminiStatus = 'CHECKING';
   String get geminiStatus => _geminiStatus;
+  String _providerDisplayMode = '';
+  String _primaryModel = '';
+  String _fallbackModel = '';
+  String get providerDisplayMode => _providerDisplayMode;
+  String get primaryModel => _primaryModel;
+  String get fallbackModel => _fallbackModel;
 
   /// Target UI element currently sparkling/glowing on screen for user guidance
   final ValueNotifier<String?> activeHighlightTarget = ValueNotifier<String?>(
@@ -331,28 +336,60 @@ class PowerLensAIService extends ChangeNotifier {
       final response = await http
           .get(Uri.parse('$baseUrl/review/provider_status'))
           .timeout(const Duration(seconds: 4));
-      if (response.statusCode != 200) return;
-      final data = jsonDecode(utf8.decode(response.bodyBytes));
-      final providerMode = data is Map
-          ? data['provider_mode']?.toString().toLowerCase()
-          : null;
-      final nextStatus = providerMode == 'gemini' ? 'CONNECTED' : 'LOCAL_READY';
-      if (_geminiStatus != nextStatus) {
-        _geminiStatus = nextStatus;
-        notifyListeners();
+      if (response.statusCode != 200) {
+        setProviderMode('fallback');
+        return;
       }
+      final data = jsonDecode(utf8.decode(response.bodyBytes));
+      final status = data is Map ? data : const <String, dynamic>{};
+      if (status['status'] != 'ok') {
+        setProviderMode('fallback');
+        return;
+      }
+      setProviderMode(
+        status['provider_mode']?.toString(),
+        displayMode: status['display_mode']?.toString(),
+        primaryModel: status['primary_model']?.toString(),
+        fallbackModel: status['fallback_model']?.toString(),
+      );
     } catch (_) {
-      // The companion still works in local mode when the backend is offline.
+      setProviderMode('fallback');
     }
   }
 
-  void setProviderMode(String? providerMode) {
+  void setProviderMode(
+    String? providerMode, {
+    String? displayMode,
+    String? primaryModel,
+    String? fallbackModel,
+  }) {
     final normalized = providerMode?.toLowerCase() ?? '';
-    final nextStatus = normalized.startsWith('gemini')
+    final nextStatus = normalized == 'gemini'
         ? 'CONNECTED'
-        : 'LOCAL_READY';
-    if (_geminiStatus == nextStatus) return;
+        : normalized == 'local'
+        ? 'LOCAL_READY'
+        : 'LOCAL_FALLBACK';
+    final nextDisplayMode =
+        displayMode ??
+        (normalized == 'gemini'
+            ? _providerDisplayMode
+            : normalized == 'local'
+            ? 'Local deterministic'
+            : 'Local fallback');
+    final nextPrimaryModel =
+        primaryModel ?? (normalized == 'gemini' ? _primaryModel : '');
+    final nextFallbackModel =
+        fallbackModel ?? (normalized == 'gemini' ? _fallbackModel : '');
+    if (_geminiStatus == nextStatus &&
+        _providerDisplayMode == nextDisplayMode &&
+        _primaryModel == nextPrimaryModel &&
+        _fallbackModel == nextFallbackModel) {
+      return;
+    }
     _geminiStatus = nextStatus;
+    _providerDisplayMode = nextDisplayMode;
+    _primaryModel = nextPrimaryModel;
+    _fallbackModel = nextFallbackModel;
     notifyListeners();
   }
 
@@ -994,12 +1031,15 @@ class PowerLensAIService extends ChangeNotifier {
         }
 
         final agentStatus = result['agent_status']?.toString() ?? 'PROACTIVE';
-        final providerMode = result['provider_mode']?.toString().toLowerCase();
-        _geminiStatus =
-            (providerMode == 'gemini' ||
-                agentStatus.toUpperCase().contains('GEMINI'))
-            ? 'CONNECTED'
-            : 'LOCAL_READY';
+        final providerMode = result['provider_mode']?.toString();
+        if (providerMode != null) {
+          setProviderMode(
+            providerMode,
+            displayMode: result['display_mode']?.toString(),
+          );
+        } else if (agentStatus.toUpperCase().contains('FALLBACK')) {
+          setProviderMode('fallback');
+        }
 
         final rawActions = result['suggested_actions'];
         final actions = _quickActionsForResponse(rawActions, stage, context);
@@ -1226,12 +1266,15 @@ class PowerLensAIService extends ChangeNotifier {
 
         final agentStatus =
             result['agent_status']?.toString() ?? 'LOCAL_FALLBACK';
-        final providerMode = result['provider_mode']?.toString().toLowerCase();
-        _geminiStatus =
-            providerMode == 'gemini' ||
-                agentStatus.toUpperCase().contains('GEMINI')
-            ? 'CONNECTED'
-            : 'LOCAL_READY';
+        final providerMode = result['provider_mode']?.toString();
+        if (providerMode != null) {
+          setProviderMode(
+            providerMode,
+            displayMode: result['display_mode']?.toString(),
+          );
+        } else if (agentStatus.toUpperCase().contains('FALLBACK')) {
+          setProviderMode('fallback');
+        }
         final rawActions = result['suggested_actions'];
         final actions = _quickActionsForResponse(
           rawActions,

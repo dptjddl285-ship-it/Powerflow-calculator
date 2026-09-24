@@ -5,6 +5,7 @@ import 'package:circuit_solver/models/powerlens_assistant_context.dart';
 import 'package:circuit_solver/models/review_models.dart';
 import 'package:circuit_solver/services/powerlens_ai_service.dart';
 import 'package:circuit_solver/widgets/powerlens_ai/glowing_target_wrapper.dart';
+import 'package:circuit_solver/widgets/powerlens_ai/powerlens_ai_button.dart';
 import 'package:circuit_solver/widgets/powerlens_ai/powerlens_ai_panel.dart';
 
 void main() {
@@ -360,6 +361,88 @@ void main() {
         expect(service.panelOffset, Offset.zero);
       },
     );
+
+    testWidgets(
+      'PowerLensAIPanel delegates drag and reset to the shared companion',
+      (tester) async {
+        service.resetPanelOffset();
+        var dragDelta = Offset.zero;
+        var dragStarts = 0;
+        var dragEnds = 0;
+        var resets = 0;
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: PowerLensAIPanel(
+                  assistantContext: const PowerLensAssistantContext(
+                    currentScreen: 'REVIEW_PAGE',
+                    workflowStage: 'BUS_MAPPING_REVIEW',
+                  ),
+                  onClose: () {},
+                  isMobile: false,
+                  desktopMaxSize: const Size(600, 560),
+                  isCompanionMoved: true,
+                  onCompanionDragDelta: (delta) => dragDelta += delta,
+                  onCompanionDragStart: () => dragStarts++,
+                  onCompanionDragEnd: () => dragEnds++,
+                  onCompanionReset: () => resets++,
+                ),
+              ),
+            ),
+          ),
+        );
+
+        await tester.drag(find.text('Lensy AI'), const Offset(-40, 25));
+        await tester.pumpAndSettle();
+
+        expect(dragDelta.dx, lessThan(0));
+        expect(dragDelta.dy, greaterThan(0));
+        expect(dragStarts, 1);
+        expect(dragEnds, 1);
+        expect(service.panelOffset, Offset.zero);
+        expect(find.byIcon(Icons.restart_alt), findsOneWidget);
+
+        await tester.tap(find.byIcon(Icons.restart_alt));
+        await tester.pump();
+        expect(resets, 1);
+        expect(service.panelOffset, Offset.zero);
+      },
+    );
+
+    testWidgets('Lensy drag emits group position callbacks', (tester) async {
+      var dragDelta = Offset.zero;
+      var dragStarts = 0;
+      var dragEnds = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.bottomRight,
+              child: PowerLensAIFloatingButton(
+                onPressed: () {},
+                onDragDelta: (delta) => dragDelta += delta,
+                onDragStart: () => dragStarts++,
+                onDragEnd: () => dragEnds++,
+                coachMessage: '테스트 안내',
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.drag(
+        find.byType(PowerLensAIFloatingButton),
+        const Offset(35, -18),
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(dragDelta.dx, greaterThan(0));
+      expect(dragDelta.dy, lessThan(0));
+      expect(dragStarts, 1);
+      expect(dragEnds, 1);
+    });
 
     test(
       'Negative issue queries resolve to explainCurrentStage in review stage',
