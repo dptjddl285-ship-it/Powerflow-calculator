@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import abc
 import json
+import math
 import os
 import time
 from typing import Any, Dict, List, Optional
@@ -74,6 +75,36 @@ def _is_connection_review_stage(stage: str) -> bool:
         "CONNECTION",
         "LINE_REVIEW",
     )
+
+
+def _powerflow_evidence_detail(app_context: Optional[Dict[str, Any]]) -> Optional[str]:
+    evidence = (app_context or {}).get("powerflow_evidence")
+    if not isinstance(evidence, dict) or not isinstance(evidence.get("converged"), bool):
+        return None
+
+    state = "수렴" if evidence["converged"] else "미수렴"
+    details = [f"실제 Newton–Raphson 결과: {state}"]
+    iterations = evidence.get("iterations")
+    if isinstance(iterations, (int, float)) and not isinstance(iterations, bool):
+        details.append(f"{iterations}회 반복")
+    mismatch = evidence.get("max_mismatch")
+    if isinstance(mismatch, (int, float)) and not isinstance(mismatch, bool) and math.isfinite(mismatch):
+        details.append(f"최대 mismatch {mismatch}")
+
+    if evidence["converged"]:
+        lowest = evidence.get("lowest_voltage")
+        if isinstance(lowest, dict):
+            bus = lowest.get("bus")
+            voltage = lowest.get("voltage_pu")
+            if isinstance(voltage, (int, float)) and not isinstance(voltage, bool) and math.isfinite(voltage):
+                details.append(f"최저 전압: Bus {bus}, {voltage} pu")
+        flow = evidence.get("largest_absolute_line_flow")
+        if isinstance(flow, dict):
+            from_bus, to_bus = flow.get("from_bus"), flow.get("to_bus")
+            signed_mw = flow.get("p_from_mw")
+            if isinstance(signed_mw, (int, float)) and not isinstance(signed_mw, bool) and math.isfinite(signed_mw):
+                details.append(f"최대 절대 선로 흐름 후보: Bus {from_bus}→{to_bus}, signed P_from {signed_mw} MW")
+    return " · ".join(details)
 
 
 def is_circuit_mutation_request(user_message: str) -> bool:
@@ -776,17 +807,27 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                 "• 상단 파란색 **[조류계산 실행]** 버튼을 클릭하여 뉴턴-랩슨 수치해석을 시작하세요."
             )
 
-        elif stage_upper == "POWERFLOW_RESULT":
-            decision = "PROCEED"
-            target = "result_flow"
-            reply_ko = "뉴턴-랩슨 조류계산이 수렴했습니다! 상단 [수치 결과표]에서 모선 전압과 선로 조류를 확인하세요."
-            summary_text = (
-                "📈 **[조류계산 수렴 완료]**\n\n"
-                "뉴턴-랩슨 조류계산이 성공적으로 수렴했습니다!\n\n"
-                "💡 **확인 방법:**\n"
-                "• 상단 **[수치 결과표]** 버튼을 클릭하여 모선 전압과 선로 조류/손실 표를 확인하세요.\n"
-                "• 도면 위 각 모선/발전기에 표시된 전압(pu)과 위상각(deg)을 살펴보세요."
-            )
+        elif stage_upper in (
+            "POWERFLOW_CONVERGED", "POWERFLOW_NOT_CONVERGED", "POWERFLOW_RESULT", "POWERFLOW"
+        ):
+            evidence = (app_context or {}).get("powerflow_evidence")
+            detail = _powerflow_evidence_detail(app_context)
+            converged = isinstance(evidence, dict) and evidence.get("converged") is True
+            if detail is None:
+                decision = "HUMAN_CHECK"
+                action_mode = "GUIDE"
+                reply_ko = "실제 solver 결과 증거를 확인할 수 없어 수렴 여부나 계통 상태를 판정하지 않습니다."
+                summary_text = "실제 수렴 결과를 확인할 수 없어 계통 상태를 안내할 수 없습니다."
+            elif converged:
+                decision = "PROCEED"
+                target = "result_flow"
+                reply_ko = f"{detail}. 상단 [수치 결과표]에서 실제 solver 결과를 확인하세요."
+                summary_text = f"📈 **[실제 조류계산 결과]**\n\n{detail}\n\n상단 **[수치 결과표]**에서 모선 전압과 선로 조류/손실을 확인하세요."
+            else:
+                decision = "HUMAN_CHECK"
+                action_mode = "GUIDE"
+                reply_ko = f"{detail}. 이 값은 수렴한 운전 결과가 아닙니다. 입력 제원과 계통 연결을 확인한 뒤 다시 실행하세요."
+                summary_text = f"⚠️ **[조류계산 미수렴]**\n\n{detail}\n\n수렴 결과로 취급하지 말고 제원과 연결 상태를 확인하세요."
 
         else:
             decision = "UNKNOWN"
@@ -1176,6 +1217,25 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                 "1. 상단 **[엑셀 가져오기]** 버튼을 눌러 계통 파라미터 엑셀 파일(예: case24_psse.xlsx)을 연결하세요.\n"
                 "2. 엑셀 제원이 연결되면 상단 파란색 **[조류계산 실행]** 버튼을 눌러 수치해석을 진행하세요."
             )
+        elif stage_upper in (
+            "POWERFLOW_CONVERGED", "POWERFLOW_NOT_CONVERGED", "POWERFLOW_RESULT"
+        ) or (
+            stage_upper == "POWERFLOW"
+            and (app_context or {}).get("powerflow_evidence") is not None
+        ):
+            evidence = (app_context or {}).get("powerflow_evidence")
+            detail = _powerflow_evidence_detail(app_context)
+            if detail is None:
+                target = None
+                dec = "HUMAN_CHECK"
+                reply = "실제 solver 결과 증거를 확인할 수 없어 수렴 여부나 계통 상태를 판정하지 않습니다."
+            elif isinstance(evidence, dict) and evidence.get("converged") is True:
+                target = "result_flow"
+                reply = f"{detail}. 상단 [수치 결과표]에서 실제 solver 결과를 확인하세요."
+            else:
+                target = None
+                dec = "HUMAN_CHECK"
+                reply = f"{detail}. 수렴한 운전 결과가 아니므로 입력 제원과 계통 연결을 확인한 뒤 다시 실행하세요."
         elif stage_upper in ("POWERFLOW_READY", "POWERFLOW"):
             target = "final_powerflow"
             reply = (
@@ -1372,6 +1432,26 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
             res["agent_status"] = "LOCAL_CONNECTION_CONTRACT"
             return res
 
+        if (stage or "").upper() in (
+            "POWERFLOW_CONVERGED", "POWERFLOW_NOT_CONVERGED", "POWERFLOW_RESULT"
+        ) or (
+            (stage or "").upper() == "POWERFLOW"
+            and (app_context or {}).get("powerflow_evidence") is not None
+        ):
+            res = LocalReviewAssistantProvider().generate_proactive_summary(
+                document_id=document_id,
+                stage=stage,
+                working_nodes=w_nodes,
+                working_lines=w_lines,
+                missing_candidates=cands,
+                topology_issues=issues,
+                app_context=app_context,
+            )
+            res["provider_mode"] = self.provider_name
+            res["display_mode"] = self.display_mode_name
+            res["agent_status"] = "LOCAL_POWERFLOW_CONTRACT"
+            return res
+
         suspicious_nodes = [
             {
                 "id": n.get("id"),
@@ -1541,10 +1621,35 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
             res["agent_status"] = "LOCAL_CONNECTION_CONTRACT"
             return res
 
+        if (stage or "").upper() in (
+            "POWERFLOW_CONVERGED", "POWERFLOW_NOT_CONVERGED", "POWERFLOW_RESULT"
+        ) or (
+            (stage or "").upper() == "POWERFLOW"
+            and (app_context or {}).get("powerflow_evidence") is not None
+        ):
+            res = LocalReviewAssistantProvider().answer_chat(
+                message=message,
+                document_id=document_id,
+                stage=stage,
+                selected_node=selected_node,
+                selected_line=selected_line,
+                working_nodes=working_nodes,
+                working_lines=working_lines,
+                missing_candidates=missing_candidates,
+                topology_issues=topology_issues,
+                history=history,
+                app_context=app_context,
+            )
+            res["provider_mode"] = self.provider_name
+            res["display_mode"] = self.display_mode_name
+            res["agent_status"] = "LOCAL_POWERFLOW_CONTRACT"
+            return res
+
         system_instruction = (
             f"{POWERLENS_SYSTEM_KNOWLEDGE}\n\n"
             "당신은 Lensy라는 이름의 PowerLens 동반자 에이전트입니다. 전력계통 단선도(SLD) 검수와 조류계산을 처음 쓰는 사람도 쉽게 이해할 수 있게 똑똑하고 친절하게 도와주세요.\n"
             "현재 단계, 선택된 객체/선로, 실제 검출 목록, 토폴로지 이슈와 조류계산 준비 상태를 근거로 정확히 판단하고, 엉뚱한 추측을 하지 마세요.\n\n"
+            "조류계산 설명은 runtime_app_context.powerflow_evidence의 실제 Newton-Raphson 결과만 사용하세요. converged가 true일 때만 정상 수렴이라고 말하고, false이면 반복 횟수와 최대 mismatch를 근거로 미수렴임을 분명히 하세요. solver 수치를 새로 계산하거나 보간하지 마세요. 명시된 운영 threshold가 없으면 저전압 오류/과부하/위험 판정을 하지 말고, 최저 전압과 최대 MW 흐름은 사실값으로만 표현하세요.\n"
             "반드시 Canonical Agent Response Contract JSON 형식으로만 응답해야 합니다.\n"
             "1. 질문 의도가 위치/방법('어디야?', '어떻게 해?', '뭐 눌러?')이면 action_mode: 'GUIDE', highlight_target 설정.\n"
             "2. 명시적 안전 실행 요청('계산해줘', '결과 보여줘', '홈으로 가줘')이면 action_mode: 'EXECUTE', action_id 설정.\n"
@@ -1588,6 +1693,7 @@ class GeminiReviewAssistantProvider(ReviewAssistantProvider):
                 "excel_loaded": (app_context or {}).get("excel_loaded"),
                 "powerflow_ready": (app_context or {}).get("powerflow_ready"),
                 "powerflow_converged": (app_context or {}).get("powerflow_converged"),
+                "powerflow_evidence": (app_context or {}).get("powerflow_evidence"),
             },
         }
 

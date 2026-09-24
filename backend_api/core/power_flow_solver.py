@@ -255,6 +255,10 @@ class PowerFlowSolver:
                 start_id = str(el.get("startElementId") or el.get("start_element_id") or "")
                 end_id = str(el.get("endElementId") or el.get("end_element_id") or "")
                 conns = [str(c) for c in (el.get("connected_to") or [])]
+                if not start_id and conns:
+                    start_id = conns[0]
+                if not end_id and len(conns) > 1:
+                    end_id = conns[1]
                 label = str(el.get("label", ""))
 
                 # Skip feeder / lead lines wired to transformers, generators, or loads
@@ -270,29 +274,47 @@ class PowerFlowSolver:
                     continue
                 if start_id in load_ids or end_id in load_ids:
                     continue
-                if "lead" in str(el.get("id", "")).lower() or "↔" in label:
+                if "lead" in str(el.get("id", "")).lower() or re.search(
+                    r"(?:↔|->)\s*(?:G_|Load_)", label, re.IGNORECASE
+                ):
                     continue
 
                 fb = None
                 tb = None
 
-                # 1. Try resolving from label format (e.g. "Line 1-2", "1_2", "1-2")
-                if label and "↔" not in label:
-                    match = re.search(r'(\d+)\s*[-~_]\s*(\d+)', label)
+                # 1. Prefer structured bus endpoints when supplied.
+                fb_raw = el.get("from_bus") if el.get("from_bus") is not None else el.get("fromBus")
+                tb_raw = el.get("to_bus") if el.get("to_bus") is not None else el.get("toBus")
+                if fb_raw is not None or tb_raw is not None:
+                    try:
+                        cand_f = int(fb_raw) if fb_raw is not None else None
+                        cand_t = int(tb_raw) if tb_raw is not None else None
+                    except (TypeError, ValueError):
+                        cand_f = cand_t = None
+                    if cand_f not in buses or cand_t not in buses or cand_f == cand_t:
+                        validation_errors.append(
+                            f"Line {el.get('id') or label or 'branch'} has invalid structured bus endpoints."
+                        )
+                        continue
+                    fb, tb = cand_f, cand_t
+
+                # 2. Try resolving from label format (e.g. "Line 1-2", "1_2", "1↔2")
+                if (fb is None or tb is None) and label:
+                    match = re.search(r'(\d+)\s*[-~_↔]\s*(\d+)', label)
                     if match:
                         cand_f = int(match.group(1))
                         cand_t = int(match.group(2))
                         if cand_f in buses and cand_t in buses:
                             fb, tb = cand_f, cand_t
 
-                # 2. Try resolving from connected element IDs
+                # 3. Try resolving from connected element IDs
                 if fb is None or tb is None:
                     if start_id in el_id_to_bus:
                         fb = el_id_to_bus[start_id]
                     if end_id in el_id_to_bus:
                         tb = el_id_to_bus[end_id]
 
-                # 3. Fallback: Parse digits directly from start/end IDs
+                # 4. Fallback: Parse digits directly from start/end IDs
                 if fb is None or tb is None:
                     if start_id and end_id:
                         cand_f = self._extract_bus_number("", start_id)
@@ -300,7 +322,7 @@ class PowerFlowSolver:
                         if cand_f in buses and cand_t in buses:
                             fb, tb = cand_f, cand_t
 
-                # 4. Fallback: Parse digits from element ID (e.g. "line_1_2")
+                # 5. Fallback: Parse digits from element ID (e.g. "line_1_2")
                 if fb is None or tb is None:
                     el_id = str(el.get("id", ""))
                     match = re.search(r'^(?:line|branch)[-_](\d+)[-_](\d+)', el_id, re.IGNORECASE)
@@ -313,6 +335,9 @@ class PowerFlowSolver:
                             fb, tb = cand_f, cand_t
 
                 if fb is None or tb is None or fb == tb:
+                    validation_errors.append(
+                        f"Line {el.get('id') or label or 'branch'} does not connect two distinct valid buses."
+                    )
                     continue
 
                 param_status = str(el.get("parameterStatus") or el.get("parameter_status") or "").upper()
@@ -356,6 +381,7 @@ class PowerFlowSolver:
                     "x_pu": x_pu,
                     "b_pu": b_pu,
                     "tap": tap,
+                    "element_id": str(el.get("id", "")),
                     "label": label or f"Line {fb}-{tb}",
                 })
 
@@ -367,15 +393,31 @@ class PowerFlowSolver:
                 el_id = str(el.get("id", ""))
                 label = str(el.get("label", ""))
 
-                # Check explicit from_bus / to_bus / tapFromBus
-                fb = el.get("from_bus") or el.get("fromBus") or el.get("tapFromBus") or el.get("tap_from_bus")
-                tb = el.get("to_bus") or el.get("toBus") or el.get("tapToBus") or el.get("tap_to_bus")
-                if fb is not None and tb is not None and int(fb) in buses and int(tb) in buses and int(fb) != int(tb):
-                    fb = int(fb)
-                    tb = int(tb)
-                else:
-                    fb = None
-                    tb = None
+                fb_raw = el.get("from_bus") if el.get("from_bus") is not None else el.get("fromBus")
+                tb_raw = el.get("to_bus") if el.get("to_bus") is not None else el.get("toBus")
+                if fb_raw is None and tb_raw is None:
+                    tap_from = el.get("tapFromBus") if el.get("tapFromBus") is not None else el.get("tap_from_bus")
+                    tap_to = el.get("tapToBus") if el.get("tapToBus") is not None else el.get("tap_to_bus")
+                    if tap_from is not None and tap_to is not None:
+                        fb_raw, tb_raw = tap_from, tap_to
+
+                fb = tb = None
+                if fb_raw is not None or tb_raw is not None:
+                    try:
+                        candidate_from = int(fb_raw) if fb_raw is not None else None
+                        candidate_to = int(tb_raw) if tb_raw is not None else None
+                    except (TypeError, ValueError):
+                        candidate_from = candidate_to = None
+                    if (
+                        candidate_from not in buses
+                        or candidate_to not in buses
+                        or candidate_from == candidate_to
+                    ):
+                        validation_errors.append(
+                            f"Transformer {el_id or label or 'branch'} has invalid structured bus endpoints."
+                        )
+                        continue
+                    fb, tb = candidate_from, candidate_to
 
                 # If not explicit, trace connected buses via lead lines or direct endpoints
                 if fb is None or tb is None:
@@ -419,6 +461,9 @@ class PowerFlowSolver:
                                 fb, tb = c1, c2
 
                 if fb is None or tb is None or fb == tb:
+                    validation_errors.append(
+                        f"Transformer {el_id or label or 'branch'} does not connect two distinct valid buses."
+                    )
                     continue
 
                 param_status = str(el.get("parameterStatus") or el.get("parameter_status") or "").upper()
@@ -473,6 +518,7 @@ class PowerFlowSolver:
                     "b_pu": b_pu,
                     "tap": tap,
                     "is_transformer": True,
+                    "element_id": el_id,
                     "label": label or f"T {fb}-{tb} (Tap: {tap})",
                 })
 

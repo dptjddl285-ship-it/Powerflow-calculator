@@ -14,6 +14,7 @@ from pathlib import Path
 import core.env_loader
 
 try:
+    from core.power_flow_readiness import evaluate_power_flow_readiness
     from agent_tools.vision_tools import configure_review_tools
     from core.power_logic import construct_y_bus
     from core.adaptive_vision_pipeline import analyze_circuit_image_adaptive
@@ -243,13 +244,31 @@ async def run_simulation(request: Request):
     try:
         data = await request.json()
         elements = data.get("elements", [])
+        s_base = data.get("s_base_mva", power_flow_solver.s_base)
         print(f"\n⚡ [조류계산 요청] {len(elements)}개의 부품 데이터를 수신하여 계산을 시작합니다.")
 
-        result = power_flow_solver.solve(elements)
+        readiness = evaluate_power_flow_readiness(elements, s_base=s_base)
+        if not readiness["ready"]:
+            last_simulation_result = None
+            return {
+                "status": "error",
+                "ready": False,
+                "blockers": readiness["blockers"],
+                "message": "조류계산 준비가 완료되지 않았습니다: " + " ".join(readiness["blockers"]),
+            }
+
+        last_simulation_result = None
+        solver = PowerFlowSolver(
+            s_base=float(s_base),
+            tol=power_flow_solver.tol,
+            max_iter=power_flow_solver.max_iter,
+        )
+        result = solver.solve(elements)
         if result.get("status") == "error":
             print(f"⚠️ 조류계산 실패: {result.get('message')}")
             return result
 
+        result["s_base_mva"] = float(s_base)
         last_simulation_result = result
 
         converged = result.get("converged", False)

@@ -550,14 +550,7 @@ class PowerLensAIService extends ChangeNotifier {
     // but are intentionally not emitted by the active semantic router.
     final asksForSequentialConnection =
         isConnectionReview &&
-        _containsAny(q, const [
-          '다음선',
-          '다음선로',
-          '다음거',
-          '하나씩볼',
-          '한선씩',
-          '이선봐',
-        ]);
+        _containsAny(q, const ['다음선', '다음선로', '다음거', '하나씩볼', '한선씩', '이선봐']);
 
     if (_containsAny(q, const [
       '캔버스로이동',
@@ -877,8 +870,12 @@ class PowerLensAIService extends ChangeNotifier {
     String? proactiveText;
     if (stage == 'EXCEL_LOADED') {
       proactiveText = "제원이 연결되었습니다. 조류계산을 실행할 수 있습니다.";
-    } else if (stage == 'POWERFLOW_CONVERGED') {
-      proactiveText = "계산이 수렴했습니다. 결과를 같이 살펴볼까요?";
+    } else if (stage == 'POWERFLOW_CONVERGED' ||
+        stage == 'POWERFLOW_NOT_CONVERGED' ||
+        stage == 'POWERFLOW_RESULT') {
+      proactiveText = context == null
+          ? "실제 solver 결과 증거가 없어 수렴 여부를 판단할 수 없습니다."
+          : _powerFlowEvidenceSummary(context);
     } else if (context != null) {
       proactiveText = _getStageProactiveText(context);
     } else {
@@ -1646,6 +1643,11 @@ class PowerLensAIService extends ChangeNotifier {
         return "💡 **다음 할 일 (결선 검수 완료):**\n"
             "• 전체 네트워크의 결선 예외가 해결되었습니다.\n"
             "• **[결선 검수 완료]**를 눌러 최종 검증을 시작하세요.";
+      case 'POWERFLOW_CONVERGED':
+      case 'POWERFLOW_NOT_CONVERGED':
+      case 'POWERFLOW':
+        return "💡 **실제 조류계산 근거:**\n${_powerFlowEvidenceSummary(ctx)}\n"
+            "운영 기준이 주어지지 않으면 전압·선로 흐름을 정상/위험으로 분류하지 않습니다.";
       case 'FINAL':
       case 'FINAL_CAD':
         if (!ctx.excelLoaded) {
@@ -1691,6 +1693,38 @@ class PowerLensAIService extends ChangeNotifier {
     return sb.toString();
   }
 
+  String _powerFlowEvidenceSummary(PowerLensAssistantContext ctx) {
+    final evidence = ctx.powerflowEvidence;
+    if (evidence == null || evidence['converged'] is! bool) {
+      return "실제 solver 결과 증거가 없어 수렴 여부를 판단할 수 없습니다.";
+    }
+    final converged = evidence['converged'] == true;
+    final parts = <String>[
+      converged
+          ? '실제 Newton–Raphson 해석이 수렴했습니다.'
+          : '실제 Newton–Raphson 해석이 미수렴했습니다.',
+    ];
+    if (evidence['iterations'] != null) {
+      parts.add('${evidence['iterations']}회 반복');
+    }
+    if (evidence['max_mismatch'] != null) {
+      parts.add('최대 mismatch ${evidence['max_mismatch']}');
+    }
+    if (converged) {
+      final lowest = evidence['lowest_voltage'];
+      if (lowest is Map && lowest['voltage_pu'] != null) {
+        parts.add('최저 전압: Bus ${lowest['bus']}, ${lowest['voltage_pu']} pu');
+      }
+      final flow = evidence['largest_absolute_line_flow'];
+      if (flow is Map && flow['p_from_mw'] != null) {
+        parts.add(
+          '최대 절대 선로 흐름 후보: Bus ${flow['from_bus']}→${flow['to_bus']}, signed P_from ${flow['p_from_mw']} MW',
+        );
+      }
+    }
+    return parts.join(' · ');
+  }
+
   String _getStageGreeting(String stage, [PowerLensAssistantContext? ctx]) {
     switch (stage) {
       case 'HOME':
@@ -1727,11 +1761,12 @@ class PowerLensAIService extends ChangeNotifier {
               "제가 다시 확인할 모선은 이제 없어요. 전체 번호를 한번 확인한 뒤 **[모선 검수 완료]**를 눌러주세요.";
         }
         final count = ctx.unresolvedBusNumbers + ctx.duplicateBusNumbers;
-        final countStr = count > 0 ? " ${count}개" : "";
+          final countStr = count > 0 ? " $count개" : "";
         return "🔢 **모선 번호 확인 단계입니다.**\n"
-            "모선 번호를 전체 확인했어요. 다시 확인하면 좋은 모선이${countStr} 있어요. 도면에 표시해둘게요.";
+              "모선 번호를 전체 확인했어요. 다시 확인하면 좋은 모선이$countStr 있어요. 도면에 표시해둘게요.";
       case 'CONNECTION_REVIEW':
-        final connectionLines = ctx?.workingLines
+        final connectionLines =
+            ctx?.workingLines
                 .map((raw) => ReviewLineItem.fromJson(raw))
                 .toList() ??
             const <ReviewLineItem>[];
@@ -1751,6 +1786,12 @@ class PowerLensAIService extends ChangeNotifier {
       case 'FINAL_CAD':
         return "✨ **검증이 끝났어요.**\n"
             "이제 엑셀 값을 연결하면 실제 조류계산을 할 수 있어요.";
+      case 'POWERFLOW':
+      case 'POWERFLOW_CONVERGED':
+      case 'POWERFLOW_NOT_CONVERGED':
+        return ctx == null
+            ? "실제 solver 결과 증거가 없어 수렴 여부를 판단할 수 없습니다."
+            : _powerFlowEvidenceSummary(ctx);
       default:
         return "👋 PowerLens AI입니다. 무엇이든 편하게 물어보세요!";
     }
@@ -1774,9 +1815,9 @@ class PowerLensAIService extends ChangeNotifier {
         final hasBusIssues =
             ctx.unresolvedBusNumbers > 0 || ctx.duplicateBusNumbers > 0;
         final count = ctx.unresolvedBusNumbers + ctx.duplicateBusNumbers;
-        final countStr = count > 0 ? " ${count}개" : "";
+        final countStr = count > 0 ? " $count개" : "";
         return hasBusIssues
-            ? "모선 번호를 전체 확인했어요. 다시 확인하면 좋은 모선이${countStr} 있어요. 도면에 표시해둘게요."
+            ? "모선 번호를 전체 확인했어요. 다시 확인하면 좋은 모선이$countStr 있어요. 도면에 표시해둘게요."
             : "제가 다시 확인할 모선은 이제 없어요. 전체 번호를 한번 확인한 뒤 [모선 검수 완료]를 눌러주세요.";
       case 'CONNECTION_REVIEW':
         final connectionLines = ctx.workingLines
@@ -1794,6 +1835,10 @@ class PowerLensAIService extends ChangeNotifier {
         return ctx.excelLoaded
             ? "엑셀 값이 연결됐어요. 이제 캔버스로 이동해 실제 조류계산을 실행할 수 있어요."
             : "검증이 끝났어요. 이제 엑셀 값을 연결하면 실제 조류계산을 할 수 있어요.";
+      case 'POWERFLOW':
+      case 'POWERFLOW_CONVERGED':
+      case 'POWERFLOW_NOT_CONVERGED':
+        return _powerFlowEvidenceSummary(ctx);
       default:
         return null;
     }
@@ -1830,7 +1875,8 @@ class PowerLensAIService extends ChangeNotifier {
           '다음 단계로 이동',
         ];
       case 'CONNECTION_REVIEW':
-        final connectionLines = ctx?.workingLines
+        final connectionLines =
+            ctx?.workingLines
                 .map((raw) => ReviewLineItem.fromJson(raw))
                 .toList() ??
             const <ReviewLineItem>[];
@@ -1848,6 +1894,11 @@ class PowerLensAIService extends ChangeNotifier {
       case 'FINAL':
       case 'FINAL_CAD':
         return ['조류계산 실행', '흐름 방향 보여줘', '다음에 뭐 해?'];
+      case 'POWERFLOW':
+      case 'POWERFLOW_CONVERGED':
+        return ['수치 결과표 열기', '흐름 방향 보여줘', '현재 상태 요약'];
+      case 'POWERFLOW_NOT_CONVERGED':
+        return ['현재 상태 요약', '다음에 뭐 해?', '조류계산 다시 실행'];
       default:
         return ['다음에 뭐 해?', '현재 상태 요약', '처음 화면으로 돌아가줘'];
     }
@@ -1864,6 +1915,11 @@ class PowerLensAIService extends ChangeNotifier {
         return '모선 번호 확인 (2단계)';
       case 'CONNECTION_REVIEW':
         return '결선 확인 (3단계)';
+      case 'POWERFLOW':
+      case 'POWERFLOW_CONVERGED':
+        return '조류계산 수렴 결과';
+      case 'POWERFLOW_NOT_CONVERGED':
+        return '조류계산 미수렴';
       case 'FINAL':
       case 'FINAL_CAD':
         return '최종 검증 & CAD (4단계)';

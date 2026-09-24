@@ -2,8 +2,10 @@
 // Represents the runtime system context sent to the PowerLens Global AI backend.
 
 class PowerLensAssistantContext {
-  final String currentScreen; // 'HOME', 'OBJECT_REVIEW', 'BUS_MAPPING', 'CONNECTION_REVIEW', 'FINAL_CAD'
-  final String workflowStage; // 'HOME', 'OBJECT_REVIEW', 'BUS_MAPPING', 'CONNECTION_REVIEW', 'FINAL', 'EXCEL', 'POWERFLOW'
+  final String
+  currentScreen; // 'HOME', 'OBJECT_REVIEW', 'BUS_MAPPING', 'CONNECTION_REVIEW', 'FINAL_CAD'
+  final String
+  workflowStage; // 'HOME', 'OBJECT_REVIEW', 'BUS_MAPPING', 'CONNECTION_REVIEW', 'FINAL', 'EXCEL', 'POWERFLOW'
   final String documentId;
   final bool hasDiagram;
   final bool analysisRunning;
@@ -27,6 +29,7 @@ class PowerLensAssistantContext {
   final bool powerflowReady;
   final bool powerflowRunning;
   final bool? powerflowConverged;
+  final Map<String, dynamic>? powerflowEvidence;
 
   final String? selectedElement;
   final Map<String, dynamic>? selectedNode;
@@ -58,6 +61,7 @@ class PowerLensAssistantContext {
     this.powerflowReady = false,
     this.powerflowRunning = false,
     this.powerflowConverged,
+    this.powerflowEvidence,
     this.selectedElement,
     this.selectedNode,
     this.selectedLine,
@@ -69,35 +73,36 @@ class PowerLensAssistantContext {
   });
 
   Map<String, dynamic> toJson() => {
-        'current_screen': currentScreen,
-        'workflow_stage': workflowStage,
-        'document_id': documentId,
-        'has_diagram': hasDiagram,
-        'analysis_running': analysisRunning,
-        'total_objects': totalObjects,
-        'suspicious_objects': suspiciousObjects,
-        'unresolved_missing_candidates': unresolvedMissingCandidates,
-        'total_buses': totalBuses,
-        'unresolved_bus_numbers': unresolvedBusNumbers,
-        'duplicate_bus_numbers': duplicateBusNumbers,
-        'total_connections': totalConnections,
-        'ambiguous_connections': ambiguousConnections,
-        'topology_issue_count': topologyIssueCount,
-        'final_verified': finalVerified,
-        'excel_loaded': excelLoaded,
-        'excel_mapping_status': excelMappingStatus,
-        'powerflow_ready': powerflowReady,
-        'powerflow_running': powerflowRunning,
-        if (powerflowConverged != null) 'powerflow_converged': powerflowConverged,
-        if (selectedElement != null) 'selected_element': selectedElement,
-        if (selectedNode != null) 'selected_node': selectedNode,
-        if (selectedLine != null) 'selected_line': selectedLine,
-        'working_nodes': workingNodes,
-        'working_lines': workingLines,
-        'missing_candidates': missingCandidates,
-        'topology_issues': topologyIssues,
-        'current_blockers': currentBlockers,
-      };
+    'current_screen': currentScreen,
+    'workflow_stage': workflowStage,
+    'document_id': documentId,
+    'has_diagram': hasDiagram,
+    'analysis_running': analysisRunning,
+    'total_objects': totalObjects,
+    'suspicious_objects': suspiciousObjects,
+    'unresolved_missing_candidates': unresolvedMissingCandidates,
+    'total_buses': totalBuses,
+    'unresolved_bus_numbers': unresolvedBusNumbers,
+    'duplicate_bus_numbers': duplicateBusNumbers,
+    'total_connections': totalConnections,
+    'ambiguous_connections': ambiguousConnections,
+    'topology_issue_count': topologyIssueCount,
+    'final_verified': finalVerified,
+    'excel_loaded': excelLoaded,
+    'excel_mapping_status': excelMappingStatus,
+    'powerflow_ready': powerflowReady,
+    'powerflow_running': powerflowRunning,
+    if (powerflowConverged != null) 'powerflow_converged': powerflowConverged,
+    if (powerflowEvidence != null) 'powerflow_evidence': powerflowEvidence,
+    if (selectedElement != null) 'selected_element': selectedElement,
+    if (selectedNode != null) 'selected_node': selectedNode,
+    if (selectedLine != null) 'selected_line': selectedLine,
+    'working_nodes': workingNodes,
+    'working_lines': workingLines,
+    'missing_candidates': missingCandidates,
+    'topology_issues': topologyIssues,
+    'current_blockers': currentBlockers,
+  };
 
   PowerLensAssistantContext copyWith({
     String? currentScreen,
@@ -120,6 +125,7 @@ class PowerLensAssistantContext {
     bool? powerflowReady,
     bool? powerflowRunning,
     bool? powerflowConverged,
+    Map<String, dynamic>? powerflowEvidence,
     String? selectedElement,
     Map<String, dynamic>? selectedNode,
     Map<String, dynamic>? selectedLine,
@@ -137,7 +143,8 @@ class PowerLensAssistantContext {
       analysisRunning: analysisRunning ?? this.analysisRunning,
       totalObjects: totalObjects ?? this.totalObjects,
       suspiciousObjects: suspiciousObjects ?? this.suspiciousObjects,
-      unresolvedMissingCandidates: unresolvedMissingCandidates ?? this.unresolvedMissingCandidates,
+      unresolvedMissingCandidates:
+          unresolvedMissingCandidates ?? this.unresolvedMissingCandidates,
       totalBuses: totalBuses ?? this.totalBuses,
       unresolvedBusNumbers: unresolvedBusNumbers ?? this.unresolvedBusNumbers,
       duplicateBusNumbers: duplicateBusNumbers ?? this.duplicateBusNumbers,
@@ -150,6 +157,7 @@ class PowerLensAssistantContext {
       powerflowReady: powerflowReady ?? this.powerflowReady,
       powerflowRunning: powerflowRunning ?? this.powerflowRunning,
       powerflowConverged: powerflowConverged ?? this.powerflowConverged,
+      powerflowEvidence: powerflowEvidence ?? this.powerflowEvidence,
       selectedElement: selectedElement ?? this.selectedElement,
       selectedNode: selectedNode ?? this.selectedNode,
       selectedLine: selectedLine ?? this.selectedLine,

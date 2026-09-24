@@ -42,6 +42,7 @@ class DrawingElement {
   String? verifiedClass;
   String? parameterStatus;
   List<String> parameterMissingFields;
+  List<String> parameterInputFields;
   bool isEquipmentLead = false;
   bool isGenLead = false;
   bool electricalBranch = true;
@@ -61,7 +62,12 @@ class DrawingElement {
     if (isSynchronousCondenserExplicit != null) {
       return isSynchronousCondenserExplicit!;
     }
-    if (label.startsWith("SC_") || label.startsWith("SC ") || label == "SC" || label.contains("동기조상기") || id.startsWith("sc_") || id.startsWith("SC_")) {
+    if (label.startsWith("SC_") ||
+        label.startsWith("SC ") ||
+        label == "SC" ||
+        label.contains("동기조상기") ||
+        id.startsWith("sc_") ||
+        id.startsWith("SC_")) {
       return true;
     }
     return false;
@@ -101,13 +107,20 @@ class DrawingElement {
     this.verifiedClass,
     this.parameterStatus,
     this.parameterMissingFields = const [],
+    this.parameterInputFields = const [],
     this.isEquipmentLead = false,
     this.isGenLead = false,
     this.electricalBranch = true,
   }) {
     parameterMissingFields = List<String>.from(parameterMissingFields);
+    parameterInputFields = List<String>.from(parameterInputFields);
     if (type == Tool.generator && isSynchronousCondenserExplicit == null) {
-      if (label.startsWith("SC_") || label.startsWith("SC ") || label == "SC" || label.contains("동기조상기") || id.startsWith("sc_") || id.startsWith("SC_")) {
+      if (label.startsWith("SC_") ||
+          label.startsWith("SC ") ||
+          label == "SC" ||
+          label.contains("동기조상기") ||
+          id.startsWith("sc_") ||
+          id.startsWith("SC_")) {
         isSynchronousCondenserExplicit = true;
       } else {
         isSynchronousCondenserExplicit = false;
@@ -117,38 +130,39 @@ class DrawingElement {
 
   DrawingElement copy() {
     return DrawingElement(
-      id: id,
-      type: type,
-      position: position,
-      midPosition: midPosition,
-      endPosition: endPosition,
-      width: width,
-      height: height,
-      angle: angle,
-      parentBusId: parentBusId,
-      startElementId: startElementId,
-      endElementId: endElementId,
-      startAnchor: startAnchor,
-      endAnchor: endAnchor,
-      label: label,
-      infoOffset: infoOffset,
-      aiPath: aiPath != null ? List.from(aiPath!) : null,
-      rawAiPath: rawAiPath != null ? List.from(rawAiPath!) : null,
-      sourceAiPath: sourceAiPath != null ? List.from(sourceAiPath!) : null,
-      circuitCount: circuitCount,
-      busType: busType,
-      source: source,
-      busNumber: busNumber,
-      connectedBusNumber: connectedBusNumber,
-      fromBus: fromBus,
-      toBus: toBus,
-      verifiedClass: verifiedClass,
-      parameterStatus: parameterStatus,
-      parameterMissingFields: List<String>.from(parameterMissingFields),
-      isEquipmentLead: isEquipmentLead,
-      isGenLead: isGenLead,
-      electricalBranch: electricalBranch,
-    )
+        id: id,
+        type: type,
+        position: position,
+        midPosition: midPosition,
+        endPosition: endPosition,
+        width: width,
+        height: height,
+        angle: angle,
+        parentBusId: parentBusId,
+        startElementId: startElementId,
+        endElementId: endElementId,
+        startAnchor: startAnchor,
+        endAnchor: endAnchor,
+        label: label,
+        infoOffset: infoOffset,
+        aiPath: aiPath != null ? List.from(aiPath!) : null,
+        rawAiPath: rawAiPath != null ? List.from(rawAiPath!) : null,
+        sourceAiPath: sourceAiPath != null ? List.from(sourceAiPath!) : null,
+        circuitCount: circuitCount,
+        busType: busType,
+        source: source,
+        busNumber: busNumber,
+        connectedBusNumber: connectedBusNumber,
+        fromBus: fromBus,
+        toBus: toBus,
+        verifiedClass: verifiedClass,
+        parameterStatus: parameterStatus,
+        parameterMissingFields: List<String>.from(parameterMissingFields),
+        parameterInputFields: List<String>.from(parameterInputFields),
+        isEquipmentLead: isEquipmentLead,
+        isGenLead: isGenLead,
+        electricalBranch: electricalBranch,
+      )
       ..showInfo = showInfo
       ..isSlack = isSlack
       ..vPu = vPu
@@ -185,6 +199,7 @@ class DrawingElement {
       'tapRatio': _isParameterMissing('tapRatio') ? null : tapRatio,
       'parameterStatus': parameterStatus,
       'parameterMissingFields': parameterMissingFields,
+      'parameterInputFields': parameterInputFields,
       'from_bus': fromBus,
       'to_bus': toBus,
       'verifiedClass': verifiedClass,
@@ -201,15 +216,30 @@ class DrawingElement {
       parameterMissingFields.contains(field) ||
       (parameterStatus == 'MISSING' && parameterMissingFields.isEmpty);
 
+  void markParameterInput(String field) {
+    if (!parameterInputFields.contains(field)) parameterInputFields.add(field);
+    parameterMissingFields.remove(field);
+    if (parameterStatus == 'MISSING' && parameterMissingFields.isEmpty) {
+      parameterStatus = 'MANUAL';
+    }
+  }
+
   void updateFromJson(Map<String, dynamic> json) {
     if (json.containsKey('label') && json['label'] != null) {
       label = json['label'].toString();
     }
-    if (json.containsKey('isSynchronousCondenser') && json['isSynchronousCondenser'] != null) {
+    if (json.containsKey('isSynchronousCondenser') &&
+        json['isSynchronousCondenser'] != null) {
       isSynchronousCondenser = json['isSynchronousCondenser'] == true;
-    } else if (json.containsKey('is_synchronous_condenser') && json['is_synchronous_condenser'] != null) {
+    } else if (json.containsKey('is_synchronous_condenser') &&
+        json['is_synchronous_condenser'] != null) {
       isSynchronousCondenser = json['is_synchronous_condenser'] == true;
-    } else if (label.startsWith("SC_") || label.startsWith("SC ") || label == "SC" || label.contains("동기조상기") || id.startsWith("SC_") || id.startsWith("sc_")) {
+    } else if (label.startsWith("SC_") ||
+        label.startsWith("SC ") ||
+        label == "SC" ||
+        label.contains("동기조상기") ||
+        id.startsWith("SC_") ||
+        id.startsWith("sc_")) {
       isSynchronousCondenser = true;
     } else if (type == Tool.generator) {
       isSynchronousCondenser = false;
@@ -284,11 +314,17 @@ class DrawingElement {
     } else if (json.containsKey('toBus') && json['toBus'] != null) {
       toBus = (json['toBus'] as num).toInt();
     }
-    if (json.containsKey('parameterStatus') && json['parameterStatus'] != null) {
+    if (json.containsKey('parameterStatus') &&
+        json['parameterStatus'] != null) {
       parameterStatus = json['parameterStatus'].toString();
     }
     if (json['parameterMissingFields'] is List) {
       parameterMissingFields = (json['parameterMissingFields'] as List)
+          .map((field) => field.toString())
+          .toList();
+    }
+    if (json['parameterInputFields'] is List) {
+      parameterInputFields = (json['parameterInputFields'] as List)
           .map((field) => field.toString())
           .toList();
     }
@@ -310,13 +346,15 @@ class DrawingElement {
         json['connectedBusNumber'] != null) {
       connectedBusNumber = (json['connectedBusNumber'] as num).toInt();
     }
-    if (json.containsKey('isEquipmentLead') && json['isEquipmentLead'] != null) {
+    if (json.containsKey('isEquipmentLead') &&
+        json['isEquipmentLead'] != null) {
       isEquipmentLead = json['isEquipmentLead'] == true;
     }
     if (json.containsKey('isGenLead') && json['isGenLead'] != null) {
       isGenLead = json['isGenLead'] == true;
     }
-    if (json.containsKey('electricalBranch') && json['electricalBranch'] != null) {
+    if (json.containsKey('electricalBranch') &&
+        json['electricalBranch'] != null) {
       electricalBranch = json['electricalBranch'] == true;
     }
   }
@@ -344,8 +382,12 @@ class DrawingElement {
       id: json['id']?.toString() ?? 'unknown',
       type: parseTool(json['type']?.toString()),
       position: parseOffset(json['position']),
-      midPosition: json['midPosition'] != null ? parseOffset(json['midPosition']) : null,
-      endPosition: json['endPosition'] != null ? parseOffset(json['endPosition']) : null,
+      midPosition: json['midPosition'] != null
+          ? parseOffset(json['midPosition'])
+          : null,
+      endPosition: json['endPosition'] != null
+          ? parseOffset(json['endPosition'])
+          : null,
       width: (json['width'] as num?)?.toDouble() ?? 120.0,
       height: (json['height'] as num?)?.toDouble() ?? 10.0,
       angle: (json['angle'] as num?)?.toDouble() ?? 0.0,
@@ -356,7 +398,9 @@ class DrawingElement {
       circuitCount: (json['circuitCount'] as num?)?.toInt(),
       busType: json['bus_type']?.toString(),
       source: json['source']?.toString(),
-      busNumber: (json['bus_number'] as num?)?.toInt() ?? (json['busNumber'] as num?)?.toInt(),
+      busNumber:
+          (json['bus_number'] as num?)?.toInt() ??
+          (json['busNumber'] as num?)?.toInt(),
       isEquipmentLead: json['isEquipmentLead'] == true,
       isGenLead: json['isGenLead'] == true,
       electricalBranch: json['electricalBranch'] != false,

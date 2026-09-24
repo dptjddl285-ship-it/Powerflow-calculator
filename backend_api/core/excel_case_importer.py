@@ -348,6 +348,32 @@ class ExcelCaseImporter:
 
         applied_counts = {'bus': 0, 'generator': 0, 'load': 0, 'line': 0, 'transformer': 0}
 
+        def source_fields(record: Dict[str, Any] | None) -> set[str] | None:
+            if not isinstance(record, dict):
+                return None
+            provided = record.get('provided_fields')
+            if isinstance(provided, (list, tuple, set)):
+                return {str(field) for field in provided}
+            return None
+
+        def mark_import_state(
+            element: Dict[str, Any],
+            record: Dict[str, Any] | None,
+            requirements: Dict[str, str],
+        ) -> List[str]:
+            fields = source_fields(record)
+            missing = [
+                target for source, target in requirements.items()
+                if (
+                    source not in fields
+                    if fields is not None
+                    else not isinstance(record, dict) or record.get(source) is None
+                )
+            ]
+            element['parameterMissingFields'] = missing
+            element['parameterStatus'] = 'MISSING' if missing else 'VALID'
+            return missing
+
         # Build ID lookup and type lookup
         el_by_id = {str(el.get('id')): el for el in elements if el.get('id') is not None}
 
@@ -466,7 +492,20 @@ class ExcelCaseImporter:
                     el['bus_type'] = str(b_info.get('type') or b_info.get('bus_type') or ('3' if el['isSlack'] else '1'))
                     if 'max_vm' in b_info: el['maxVm'] = b_info['max_vm']
                     if 'min_vm' in b_info: el['minVm'] = b_info['min_vm']
+                    mark_import_state(el, b_info, {
+                        'is_slack': 'isSlack',
+                        'type': 'bus_type',
+                        'vm_pu': 'vPu',
+                        'va_deg': 'thetaDeg',
+                        'pload_pu': 'pPu',
+                        'qload_pu': 'qPu',
+                    })
                     applied_counts['bus'] += 1
+                else:
+                    el['parameterStatus'] = 'MISSING'
+                    el['parameterMissingFields'] = [
+                        'isSlack', 'bus_type', 'vPu', 'thetaDeg', 'pPu', 'qPu'
+                    ]
 
             # 2. Generator
             elif 'gen' in el_type:
@@ -506,7 +545,15 @@ class ExcelCaseImporter:
                         el['label'] = f"SC_{b_num} (동기조상기)"
                     else:
                         el['label'] = f"G_{b_num}" + (" (Slack)" if el['isSlack'] else "")
+                    mark_import_state(el, g_info, {
+                        'pg_pu': 'pPu',
+                        'qg_pu': 'qPu',
+                        'voltage_setpoint': 'vPu',
+                    })
                     applied_counts['generator'] += 1
+                else:
+                    el['parameterStatus'] = 'MISSING'
+                    el['parameterMissingFields'] = ['pPu', 'qPu', 'vPu']
                     if b_num is not None:
                         applied_gen_buses.add(int(b_num))
 
@@ -528,7 +575,14 @@ class ExcelCaseImporter:
                     el['pPu'] = float(b_info.get('pload_pu', 0.0))
                     el['qPu'] = float(b_info.get('qload_pu', 0.0))
                     el['label'] = f"Load_{b_num}"
+                    mark_import_state(el, b_info, {
+                        'pload_pu': 'pPu',
+                        'qload_pu': 'qPu',
+                    })
                     applied_counts['load'] += 1
+                else:
+                    el['parameterStatus'] = 'MISSING'
+                    el['parameterMissingFields'] = ['pPu', 'qPu']
 
             # 4. Transformer
             elif 'trans' in el_type:
@@ -561,21 +615,34 @@ class ExcelCaseImporter:
                         if b_val is None:
                             b_val = br_info.get('b_pu', 0.0)
 
-                if r_val is not None and x_val is not None:
+                provenance = tr_info or br_info
+                provided = source_fields(provenance)
+                def transformer_field_present(field: str, value: Any) -> bool:
+                    if provided is not None:
+                        return field in provided
+                    return value is not None
+
+                missing_transformer_fields = []
+                for field, value, target in (
+                    ('r_pu', r_val, 'rPu'),
+                    ('x_pu', x_val, 'xPu'),
+                    ('b_pu', b_val, 'bPu'),
+                    ('tap', tap if tr_info else None, 'tapRatio'),
+                ):
+                    if transformer_field_present(field, value):
+                        el[target] = value
+                    else:
+                        el[target] = None
+                        missing_transformer_fields.append(target)
+
+                if not missing_transformer_fields:
                     el['parameterStatus'] = 'VALID'
-                    el['tapRatio'] = tap
-                    el['tap'] = tap
-                    el['rPu'] = r_val
-                    el['xPu'] = x_val
-                    el['bPu'] = b_val if b_val is not None else 0.0
+                    el['parameterMissingFields'] = []
                     applied_counts['transformer'] += 1
                 else:
                     el['parameterStatus'] = 'MISSING'
-                    el['tapRatio'] = tap if tr_info else None
+                    el['parameterMissingFields'] = missing_transformer_fields
                     el['tap'] = tap if tr_info else None
-                    el['rPu'] = None
-                    el['xPu'] = None
-                    el['bPu'] = None
 
                 if tr_info:
                     el['from_bus'] = tr_info['from_bus']
@@ -736,11 +803,29 @@ class ExcelCaseImporter:
                             if (br_v.get('from_bus') == fb and br_v.get('to_bus') == tb) or (br_v.get('from_bus') == tb and br_v.get('to_bus') == fb):
                                 br_info = br_v
                                 break
-                if br_info and br_info.get('r_pu') is not None and br_info.get('x_pu') is not None:
+                branch_fields = source_fields(br_info)
+                required_branch_fields = ['r_pu', 'x_pu', 'b_pu']
+                requires_tap = bool(br_info and br_info.get('requires_tap'))
+                if requires_tap:
+                    required_branch_fields.append('tap')
+                missing_branch_fields = [
+                    {'r_pu': 'rPu', 'x_pu': 'xPu', 'b_pu': 'bPu', 'tap': 'tapRatio'}[field]
+                    for field in required_branch_fields
+                    if (
+                        field not in branch_fields
+                        if branch_fields is not None
+                        else not br_info or br_info.get(field) is None
+                    )
+                ]
+                if br_info:
+                    el['rPu'] = br_info.get('r_pu')
+                    el['xPu'] = br_info.get('x_pu')
+                    el['bPu'] = br_info.get('b_pu') if 'bPu' not in missing_branch_fields else None
+                    if requires_tap:
+                        el['tapRatio'] = br_info.get('tap') if 'tapRatio' not in missing_branch_fields else None
+                if br_info and not missing_branch_fields:
                     el['parameterStatus'] = 'VALID'
-                    el['rPu'] = br_info['r_pu']
-                    el['xPu'] = br_info['x_pu']
-                    el['bPu'] = br_info.get('b_pu', 0.0)
+                    el['parameterMissingFields'] = []
                     c_count = br_info.get('circuit_count', 1)
                     el['circuitCount'] = c_count
                     if c_count > 1:
@@ -749,9 +834,7 @@ class ExcelCaseImporter:
                     applied_counts['line'] += 1
                 else:
                     el['parameterStatus'] = 'MISSING'
-                    el['rPu'] = None
-                    el['xPu'] = None
-                    el['bPu'] = None
+                    el['parameterMissingFields'] = missing_branch_fields or ['rPu', 'xPu', 'bPu']
                     if fb is not None and tb is not None:
                         el['label'] = f"Line {fb}-{tb} (파라미터 누락)"
 
