@@ -175,6 +175,74 @@ class TestExcelCaseImporter(unittest.TestCase):
         self.assertTrue(report['is_matched'], report['discrepancies'])
         self.assertEqual(elements, original)
 
+    def test_verified_sld_comparison_does_not_infer_pairs_from_overconnected_transformers(self):
+        elements = [
+            {'id': f'bus_{number}', 'type': 'bus', 'bus_number': number}
+            for number in (9, 10, 11, 12)
+        ] + [
+            {'id': 'trans_9_11', 'type': 'transformer'},
+            {'id': 'trans_10_12', 'type': 'transformer'},
+            {'id': 'lead_9_9_11', 'type': 'line', 'startElementId': 'bus_9', 'endElementId': 'trans_9_11'},
+            {'id': 'lead_10_9_11', 'type': 'line', 'startElementId': 'bus_10', 'endElementId': 'trans_9_11'},
+            {'id': 'lead_11_9_11', 'type': 'line', 'startElementId': 'trans_9_11', 'endElementId': 'bus_11'},
+            {'id': 'lead_9_10_12', 'type': 'line', 'startElementId': 'bus_9', 'endElementId': 'trans_10_12'},
+            {'id': 'lead_10_10_12', 'type': 'line', 'startElementId': 'bus_10', 'endElementId': 'trans_10_12'},
+            {'id': 'lead_12_10_12', 'type': 'line', 'startElementId': 'trans_10_12', 'endElementId': 'bus_12'},
+        ]
+        excel_data = {
+            'buses': {str(number): {} for number in (9, 10, 11, 12)},
+            'generators': {},
+            'branches': {
+                '9_12': {'from_bus': 9, 'to_bus': 12},
+                '10_11': {'from_bus': 10, 'to_bus': 11},
+            },
+            'transformers': {
+                '9_11': {'from_bus': 9, 'to_bus': 11},
+                '10_12': {'from_bus': 10, 'to_bus': 12},
+            },
+        }
+
+        report = self.importer.compare_elements_with_excel(
+            elements,
+            excel_data,
+            structured_bus_numbers_only=True,
+        )
+
+        self.assertFalse(report['is_matched'])
+        self.assertEqual(
+            set(report['details']['unmapped_branches']),
+            {'trans_9_11', 'trans_10_12'},
+        )
+        self.assertEqual(
+            set(map(tuple, report['details']['missing_branches'])),
+            {(9, 11), (9, 12), (10, 11), (10, 12)},
+        )
+
+    def test_verified_sld_comparison_accepts_exact_two_bus_transformer(self):
+        elements = [
+            {'id': 'bus_3', 'type': 'bus', 'bus_number': 3},
+            {'id': 'bus_24', 'type': 'bus', 'bus_number': 24},
+            {'id': 'trans_3_24', 'type': 'transformer'},
+            {'id': 'lead_3', 'type': 'line', 'startElementId': 'bus_3', 'endElementId': 'trans_3_24'},
+            {'id': 'lead_24', 'type': 'line', 'startElementId': 'trans_3_24', 'endElementId': 'bus_24'},
+        ]
+        excel_data = {
+            'buses': {'3': {}, '24': {}},
+            'generators': {},
+            'branches': {},
+            'transformers': {
+                '3_24': {'from_bus': 3, 'to_bus': 24},
+            },
+        }
+
+        report = self.importer.compare_elements_with_excel(
+            elements,
+            excel_data,
+            structured_bus_numbers_only=True,
+        )
+
+        self.assertTrue(report['is_matched'], report['discrepancies'])
+
     def test_verified_sld_comparison_never_infers_bus_number_from_id_or_label(self):
         elements = [
             {'id': 'bus_17', 'type': 'bus', 'label': 'Bus 17'},

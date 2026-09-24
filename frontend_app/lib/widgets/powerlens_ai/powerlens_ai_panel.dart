@@ -41,6 +41,7 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
       widget.assistantContext.workflowStage,
       widget.assistantContext,
     );
+    _aiService.refreshContextGuidance(widget.assistantContext);
     _aiService.notifyStageChange(widget.assistantContext);
   }
 
@@ -74,8 +75,25 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
     if (oldWidget.assistantContext.workflowStage !=
         widget.assistantContext.workflowStage) {
       _aiService.notifyStageChange(widget.assistantContext);
+    } else if (_readinessContextChanged(
+      oldWidget.assistantContext,
+      widget.assistantContext,
+    )) {
+      _aiService.refreshContextGuidance(widget.assistantContext);
     }
   }
+
+  bool _readinessContextChanged(
+    PowerLensAssistantContext previous,
+    PowerLensAssistantContext next,
+  ) =>
+      previous.currentScreen != next.currentScreen ||
+      previous.finalVerified != next.finalVerified ||
+      previous.excelLoaded != next.excelLoaded ||
+      previous.excelMappingStatus != next.excelMappingStatus ||
+      previous.powerflowReady != next.powerflowReady ||
+      previous.powerflowRunning != next.powerflowRunning ||
+      previous.powerflowConverged != next.powerflowConverged;
 
   @override
   void dispose() {
@@ -527,8 +545,7 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
   }
 
   Widget _buildQuickActions() {
-    final stage = widget.assistantContext.workflowStage;
-    final actions = _getStageActionButtons(stage);
+    final actions = _aiService.quickActionsForContext(widget.assistantContext);
 
     return Container(
       color: const Color(0xFFF8FAFC),
@@ -567,47 +584,6 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
         ),
       ),
     );
-  }
-
-  List<String> _getStageActionButtons(String stage) {
-    switch (stage) {
-      case 'HOME':
-        return ['샘플 도면 불러줘', '사진 다시 넣을래', '이 단계에서 뭘 해야 해?'];
-      case 'OBJECT_REVIEW':
-        final hasIssues =
-            widget.assistantContext.suspiciousObjects > 0 ||
-            widget.assistantContext.unresolvedMissingCandidates > 0;
-        return [
-          hasIssues
-              ? '검토 필요 항목 (${widget.assistantContext.suspiciousObjects})'
-              : '객체 검수 완료하기',
-          '다음 단계로 넘어가',
-          '이 단계에서 뭘 해야 해?',
-        ];
-      case 'BUS_MAPPING':
-        final hasBusIssues =
-            widget.assistantContext.unresolvedBusNumbers > 0 ||
-            widget.assistantContext.duplicateBusNumbers > 0;
-        return [
-          hasBusIssues ? '미지정 모선 확인' : '모선 검수 완료하기',
-          '다음 단계로 넘어가',
-          '이 단계에서 뭘 해야 해?',
-        ];
-      case 'CONNECTION_REVIEW':
-        final hasConnIssues =
-            widget.assistantContext.ambiguousConnections > 0 ||
-            widget.assistantContext.topologyIssueCount > 0;
-        return [
-          hasConnIssues ? '연결 오류 점검' : '결선 검수 완료하기',
-          '다음 단계로 넘어가',
-          '이 단계에서 뭘 해야 해?',
-        ];
-      case 'FINAL':
-      case 'FINAL_CAD':
-        return ['조류계산 해줘', '흐름 방향 보여줘', '이 단계에서 뭘 해야 해?'];
-      default:
-        return ['처음 화면으로 돌아가줘', '다음 단계로 가자', '이 단계에서 뭘 해야 해?'];
-    }
   }
 
   Widget _buildMessageList() {

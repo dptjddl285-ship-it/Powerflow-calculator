@@ -76,6 +76,45 @@ class PowerLensAIService extends ChangeNotifier {
     _requestedProactiveKeys.clear();
   }
 
+  List<String> quickActionsForContext(PowerLensAssistantContext context) =>
+      _getQuickActions(context.workflowStage, context);
+
+  String? proactiveTextForContext(PowerLensAssistantContext context) =>
+      _getStageProactiveText(context);
+
+  void refreshContextGuidance(PowerLensAssistantContext context) {
+    if (!_usesReadinessAwareQuickActions(context)) return;
+
+    final stage = context.workflowStage.toUpperCase();
+    final index = _messages.lastIndexWhere(
+      (message) =>
+          !message.isUser &&
+          message.stage.toUpperCase() == stage &&
+          message.id.startsWith('proactive_'),
+    );
+    if (index < 0) return;
+
+    final previous = _messages[index];
+    final text = _getStageProactiveText(context);
+    if (text == null) return;
+    final actions = _getQuickActions(context.workflowStage, context);
+    if (previous.text == text &&
+        previous.suggestedActions.join('\n') == actions.join('\n')) {
+      return;
+    }
+
+    _messages[index] = PowerLensAIMessageItem(
+      id: previous.id,
+      sender: previous.sender,
+      text: text,
+      timestamp: previous.timestamp,
+      stage: previous.stage,
+      suggestedActions: actions,
+      agentStatus: previous.agentStatus,
+    );
+    notifyListeners();
+  }
+
   String _geminiStatus =
       'LOCAL_READY'; // 'CONNECTED' | 'LOCAL_FALLBACK' | 'LOCAL_READY'
   String get geminiStatus => _geminiStatus;
@@ -228,19 +267,63 @@ class PowerLensAIService extends ChangeNotifier {
           if (!context.excelLoaded) {
             return 'final_excel_upload';
           }
-          return 'final_canvas_handoff';
+          if (_hasVerifiedFinalExcelMatch(context)) {
+            return 'final_canvas_handoff';
+          }
+          return context.excelMappingStatus.toUpperCase() == 'MISMATCH'
+              ? 'excel_mismatch_btn'
+              : 'final_excel_upload';
         default:
           return null;
       }
     } else {
       if (!context.hasDiagram && context.totalObjects == 0) {
         return 'home_upload';
-      } else if (context.powerflowConverged == null) {
-        return 'final_powerflow';
-      } else {
+      } else if (context.powerflowConverged == true) {
         return 'result_flow';
+      } else if (context.powerflowReady && !context.powerflowRunning) {
+        return 'final_powerflow';
       }
+      return null;
     }
+  }
+
+  bool _hasVerifiedFinalExcelMatch(PowerLensAssistantContext context) =>
+      context.finalVerified &&
+      context.excelLoaded &&
+      context.excelMappingStatus.toUpperCase() == 'MATCHED';
+
+  bool _usesReadinessAwareQuickActions(PowerLensAssistantContext context) {
+    final screen = context.currentScreen.toUpperCase();
+    final stage = context.workflowStage.toUpperCase();
+    if (screen == 'REVIEW_PAGE') {
+      return const {'FINAL', 'FINAL_CAD', 'VERIFIED_FINAL'}.contains(stage);
+    }
+    if (screen == 'CAD_CANVAS') {
+      return const {
+        'FINAL',
+        'FINAL_CAD',
+        'EXCEL',
+        'POWERFLOW',
+        'POWERFLOW_CONVERGED',
+        'POWERFLOW_NOT_CONVERGED',
+      }.contains(stage);
+    }
+    return false;
+  }
+
+  List<String> _quickActionsForResponse(
+    dynamic rawActions,
+    String stage,
+    PowerLensAssistantContext? context,
+  ) {
+    if (context != null && _usesReadinessAwareQuickActions(context)) {
+      return _getQuickActions(stage, context);
+    }
+    if (rawActions is List) {
+      return rawActions.map((e) => e.toString()).take(3).toList();
+    }
+    return _getQuickActions(stage, context);
   }
 
   Future<void> refreshProviderStatus() async {
@@ -919,9 +1002,7 @@ class PowerLensAIService extends ChangeNotifier {
             : 'LOCAL_READY';
 
         final rawActions = result['suggested_actions'];
-        final actions = rawActions is List
-            ? rawActions.map((e) => e.toString()).take(3).toList()
-            : _getQuickActions(stage, context);
+        final actions = _quickActionsForResponse(rawActions, stage, context);
 
         _messages.add(
           PowerLensAIMessageItem(
@@ -1024,6 +1105,34 @@ class PowerLensAIService extends ChangeNotifier {
         query: trimmed,
       );
 
+      final requestedActions = resolveIntentActions(trimmed, context);
+      final requestsPowerFlow = requestedActions.contains(
+        PowerLensAppAction.runPowerFlow,
+      );
+      final screen = context.currentScreen.toUpperCase();
+      final powerFlowBlocked =
+          requestsPowerFlow &&
+          ((screen == 'REVIEW_PAGE' && !_hasVerifiedFinalExcelMatch(context)) ||
+              (screen == 'CAD_CANVAS' &&
+                  (!context.powerflowReady || context.powerflowRunning)));
+      if (powerFlowBlocked) {
+        if (fallbackHighlightTarget != null) {
+          triggerHighlight(fallbackHighlightTarget);
+        }
+        _messages.add(
+          PowerLensAIMessageItem(
+            id: 'ai_blocked_${DateTime.now().millisecondsSinceEpoch}',
+            sender: 'assistant',
+            text: _getRunPowerFlowBlockedReply(context),
+            stage: context.workflowStage,
+            suggestedActions: _getQuickActions(context.workflowStage, context),
+            agentStatus: 'LOCAL_GUIDE',
+          ),
+        );
+        finalMascotState = 'blocked';
+        return;
+      }
+
       // 1. Semantic Routing First: Send query to backend Agent /review/agent_chat
       final uri = Uri.parse('$baseUrl/review/agent_chat');
       final payload = {
@@ -1101,6 +1210,7 @@ class PowerLensAIService extends ChangeNotifier {
 
         bool actionExecuted = false;
         if (actionMode == 'EXECUTE') {
+          final appAction = mapBackendActionId(actionId);
           actionExecuted = await executeBackendAction(
             actionMode: actionMode,
             actionId: actionId,
@@ -1109,6 +1219,9 @@ class PowerLensAIService extends ChangeNotifier {
                 null, // Avoid duplicate trigger; already highlighted above
             context: context,
           );
+          replyKo = appAction == null
+              ? '요청한 작업을 실행하지 못했어요. 현재 단계의 준비 상태를 확인해주세요.'
+              : _getActionReply(appAction, actionExecuted, context);
         }
 
         final agentStatus =
@@ -1120,9 +1233,11 @@ class PowerLensAIService extends ChangeNotifier {
             ? 'CONNECTED'
             : 'LOCAL_READY';
         final rawActions = result['suggested_actions'];
-        final actions = rawActions is List
-            ? rawActions.map((e) => e.toString()).take(3).toList()
-            : _getQuickActions(context.workflowStage, context);
+        final actions = _quickActionsForResponse(
+          rawActions,
+          context.workflowStage,
+          context,
+        );
 
         _messages.add(
           PowerLensAIMessageItem(
@@ -1323,7 +1438,7 @@ class PowerLensAIService extends ChangeNotifier {
             ? (context.currentScreen.toUpperCase() == 'REVIEW_PAGE'
                   ? '캔버스로 이동했어요. 거기서 실제 조류계산을 시작할 수 있어요.'
                   : '조류계산을 실행했어요. 결과가 준비되면 선로 위에 방향 화살표를 보여드릴게요.')
-            : '조류계산을 실행하려면 도면과 계통 제원을 먼저 연결해주세요.';
+            : _getRunPowerFlowBlockedReply(context);
       case PowerLensAppAction.showPowerFlowResults:
         return handled
             ? '계산 결과를 열었어요. 수치와 선로 조류를 확인해보세요.'
@@ -1475,6 +1590,14 @@ class PowerLensAIService extends ChangeNotifier {
         if (!ctx.finalVerified) {
           return "⚠️ 아직 Verified Circuit이 준비되지 않았어요. "
               "최종 검증을 통과한 뒤 CAD 화면으로 이동할 수 있습니다.";
+        }
+        if (!ctx.excelLoaded) {
+          return "⚠️ 실제 조류계산 전에 Excel 계통 제원을 먼저 가져와주세요.";
+        }
+        if (!_hasVerifiedFinalExcelMatch(ctx)) {
+          return ctx.excelMappingStatus.toUpperCase() == 'MISMATCH'
+              ? "⚠️ Excel 대조 불일치가 남아 있어 CAD로 이동할 수 없습니다. 불일치 항목을 먼저 확인해주세요."
+              : "⚠️ Excel 대조가 검증되지 않아 CAD로 이동할 수 없습니다. 대조 상태를 확인해주세요.";
         }
         break;
     }
@@ -1667,6 +1790,24 @@ class PowerLensAIService extends ChangeNotifier {
 
   String _getNextActionAnswer(PowerLensAssistantContext ctx) {
     final selected = ctx.selectedElement;
+    if (ctx.currentScreen.toUpperCase() == 'CAD_CANVAS') {
+      if (ctx.powerflowConverged == true) {
+        return "💡 **다음 할 일 (해석 완료):**\n"
+            "• 실제 조류계산이 수렴했습니다. **[결과 보여줘]**로 결과표를 열거나 흐름 방향과 수치를 확인하세요.\n"
+            "${_powerFlowEvidenceSummary(ctx)}";
+      }
+      if (ctx.powerflowRunning) {
+        return "💡 조류계산이 진행 중입니다. 완료될 때까지 기다려주세요.";
+      }
+      if (!ctx.powerflowReady) {
+        final blockers = ctx.currentBlockers.isEmpty
+            ? '계통 제원과 모선·선로 연결 상태를 확인해주세요.'
+            : ctx.currentBlockers.join(' ');
+        return "💡 **조류계산 준비가 아직 완료되지 않았어요.** $blockers";
+      }
+      return "💡 조류계산 준비 검사를 통과했습니다. **[조류계산 실행]**을 눌러 실제 해석을 시작하세요.";
+    }
+
     switch (ctx.workflowStage) {
       case 'HOME':
         return "💡 **다음 할 일 (홈):**\n"
@@ -1747,18 +1888,22 @@ class PowerLensAIService extends ChangeNotifier {
             "운영 기준이 주어지지 않으면 전압·선로 흐름을 정상/위험으로 분류하지 않습니다.";
       case 'FINAL':
       case 'FINAL_CAD':
+      case 'VERIFIED_FINAL':
+        if (!ctx.finalVerified) {
+          return "💡 최종 Verified SLD 확인이 끝나야 Excel을 연결할 수 있어요.";
+        }
         if (!ctx.excelLoaded) {
           return "💡 **다음 할 일 (계통 제원 연결):**\n"
               "• 단선도 검증이 끝났습니다!\n"
               "• 상단 메뉴의 **[엑셀 가져오기]**를 눌러 선로 임피던스와 발전/부하 제원 엑셀을 연결하세요.";
-        } else if (ctx.powerflowConverged == true) {
-          return "💡 **다음 할 일 (해석 완료):**\n"
-              "• 조류계산이 성공적으로 수렴했습니다!\n"
-              "• 상단 **[수치 결과표]**를 눌러 모선 전압과 선로 조류/손실을 확인하거나 엑셀로 다운로드하세요.";
-        } else {
-          return "💡 **다음 할 일 (조류계산 실행):**\n"
-              "• 제원이 연결되었습니다. 우측 상단의 파란색 **[조류계산 실행]** 버튼을 눌러 수치해석을 시작하세요.";
         }
+        if (_hasVerifiedFinalExcelMatch(ctx)) {
+          return "💡 **다음 할 일 (CAD 이동):**\n"
+              "• Excel 대조가 완료됐습니다. **[CAD로 이동]**해 조류계산 준비 상태를 확인하세요.";
+        }
+        return ctx.excelMappingStatus.toUpperCase() == 'MISMATCH'
+            ? "💡 Excel 대조 불일치가 남아 있어요. 불일치 항목을 해결한 뒤 CAD로 이동할 수 있습니다."
+            : "💡 Excel 파일은 연결됐지만 대조 결과가 검증되지 않았어요. 대조 상태를 확인해주세요.";
       default:
         return "💡 현재 단계를 진행하기 위해 화면의 안내 버튼을 확인해주세요.";
     }
@@ -1895,6 +2040,20 @@ class PowerLensAIService extends ChangeNotifier {
   }
 
   String? _getStageProactiveText(PowerLensAssistantContext ctx) {
+    if (ctx.currentScreen.toUpperCase() == 'CAD_CANVAS') {
+      if (ctx.powerflowConverged == true) {
+        return _powerFlowEvidenceSummary(ctx);
+      }
+      if (ctx.powerflowRunning) return "조류계산을 진행하고 있어요.";
+      if (ctx.powerflowReady) {
+        return "조류계산 준비 검사를 통과했어요. 이제 실제 해석을 실행할 수 있어요.";
+      }
+      if (!ctx.excelLoaded) {
+        return "CAD에 계통 제원이 아직 연결되지 않았어요. Excel 파일을 먼저 가져와주세요.";
+      }
+      return "계통 제원은 연결됐지만 조류계산 준비 검사가 통과되지 않았어요. ${ctx.currentBlockers.join(' ')}";
+    }
+
     switch (ctx.workflowStage) {
       case 'HOME':
         return "도면 사진으로 시작할까요, 샘플로 체험할까요?";
@@ -1929,9 +2088,15 @@ class PowerLensAIService extends ChangeNotifier {
             : "전체 네트워크 결선이 정상 확인되었어요! [결선 검수 완료]를 눌러주세요.";
       case 'FINAL':
       case 'FINAL_CAD':
-        return ctx.excelLoaded
-            ? "엑셀 값이 연결됐어요. 이제 캔버스로 이동해 실제 조류계산을 실행할 수 있어요."
-            : "검증이 끝났어요. 이제 엑셀 값을 연결하면 실제 조류계산을 할 수 있어요.";
+        if (!ctx.excelLoaded) {
+          return "검증이 끝났어요. 실제 조류계산을 위해 Excel 제원을 먼저 가져와주세요.";
+        }
+        if (_hasVerifiedFinalExcelMatch(ctx)) {
+          return "Excel 대조가 완료됐어요. 이제 CAD로 이동해 조류계산 준비 상태를 확인할 수 있어요.";
+        }
+        return ctx.excelMappingStatus.toUpperCase() == 'MISMATCH'
+            ? "Excel 대조에서 불일치가 확인됐어요. 불일치 항목을 해결하기 전에는 CAD로 이동할 수 없어요."
+            : "Excel 파일은 연결됐지만 검증된 대조 결과가 없어요. 대조 상태를 확인해주세요.";
       case 'POWERFLOW':
       case 'POWERFLOW_CONVERGED':
       case 'POWERFLOW_NOT_CONVERGED':
@@ -1945,6 +2110,25 @@ class PowerLensAIService extends ChangeNotifier {
     String stage, [
     PowerLensAssistantContext? ctx,
   ]) {
+    if (ctx?.currentScreen.toUpperCase() == 'CAD_CANVAS') {
+      if (ctx!.powerflowConverged == true) {
+        return ['결과 보여줘', '흐름 방향 보여줘', '수치 보여줘'];
+      }
+      if (ctx.powerflowRunning) {
+        return ['현재 상태 요약', '다음에 뭐 해?'];
+      }
+      if (ctx.powerflowReady) {
+        final action = ctx.powerflowConverged == false
+            ? '조류계산 다시 실행'
+            : '조류계산 실행';
+        return [action, '다음에 뭐 해?', '현재 상태 요약'];
+      }
+      if (!ctx.excelLoaded) {
+        return ['Excel 가져오기', '다음에 뭐 해?', '현재 상태 요약'];
+      }
+      return ['현재 상태 요약', 'Excel 다시 가져오기', '다음에 뭐 해?'];
+    }
+
     switch (stage) {
       case 'HOME':
         return ['샘플 도면 불러오기', '사진 다시 넣을래', '다음에 뭐 해?'];
@@ -1990,15 +2174,50 @@ class PowerLensAIService extends ChangeNotifier {
         ];
       case 'FINAL':
       case 'FINAL_CAD':
-        return ['조류계산 실행', '흐름 방향 보여줘', '다음에 뭐 해?'];
+      case 'VERIFIED_FINAL':
+        if (ctx == null) return ['다음에 뭐 해?', '현재 상태 요약'];
+        if (!ctx.excelLoaded) {
+          return ['Excel 가져오기', '다음에 뭐 해?', '현재 상태 요약'];
+        }
+        if (_hasVerifiedFinalExcelMatch(ctx)) {
+          return ['CAD로 이동', '다음에 뭐 해?', '현재 상태 요약'];
+        }
+        return ['Excel 다시 가져오기', '다음에 뭐 해?', '현재 상태 요약'];
       case 'POWERFLOW':
       case 'POWERFLOW_CONVERGED':
-        return ['수치 결과표 열기', '흐름 방향 보여줘', '현재 상태 요약'];
+        return ctx?.powerflowConverged == true
+            ? ['결과 보여줘', '흐름 방향 보여줘', '수치 보여줘']
+            : ['현재 상태 요약', '다음에 뭐 해?'];
       case 'POWERFLOW_NOT_CONVERGED':
-        return ['현재 상태 요약', '다음에 뭐 해?', '조류계산 다시 실행'];
+        return ctx?.powerflowReady == true
+            ? ['현재 상태 요약', '다음에 뭐 해?', '조류계산 다시 실행']
+            : ['현재 상태 요약', '다음에 뭐 해?'];
       default:
         return ['다음에 뭐 해?', '현재 상태 요약', '처음 화면으로 돌아가줘'];
     }
+  }
+
+  String _getRunPowerFlowBlockedReply(PowerLensAssistantContext context) {
+    if (context.currentScreen.toUpperCase() == 'REVIEW_PAGE') {
+      if (!context.finalVerified) {
+        return '최종 검증을 먼저 완료해야 조류계산 화면으로 이동할 수 있어요.';
+      }
+      if (!context.excelLoaded) {
+        return '검증된 도면이에요. 먼저 Excel 계통 제원을 연결해주세요.';
+      }
+      if (context.excelMappingStatus.toUpperCase() == 'MISMATCH') {
+        return 'Excel 불일치가 남아 있어 CAD로 이동할 수 없어요. 표시된 불일치 항목을 먼저 확인해주세요.';
+      }
+      if (_hasVerifiedFinalExcelMatch(context)) {
+        return '검증된 Excel과 도면이 일치하지만 CAD 이동을 완료하지 못했어요. 다시 시도해주세요.';
+      }
+      return 'Excel 대조가 검증되지 않아 CAD로 이동할 수 없어요. 대조 상태를 확인해주세요.';
+    }
+    if (context.powerflowRunning) return '조류계산이 이미 진행 중이에요.';
+    final blockers = context.currentBlockers.isEmpty
+        ? '도면, 계통 제원, 모선 연결 상태를 확인해주세요.'
+        : context.currentBlockers.join(' ');
+    return '조류계산 준비가 완료되지 않았어요. $blockers';
   }
 
   String _getStageNameKo(String stage) {

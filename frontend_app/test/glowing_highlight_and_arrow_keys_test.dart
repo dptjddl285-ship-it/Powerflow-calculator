@@ -15,207 +15,276 @@ void main() {
       service.clearHighlight();
     });
 
-    test('natural language queries asking what to do resolve to explainCurrentStage', () {
-      expect(service.parseIntent('다음에 뭐 해?'), PowerLensAppAction.explainCurrentStage);
-      expect(service.parseIntent('지금 뭐 해야 돼?'), PowerLensAppAction.explainCurrentStage);
-      expect(service.parseIntent('어디 눌러야 돼?'), PowerLensAppAction.explainCurrentStage);
-      expect(service.parseIntent('어디 해야 돼?'), PowerLensAppAction.explainCurrentStage);
-      expect(service.parseIntent('어디 눌러?'), PowerLensAppAction.explainCurrentStage);
-    });
+    test(
+      'natural language queries asking what to do resolve to explainCurrentStage',
+      () {
+        expect(
+          service.parseIntent('다음에 뭐 해?'),
+          PowerLensAppAction.explainCurrentStage,
+        );
+        expect(
+          service.parseIntent('지금 뭐 해야 돼?'),
+          PowerLensAppAction.explainCurrentStage,
+        );
+        expect(
+          service.parseIntent('어디 눌러야 돼?'),
+          PowerLensAppAction.explainCurrentStage,
+        );
+        expect(
+          service.parseIntent('어디 해야 돼?'),
+          PowerLensAppAction.explainCurrentStage,
+        );
+        expect(
+          service.parseIntent('어디 눌러?'),
+          PowerLensAppAction.explainCurrentStage,
+        );
+      },
+    );
 
-    test('determineTargetForContext resolves appropriate target per workflow stage', () {
-      // Object Review with unreviewed nodes
-      const objCtx = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'object_review',
-        workingNodes: [
-          {'id': 'B1', 'status': 'SUSPICIOUS'},
-          {'id': 'G1', 'status': 'PENDING'},
-        ],
-      );
-      expect(service.determineTargetForContext(objCtx), isNull);
-      expect(service.determineTargetForContext(objCtx), isNot('object_approve'));
-      expect(service.determineTargetForContext(objCtx), isNot('object_batch_approve'));
+    test(
+      'determineTargetForContext resolves appropriate target per workflow stage',
+      () {
+        // Object Review with unreviewed nodes
+        const objCtx = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'object_review',
+          workingNodes: [
+            {'id': 'B1', 'status': 'SUSPICIOUS'},
+            {'id': 'G1', 'status': 'PENDING'},
+          ],
+        );
+        expect(service.determineTargetForContext(objCtx), isNull);
+        expect(
+          service.determineTargetForContext(objCtx),
+          isNot('object_approve'),
+        );
+        expect(
+          service.determineTargetForContext(objCtx),
+          isNot('object_batch_approve'),
+        );
 
-      // Object Review with all confirmed
-      const objDoneCtx = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'object_review',
-        workingNodes: [
-          {'id': 'B1', 'status': 'CONFIRMED'},
-        ],
-      );
-      expect(service.determineTargetForContext(objDoneCtx), 'object_gate');
+        // Object Review with all confirmed
+        const objDoneCtx = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'object_review',
+          workingNodes: [
+            {'id': 'B1', 'status': 'CONFIRMED'},
+          ],
+        );
+        expect(service.determineTargetForContext(objDoneCtx), 'object_gate');
 
-      // Bus Mapping with unapproved bus
-      const busCtx = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'bus_mapping',
-        workingNodes: [
-          {'id': 'B1', 'className': 'bus', 'status': 'PENDING'},
-        ],
-      );
-      // Bus issues are guided by production BusGuideBox, not a legacy button.
-      expect(service.determineTargetForContext(busCtx), isNull);
+        // Bus Mapping with unapproved bus
+        const busCtx = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'bus_mapping',
+          workingNodes: [
+            {'id': 'B1', 'className': 'bus', 'status': 'PENDING'},
+          ],
+        );
+        // Bus issues are guided by production BusGuideBox, not a legacy button.
+        expect(service.determineTargetForContext(busCtx), isNull);
 
-      // Connection Review with an exception: guide by real LINE focus, not a
-      // fabricated button target.
-      const connCtx = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'connection_review',
-        workingLines: [
-          {'id': 'L1', 'status': 'AMBIGUOUS'},
-        ],
-      );
-      expect(service.determineTargetForContext(connCtx), isNull);
+        // Connection Review with an exception: guide by real LINE focus, not a
+        // fabricated button target.
+        const connCtx = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'connection_review',
+          workingLines: [
+            {'id': 'L1', 'status': 'AMBIGUOUS'},
+          ],
+        );
+        expect(service.determineTargetForContext(connCtx), isNull);
 
-      // Verified Final without Excel
-      const finalNoExcelCtx = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'verified_final',
-        excelLoaded: false,
-      );
-      expect(service.determineTargetForContext(finalNoExcelCtx), 'final_excel_upload');
+        // Verified Final without Excel
+        const finalNoExcelCtx = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'verified_final',
+          excelLoaded: false,
+        );
+        expect(
+          service.determineTargetForContext(finalNoExcelCtx),
+          'final_excel_upload',
+        );
 
-      // Verified Final with Excel
-      const finalWithExcelCtx = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'verified_final',
-        excelLoaded: true,
-      );
-      expect(service.determineTargetForContext(finalWithExcelCtx), 'final_canvas_handoff');
+        // Verified Final with Excel
+        const finalWithExcelCtx = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'verified_final',
+          finalVerified: true,
+          excelLoaded: true,
+          excelMappingStatus: 'MATCHED',
+        );
+        expect(
+          service.determineTargetForContext(finalWithExcelCtx),
+          'final_canvas_handoff',
+        );
 
-      // CAD canvas empty
-      const cadEmptyCtx = PowerLensAssistantContext(
-        currentScreen: 'MAIN_CANVAS',
-        hasDiagram: false,
-        totalObjects: 0,
-      );
-      expect(service.determineTargetForContext(cadEmptyCtx), 'home_upload');
+        // CAD canvas empty
+        const cadEmptyCtx = PowerLensAssistantContext(
+          currentScreen: 'MAIN_CANVAS',
+          hasDiagram: false,
+          totalObjects: 0,
+        );
+        expect(service.determineTargetForContext(cadEmptyCtx), 'home_upload');
 
-      // Uppercase workflowStage verification (as passed by review_page.dart)
-      const objUpperCtx = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'OBJECT_REVIEW',
-        workingNodes: [
-          {'id': 'B1', 'status': 'CONFIRMED'},
-        ],
-      );
-      expect(service.determineTargetForContext(objUpperCtx), 'object_gate');
+        // Uppercase workflowStage verification (as passed by review_page.dart)
+        const objUpperCtx = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'OBJECT_REVIEW',
+          workingNodes: [
+            {'id': 'B1', 'status': 'CONFIRMED'},
+          ],
+        );
+        expect(service.determineTargetForContext(objUpperCtx), 'object_gate');
 
-      const busUpperCtx = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'BUS_MAPPING',
-        workingNodes: [
-          {'id': 'B1', 'className': 'bus', 'status': 'PENDING'},
-        ],
-      );
-      expect(service.determineTargetForContext(busUpperCtx), isNull);
+        const busUpperCtx = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'BUS_MAPPING',
+          workingNodes: [
+            {'id': 'B1', 'className': 'bus', 'status': 'PENDING'},
+          ],
+        );
+        expect(service.determineTargetForContext(busUpperCtx), isNull);
 
-      const connUpperCtx = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'CONNECTION_REVIEW',
-        workingLines: [
-          {'id': 'L1', 'status': 'AMBIGUOUS'},
-        ],
-      );
-      expect(service.determineTargetForContext(connUpperCtx), isNull);
+        const connUpperCtx = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'CONNECTION_REVIEW',
+          workingLines: [
+            {'id': 'L1', 'status': 'AMBIGUOUS'},
+          ],
+        );
+        expect(service.determineTargetForContext(connUpperCtx), isNull);
 
-      const finalUpperCtx = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'FINAL',
-        excelLoaded: false,
-      );
-      expect(service.determineTargetForContext(finalUpperCtx), 'final_excel_upload');
+        const finalUpperCtx = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'FINAL',
+          excelLoaded: false,
+        );
+        expect(
+          service.determineTargetForContext(finalUpperCtx),
+          'final_excel_upload',
+        );
 
-      // Clean objects (0 suspicious, unreviewed nodes exist) guides user to batch approve
-      const cleanObjCtx = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'object_review',
-        suspiciousObjects: 0,
-        unresolvedMissingCandidates: 0,
-        workingNodes: [
-          {'id': 'B1', 'status': 'DETECTED'},
-          {'id': 'G1', 'status': 'DETECTED'},
-        ],
-      );
-      expect(service.determineTargetForContext(cleanObjCtx), 'object_gate');
-    });
+        // Clean objects (0 suspicious, unreviewed nodes exist) guides user to batch approve
+        const cleanObjCtx = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'object_review',
+          suspiciousObjects: 0,
+          unresolvedMissingCandidates: 0,
+          workingNodes: [
+            {'id': 'B1', 'status': 'DETECTED'},
+            {'id': 'G1', 'status': 'DETECTED'},
+          ],
+        );
+        expect(service.determineTargetForContext(cleanObjCtx), 'object_gate');
+      },
+    );
 
-    test('resolveIntentActions handles approveAllClean command vs how-to question', () {
-      const objCtx = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'object_review',
-      );
-      // In Object Review V2, batch approve is suppressed
-      expect(service.resolveIntentActions('일괄 승인해줘', objCtx), isEmpty);
+    test(
+      'resolveIntentActions handles approveAllClean command vs how-to question',
+      () {
+        const objCtx = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'object_review',
+        );
+        // In Object Review V2, batch approve is suppressed
+        expect(service.resolveIntentActions('일괄 승인해줘', objCtx), isEmpty);
 
-      // Connection Review has no batch-approval action in V2.
-      const connectionCtx = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'connection_review',
-      );
-      expect(service.resolveIntentActions('일괄 승인해줘', connectionCtx), isEmpty);
-      expect(service.resolveIntentActions('정상 객체 전체 승인', connectionCtx), isEmpty);
-      expect(service.resolveIntentActions('한 번에 다 승인', connectionCtx), isEmpty);
+        // Connection Review has no batch-approval action in V2.
+        const connectionCtx = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'connection_review',
+        );
+        expect(service.resolveIntentActions('일괄 승인해줘', connectionCtx), isEmpty);
+        expect(
+          service.resolveIntentActions('정상 객체 전체 승인', connectionCtx),
+          isEmpty,
+        );
+        expect(
+          service.resolveIntentActions('한 번에 다 승인', connectionCtx),
+          isEmpty,
+        );
 
-      // How-to / Where questions resolve to explainCurrentStage (guidance + glowing highlight, NO auto execution)
-      expect(service.resolveIntentActions('전체 승인할려면 뭐눌러야해??', objCtx), [PowerLensAppAction.explainCurrentStage]);
-      expect(service.resolveIntentActions('일괄 승인은 어디 눌러?', objCtx), [PowerLensAppAction.explainCurrentStage]);
-      expect(service.resolveIntentActions('전체 승인 어떻게 해?', objCtx), [PowerLensAppAction.explainCurrentStage]);
-      expect(service.resolveIntentActions('조류계산 어디서 해?', objCtx), [PowerLensAppAction.explainCurrentStage]);
-      expect(service.resolveIntentActions('엑셀 파일 어디서 올려?', objCtx), [PowerLensAppAction.explainCurrentStage]);
-      expect(service.resolveIntentActions('다 잘됐을경우 뭐 눌러?', objCtx), [PowerLensAppAction.explainCurrentStage]);
-      expect(service.resolveIntentActions('모두 정상이면 어디 눌러?', objCtx), [PowerLensAppAction.explainCurrentStage]);
-      expect(service.resolveIntentActions('일괄승인 버튼 그거 어디 있어?', objCtx), [PowerLensAppAction.explainCurrentStage]);
-    });
+        // How-to / Where questions resolve to explainCurrentStage (guidance + glowing highlight, NO auto execution)
+        expect(service.resolveIntentActions('전체 승인할려면 뭐눌러야해??', objCtx), [
+          PowerLensAppAction.explainCurrentStage,
+        ]);
+        expect(service.resolveIntentActions('일괄 승인은 어디 눌러?', objCtx), [
+          PowerLensAppAction.explainCurrentStage,
+        ]);
+        expect(service.resolveIntentActions('전체 승인 어떻게 해?', objCtx), [
+          PowerLensAppAction.explainCurrentStage,
+        ]);
+        expect(service.resolveIntentActions('조류계산 어디서 해?', objCtx), [
+          PowerLensAppAction.explainCurrentStage,
+        ]);
+        expect(service.resolveIntentActions('엑셀 파일 어디서 올려?', objCtx), [
+          PowerLensAppAction.explainCurrentStage,
+        ]);
+        expect(service.resolveIntentActions('다 잘됐을경우 뭐 눌러?', objCtx), [
+          PowerLensAppAction.explainCurrentStage,
+        ]);
+        expect(service.resolveIntentActions('모두 정상이면 어디 눌러?', objCtx), [
+          PowerLensAppAction.explainCurrentStage,
+        ]);
+        expect(service.resolveIntentActions('일괄승인 버튼 그거 어디 있어?', objCtx), [
+          PowerLensAppAction.explainCurrentStage,
+        ]);
+      },
+    );
 
-    test('triggerHighlight updates activeHighlightTarget and clearHighlight resets it', () {
-      service.clearHighlight();
-      expect(service.activeHighlightTarget.value, isNull);
+    test(
+      'triggerHighlight updates activeHighlightTarget and clearHighlight resets it',
+      () {
+        service.clearHighlight();
+        expect(service.activeHighlightTarget.value, isNull);
 
-      service.triggerHighlight('object_approve');
-      expect(service.activeHighlightTarget.value, 'object_approve');
+        service.triggerHighlight('object_approve');
+        expect(service.activeHighlightTarget.value, 'object_approve');
 
-      service.clearHighlight();
-      expect(service.activeHighlightTarget.value, isNull);
-    });
+        service.clearHighlight();
+        expect(service.activeHighlightTarget.value, isNull);
+      },
+    );
 
-    testWidgets('GlowingTargetWrapper renders child and shows sparkle badge when active', (tester) async {
-      service.clearHighlight();
+    testWidgets(
+      'GlowingTargetWrapper renders child and shows sparkle badge when active',
+      (tester) async {
+        service.clearHighlight();
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: GlowingTargetWrapper(
-              targetId: 'test_button',
-              guideLabel: '✨ 여기를 확인하세요!',
-              child: ElevatedButton(
-                onPressed: () {},
-                child: const Text('테스트 버튼'),
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: GlowingTargetWrapper(
+                targetId: 'test_button',
+                guideLabel: '✨ 여기를 확인하세요!',
+                child: ElevatedButton(
+                  onPressed: () {},
+                  child: const Text('테스트 버튼'),
+                ),
               ),
             ),
           ),
-        ),
-      );
+        );
 
-      // Inactive: child text is visible, sparkle badge is not shown
-      expect(find.text('테스트 버튼'), findsOneWidget);
-      expect(find.text('✨ 여기를 확인하세요!'), findsNothing);
+        // Inactive: child text is visible, sparkle badge is not shown
+        expect(find.text('테스트 버튼'), findsOneWidget);
+        expect(find.text('✨ 여기를 확인하세요!'), findsNothing);
 
-      // Trigger highlight
-      service.triggerHighlight('test_button');
-      await tester.pump();
+        // Trigger highlight
+        service.triggerHighlight('test_button');
+        await tester.pump();
 
-      // Active: sparkle badge appears
-      expect(find.text('✨ 여기를 확인하세요!'), findsOneWidget);
+        // Active: sparkle badge appears
+        expect(find.text('✨ 여기를 확인하세요!'), findsOneWidget);
 
-      // Deactivate
-      service.clearHighlight();
-      await tester.pump();
+        // Deactivate
+        service.clearHighlight();
+        await tester.pump();
 
-      expect(find.text('✨ 여기를 확인하세요!'), findsNothing);
-    });
+        expect(find.text('✨ 여기를 확인하세요!'), findsNothing);
+      },
+    );
 
     test('PowerLensAIService panelOffset persists and can be reset', () {
       expect(service.panelOffset, Offset.zero);
@@ -225,375 +294,553 @@ void main() {
       expect(service.panelOffset, Offset.zero);
     });
 
-    testWidgets('PowerLensAIPanel displays drag handle and updates position on drag', (tester) async {
-      service.resetPanelOffset();
+    testWidgets(
+      'PowerLensAIPanel displays drag handle and updates position on drag',
+      (tester) async {
+        service.resetPanelOffset();
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: Stack(
-              children: [
-                Positioned(
-                  right: 20,
-                  bottom: 70,
-                  child: PowerLensAIPanel(
-                    assistantContext: const PowerLensAssistantContext(
-                      currentScreen: 'HOME',
-                      workflowStage: 'home',
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: Stack(
+                children: [
+                  Positioned(
+                    right: 20,
+                    bottom: 70,
+                    child: PowerLensAIPanel(
+                      assistantContext: const PowerLensAssistantContext(
+                        currentScreen: 'HOME',
+                        workflowStage: 'home',
+                      ),
+                      onClose: () {},
+                      isMobile: false,
                     ),
-                    onClose: () {},
-                    isMobile: false,
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
-        ),
-      );
+        );
 
-      // Drag indicator is rendered
-      expect(find.byIcon(Icons.drag_indicator), findsOneWidget);
-      expect(find.text('Lensy AI'), findsOneWidget);
+        // Drag indicator is rendered
+        expect(find.byIcon(Icons.drag_indicator), findsOneWidget);
+        expect(find.text('Lensy AI'), findsOneWidget);
 
-      // Initially, no reset button is shown because offset is zero
-      expect(find.byIcon(Icons.restart_alt), findsNothing);
+        // Initially, no reset button is shown because offset is zero
+        expect(find.byIcon(Icons.restart_alt), findsNothing);
 
-      // Drag the header
-      final headerFinder = find.text('Lensy AI');
-      await tester.drag(headerFinder, const Offset(-100, -50));
-      await tester.pumpAndSettle();
+        // Drag the header
+        final headerFinder = find.text('Lensy AI');
+        await tester.drag(headerFinder, const Offset(-100, -50));
+        await tester.pumpAndSettle();
 
-      // Service offset is updated and reset button appears
-      expect(service.panelOffset.dx, lessThan(-50.0));
-      expect(service.panelOffset.dy, lessThan(-20.0));
-      expect(find.byIcon(Icons.restart_alt), findsOneWidget);
+        // Service offset is updated and reset button appears
+        expect(service.panelOffset.dx, lessThan(-50.0));
+        expect(service.panelOffset.dy, lessThan(-20.0));
+        expect(find.byIcon(Icons.restart_alt), findsOneWidget);
 
-      // Tap reset button
-      await tester.tap(find.byIcon(Icons.restart_alt));
-      await tester.pumpAndSettle();
+        // Tap reset button
+        await tester.tap(find.byIcon(Icons.restart_alt));
+        await tester.pumpAndSettle();
 
-      expect(service.panelOffset, Offset.zero);
-      expect(find.byIcon(Icons.restart_alt), findsNothing);
+        expect(service.panelOffset, Offset.zero);
+        expect(find.byIcon(Icons.restart_alt), findsNothing);
 
-      // Drag again and test double-tap to reset
-      await tester.drag(headerFinder, const Offset(-60, -40));
-      await tester.pumpAndSettle();
-      expect(service.panelOffset.dx, lessThan(0.0));
+        // Drag again and test double-tap to reset
+        await tester.drag(headerFinder, const Offset(-60, -40));
+        await tester.pumpAndSettle();
+        expect(service.panelOffset.dx, lessThan(0.0));
 
-      // Double tap on header area
-      await tester.tap(headerFinder);
-      await tester.pump(const Duration(milliseconds: 50));
-      await tester.tap(headerFinder);
-      await tester.pumpAndSettle();
+        // Double tap on header area
+        await tester.tap(headerFinder);
+        await tester.pump(const Duration(milliseconds: 50));
+        await tester.tap(headerFinder);
+        await tester.pumpAndSettle();
 
-      expect(service.panelOffset, Offset.zero);
-    });
+        expect(service.panelOffset, Offset.zero);
+      },
+    );
 
-    test('Negative issue queries resolve to explainCurrentStage in review stage', () {
-      const objCtx = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'object_review',
-        suspiciousObjects: 0,
-        unresolvedMissingCandidates: 0,
-      );
+    test(
+      'Negative issue queries resolve to explainCurrentStage in review stage',
+      () {
+        const objCtx = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'object_review',
+          suspiciousObjects: 0,
+          unresolvedMissingCandidates: 0,
+        );
 
-      expect(
-        service.resolveIntentActions('검토 필요한 항목 없는데도 이러잖아', objCtx),
-        contains(PowerLensAppAction.explainCurrentStage),
-      );
-      expect(
-        service.resolveIntentActions('검토 필요한 항목 없는데?', objCtx),
-        contains(PowerLensAppAction.explainCurrentStage),
-      );
-      expect(
-        service.resolveIntentActions('문제 없어', objCtx),
-        contains(PowerLensAppAction.explainCurrentStage),
-      );
-    });
+        expect(
+          service.resolveIntentActions('검토 필요한 항목 없는데도 이러잖아', objCtx),
+          contains(PowerLensAppAction.explainCurrentStage),
+        );
+        expect(
+          service.resolveIntentActions('검토 필요한 항목 없는데?', objCtx),
+          contains(PowerLensAppAction.explainCurrentStage),
+        );
+        expect(
+          service.resolveIntentActions('문제 없어', objCtx),
+          contains(PowerLensAppAction.explainCurrentStage),
+        );
+      },
+    );
 
-    testWidgets('PowerLensAIPanel shows dynamic action chip based on issue counts', (tester) async {
-      // 1. When 0 issues exist in object review: chip says '객체 검수 완료하기'
-      const zeroIssueCtx = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'OBJECT_REVIEW',
-        suspiciousObjects: 0,
-        unresolvedMissingCandidates: 0,
-      );
+    testWidgets(
+      'PowerLensAIPanel shows dynamic action chip based on issue counts',
+      (tester) async {
+        // 1. When 0 issues exist in object review: chip says '객체 검수 완료하기'
+        const zeroIssueCtx = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'OBJECT_REVIEW',
+          suspiciousObjects: 0,
+          unresolvedMissingCandidates: 0,
+        );
 
-      await tester.pumpWidget(
-        MaterialApp(
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: PowerLensAIPanel(
+                assistantContext: zeroIssueCtx,
+                onClose: () {},
+                isMobile: false,
+              ),
+            ),
+          ),
+        );
+
+        expect(find.text('객체 검수 완료하기'), findsAtLeastNWidgets(1));
+        expect(find.textContaining('검토 필요 항목'), findsNothing);
+
+        // 2. When issues exist in object review: chip says '검토 필요 항목'
+        const hasIssueCtx = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'OBJECT_REVIEW',
+          suspiciousObjects: 2,
+          unresolvedMissingCandidates: 0,
+        );
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: PowerLensAIPanel(
+                assistantContext: hasIssueCtx,
+                onClose: () {},
+                isMobile: false,
+              ),
+            ),
+          ),
+        );
+
+        expect(find.textContaining('검토 필요 항목'), findsAtLeastNWidgets(1));
+      },
+    );
+
+    testWidgets(
+      'PowerLensAIPanel final quick actions follow Excel and solver readiness',
+      (tester) async {
+        final originalBaseUrl = PowerLensAIService.baseUrl;
+        PowerLensAIService.baseUrl = 'http://127.0.0.1:1';
+
+        Widget panel(PowerLensAssistantContext context) => MaterialApp(
           home: Scaffold(
-            body: PowerLensAIPanel(
-              assistantContext: zeroIssueCtx,
-              onClose: () {},
-              isMobile: false,
-            ),
+            body: PowerLensAIPanel(assistantContext: context, onClose: () {}),
           ),
-        ),
-      );
+        );
 
-      expect(find.text('객체 검수 완료하기'), findsAtLeastNWidgets(1));
-      expect(find.textContaining('검토 필요 항목'), findsNothing);
+        const noExcel = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'FINAL',
+          finalVerified: true,
+        );
+        const mismatch = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'FINAL',
+          finalVerified: true,
+          excelLoaded: true,
+          excelMappingStatus: 'MISMATCH',
+        );
+        const matched = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'FINAL',
+          finalVerified: true,
+          excelLoaded: true,
+          excelMappingStatus: 'MATCHED',
+        );
+        const cadNotReady = PowerLensAssistantContext(
+          currentScreen: 'CAD_CANVAS',
+          workflowStage: 'FINAL_CAD',
+          excelLoaded: true,
+          excelMappingStatus: 'MATCHED',
+        );
+        const cadReady = PowerLensAssistantContext(
+          currentScreen: 'CAD_CANVAS',
+          workflowStage: 'FINAL_CAD',
+          excelLoaded: true,
+          excelMappingStatus: 'MATCHED',
+          powerflowReady: true,
+        );
+        const converged = PowerLensAssistantContext(
+          currentScreen: 'CAD_CANVAS',
+          workflowStage: 'POWERFLOW_CONVERGED',
+          excelLoaded: true,
+          excelMappingStatus: 'MATCHED',
+          powerflowReady: true,
+          powerflowConverged: true,
+          powerflowEvidence: {'converged': true, 'iterations': 4},
+        );
 
-      // 2. When issues exist in object review: chip says '검토 필요 항목'
-      const hasIssueCtx = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'OBJECT_REVIEW',
-        suspiciousObjects: 2,
-        unresolvedMissingCandidates: 0,
-      );
+        service.clearHistory();
+        service.clearProactiveKeys();
+        try {
+          await tester.pumpWidget(panel(noExcel));
+          await tester.pump();
+          expect(find.text('Excel 가져오기'), findsAtLeastNWidgets(1));
+          expect(find.text('조류계산 해줘'), findsNothing);
+          expect(find.text('흐름 방향 보여줘'), findsNothing);
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: PowerLensAIPanel(
-              assistantContext: hasIssueCtx,
-              onClose: () {},
-              isMobile: false,
-            ),
-          ),
-        ),
-      );
+          await tester.pumpWidget(panel(mismatch));
+          await tester.pump();
+          expect(find.text('Excel 다시 가져오기'), findsAtLeastNWidgets(1));
+          expect(find.text('CAD로 이동'), findsNothing);
+          expect(find.text('조류계산 해줘'), findsNothing);
+          expect(find.text('흐름 방향 보여줘'), findsNothing);
 
-      expect(find.textContaining('검토 필요 항목'), findsAtLeastNWidgets(1));
-    });
+          await tester.pumpWidget(panel(matched));
+          await tester.pump();
+          expect(find.text('CAD로 이동'), findsAtLeastNWidgets(1));
+          expect(find.text('조류계산 해줘'), findsNothing);
 
-    test('ReviewLineItem and ReviewNodeItem value equality and indexOf work by ID', () {
-      final lineA = ReviewLineItem(
-        lineId: 'L17',
-        connectedTo: ['bus_24', 'trans_1'],
-        path: [[0, 0], [10, 10]],
-        reviewStatus: 'CONFIRMED',
-      );
-      final lineB = ReviewLineItem(
-        lineId: 'L17',
-        connectedTo: ['bus_24', 'trans_1'],
-        path: [[0, 0], [10, 10]],
-        reviewStatus: 'AMBIGUOUS',
-      );
-      final lineC = ReviewLineItem(
-        lineId: 'L18',
-        connectedTo: ['bus_24', 'bus_3'],
-        path: [[0, 0], [20, 20]],
-        reviewStatus: 'DETECTED',
-      );
+          await tester.pumpWidget(panel(cadNotReady));
+          await tester.pump();
+          expect(find.text('조류계산 실행'), findsNothing);
 
-      // Value equality by lineId
-      expect(lineA == lineB, isTrue);
-      expect(lineA.hashCode == lineB.hashCode, isTrue);
-      expect(lineA == lineC, isFalse);
+          await tester.pumpWidget(panel(cadReady));
+          await tester.pump();
+          expect(find.text('조류계산 실행'), findsAtLeastNWidgets(1));
 
-      final lineList = [lineA, lineC];
-      expect(lineList.indexOf(lineB), 0);
-      expect(lineList.contains(lineB), isTrue);
-
-      final nodeA = ReviewNodeItem(
-        id: 'bus_24',
-        className: 'bus',
-        bbox: [0, 0, 10, 10],
-        confidence: 0.95,
-        source: 'yolo',
-      );
-      final nodeB = ReviewNodeItem(
-        id: 'bus_24',
-        className: 'bus',
-        bbox: [1, 1, 10, 10],
-        confidence: 0.99,
-        source: 'human',
-      );
-      expect(nodeA == nodeB, isTrue);
-      expect(nodeA.hashCode == nodeB.hashCode, isTrue);
-    });
-
-    test('Connection review sequential navigation safely handles filter exhaustion and fallbacks', () {
-      final line1 = ReviewLineItem(
-        lineId: 'L1',
-        connectedTo: ['bus_1', 'bus_2'],
-        path: [],
-        reviewStatus: 'AMBIGUOUS',
-      );
-      final line2 = ReviewLineItem(
-        lineId: 'L2',
-        connectedTo: ['bus_2', 'bus_3'],
-        path: [],
-        reviewStatus: 'CONFIRMED',
-      );
-      final line3 = ReviewLineItem(
-        lineId: 'L3',
-        connectedTo: ['bus_3', 'bus_4'],
-        path: [],
-        reviewStatus: 'CONFIRMED',
-      );
-
-      final workingLines = [line1, line2, line3];
-      String connFilterStatus = 'AMBIGUOUS';
-
-      List<ReviewLineItem> getFilteredLines() {
-        if (connFilterStatus == 'AMBIGUOUS') {
-          return workingLines.where((l) => l.reviewStatus == 'AMBIGUOUS').toList();
+          await tester.pumpWidget(panel(converged));
+          await tester.pump();
+          expect(find.text('결과 보여줘'), findsAtLeastNWidgets(1));
+          expect(find.text('흐름 방향 보여줘'), findsAtLeastNWidgets(1));
+          expect(find.text('수치 보여줘'), findsAtLeastNWidgets(1));
+        } finally {
+          service.clearHistory();
+          service.clearProactiveKeys();
+          PowerLensAIService.baseUrl = originalBaseUrl;
         }
-        return workingLines.where((l) => l.reviewStatus != 'REJECTED').toList();
-      }
+      },
+    );
 
-      ReviewLineItem selectedLine = line1;
+    test(
+      'ReviewLineItem and ReviewNodeItem value equality and indexOf work by ID',
+      () {
+        final lineA = ReviewLineItem(
+          lineId: 'L17',
+          connectedTo: ['bus_24', 'trans_1'],
+          path: [
+            [0, 0],
+            [10, 10],
+          ],
+          reviewStatus: 'CONFIRMED',
+        );
+        final lineB = ReviewLineItem(
+          lineId: 'L17',
+          connectedTo: ['bus_24', 'trans_1'],
+          path: [
+            [0, 0],
+            [10, 10],
+          ],
+          reviewStatus: 'AMBIGUOUS',
+        );
+        final lineC = ReviewLineItem(
+          lineId: 'L18',
+          connectedTo: ['bus_24', 'bus_3'],
+          path: [
+            [0, 0],
+            [20, 20],
+          ],
+          reviewStatus: 'DETECTED',
+        );
 
-      // 1. Initially, line1 is AMBIGUOUS, so filtered lines has 1 item
-      var currentFiltered = getFilteredLines();
-      expect(currentFiltered.length, 1);
-      expect(currentFiltered.first.lineId, 'L1');
+        // Value equality by lineId
+        expect(lineA == lineB, isTrue);
+        expect(lineA.hashCode == lineB.hashCode, isTrue);
+        expect(lineA == lineC, isFalse);
 
-      // 2. User confirms line1 -> status becomes CONFIRMED
-      line1.reviewStatus = 'CONFIRMED';
-      if (connFilterStatus == 'AMBIGUOUS' && !workingLines.any((l) => l.reviewStatus == 'AMBIGUOUS')) {
-        connFilterStatus = 'ALL';
-      }
+        final lineList = [lineA, lineC];
+        expect(lineList.indexOf(lineB), 0);
+        expect(lineList.contains(lineB), isTrue);
 
-      // 3. Fallback logic: filtered lines auto-switches to ALL, avoiding 0-length freeze
-      currentFiltered = getFilteredLines();
-      expect(connFilterStatus, 'ALL');
-      expect(currentFiltered.length, 3);
+        final nodeA = ReviewNodeItem(
+          id: 'bus_24',
+          className: 'bus',
+          bbox: [0, 0, 10, 10],
+          confidence: 0.95,
+          source: 'yolo',
+        );
+        final nodeB = ReviewNodeItem(
+          id: 'bus_24',
+          className: 'bus',
+          bbox: [1, 1, 10, 10],
+          confidence: 0.99,
+          source: 'human',
+        );
+        expect(nodeA == nodeB, isTrue);
+        expect(nodeA.hashCode == nodeB.hashCode, isTrue);
+      },
+    );
 
-      // 4. Moving next from L1 safely advances to L2
-      int currentIdx = currentFiltered.indexWhere((l) => l.lineId == selectedLine.lineId);
-      expect(currentIdx, 0);
-      int nextIdx = (currentIdx + 1) % currentFiltered.length;
-      selectedLine = currentFiltered[nextIdx];
-      expect(selectedLine.lineId, 'L2');
+    test(
+      'Connection review sequential navigation safely handles filter exhaustion and fallbacks',
+      () {
+        final line1 = ReviewLineItem(
+          lineId: 'L1',
+          connectedTo: ['bus_1', 'bus_2'],
+          path: [],
+          reviewStatus: 'AMBIGUOUS',
+        );
+        final line2 = ReviewLineItem(
+          lineId: 'L2',
+          connectedTo: ['bus_2', 'bus_3'],
+          path: [],
+          reviewStatus: 'CONFIRMED',
+        );
+        final line3 = ReviewLineItem(
+          lineId: 'L3',
+          connectedTo: ['bus_3', 'bus_4'],
+          path: [],
+          reviewStatus: 'CONFIRMED',
+        );
 
-      // 5. Moving next from L2 safely advances to L3
-      currentIdx = currentFiltered.indexWhere((l) => l.lineId == selectedLine.lineId);
-      nextIdx = (currentIdx + 1) % currentFiltered.length;
-      selectedLine = currentFiltered[nextIdx];
-      expect(selectedLine.lineId, 'L3');
+        final workingLines = [line1, line2, line3];
+        String connFilterStatus = 'AMBIGUOUS';
 
-      // 6. Moving previous from L3 goes back to L2
-      currentIdx = currentFiltered.indexWhere((l) => l.lineId == selectedLine.lineId);
-      int prevIdx = (currentIdx - 1 + currentFiltered.length) % currentFiltered.length;
-      selectedLine = currentFiltered[prevIdx];
-      expect(selectedLine.lineId, 'L2');
+        List<ReviewLineItem> getFilteredLines() {
+          if (connFilterStatus == 'AMBIGUOUS') {
+            return workingLines
+                .where((l) => l.reviewStatus == 'AMBIGUOUS')
+                .toList();
+          }
+          return workingLines
+              .where((l) => l.reviewStatus != 'REJECTED')
+              .toList();
+        }
 
-      // 7. Moving previous from L1 wraps around to L3
-      selectedLine = line1;
-      currentIdx = currentFiltered.indexWhere((l) => l.lineId == selectedLine.lineId);
-      prevIdx = (currentIdx - 1 + currentFiltered.length) % currentFiltered.length;
-      selectedLine = currentFiltered[prevIdx];
-      expect(selectedLine.lineId, 'L3');
-    });
+        ReviewLineItem selectedLine = line1;
 
-    test('Missing candidate queries and unresolved states correctly prioritize missing_candidates highlight target', () {
-      const missingCandidateCtx = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'OBJECT_REVIEW',
-        suspiciousObjects: 0,
-        unresolvedMissingCandidates: 1,
-        workingNodes: [
-          {'id': 'B1', 'status': 'CONFIRMED'},
-          {'id': 'G1', 'status': 'CONFIRMED'},
-        ],
-      );
+        // 1. Initially, line1 is AMBIGUOUS, so filtered lines has 1 item
+        var currentFiltered = getFilteredLines();
+        expect(currentFiltered.length, 1);
+        expect(currentFiltered.first.lineId, 'L1');
 
-      // When unresolved candidates exist in object review, default target must be missing_candidates
-      expect(service.determineTargetForContext(missingCandidateCtx), 'missing_candidates');
+        // 2. User confirms line1 -> status becomes CONFIRMED
+        line1.reviewStatus = 'CONFIRMED';
+        if (connFilterStatus == 'AMBIGUOUS' &&
+            !workingLines.any((l) => l.reviewStatus == 'AMBIGUOUS')) {
+          connFilterStatus = 'ALL';
+        }
 
-      // Stage progression queries with unresolved candidates must direct user to missing_candidates
-      expect(service.determineTargetForContext(missingCandidateCtx, query: '다음 단계로 가고 싶어'), 'missing_candidates');
-      expect(service.determineTargetForContext(missingCandidateCtx, query: '왜 다음으로 못 넘어가?'), 'missing_candidates');
+        // 3. Fallback logic: filtered lines auto-switches to ALL, avoiding 0-length freeze
+        currentFiltered = getFilteredLines();
+        expect(connFilterStatus, 'ALL');
+        expect(currentFiltered.length, 3);
 
-      // User questions specifically about missing candidates, transformers, or dismiss
-      expect(service.determineTargetForContext(missingCandidateCtx, query: '누락후보를 볼려니깐 안눌러져서 확인을할수없어'), 'missing_candidates');
-      expect(service.determineTargetForContext(missingCandidateCtx, query: '변압기 가없어서 누락후보라 되는거같은데'), 'missing_candidates');
-      expect(service.determineTargetForContext(missingCandidateCtx, query: '문제없음 어떻게 해?'), 'missing_candidates');
-    });
+        // 4. Moving next from L1 safely advances to L2
+        int currentIdx = currentFiltered.indexWhere(
+          (l) => l.lineId == selectedLine.lineId,
+        );
+        expect(currentIdx, 0);
+        int nextIdx = (currentIdx + 1) % currentFiltered.length;
+        selectedLine = currentFiltered[nextIdx];
+        expect(selectedLine.lineId, 'L2');
 
-    test('MissingCandidateItem dismissal marks candidate as DISMISSED_BY_HUMAN', () {
-      final cand = MissingCandidateItem(
-        id: 'cand_tr_1',
-        suspectedClass: 'transformer',
-        descriptionKo: '모선 사이에 연결된 변압기가 감지되지 않았습니다.',
-        status: 'OPEN',
-      );
+        // 5. Moving next from L2 safely advances to L3
+        currentIdx = currentFiltered.indexWhere(
+          (l) => l.lineId == selectedLine.lineId,
+        );
+        nextIdx = (currentIdx + 1) % currentFiltered.length;
+        selectedLine = currentFiltered[nextIdx];
+        expect(selectedLine.lineId, 'L3');
 
-      expect(cand.status, 'OPEN');
-      cand.status = 'DISMISSED_BY_HUMAN';
-      expect(cand.status, 'DISMISSED_BY_HUMAN');
+        // 6. Moving previous from L3 goes back to L2
+        currentIdx = currentFiltered.indexWhere(
+          (l) => l.lineId == selectedLine.lineId,
+        );
+        int prevIdx =
+            (currentIdx - 1 + currentFiltered.length) % currentFiltered.length;
+        selectedLine = currentFiltered[prevIdx];
+        expect(selectedLine.lineId, 'L2');
 
-      // When all candidates are dismissed, unresolved count becomes 0
-      final candidateList = [cand];
-      final openCount = candidateList.where((c) => c.status == 'OPEN').length;
-      expect(openCount, 0);
+        // 7. Moving previous from L1 wraps around to L3
+        selectedLine = line1;
+        currentIdx = currentFiltered.indexWhere(
+          (l) => l.lineId == selectedLine.lineId,
+        );
+        prevIdx =
+            (currentIdx - 1 + currentFiltered.length) % currentFiltered.length;
+        selectedLine = currentFiltered[prevIdx];
+        expect(selectedLine.lineId, 'L3');
+      },
+    );
 
-      const resolvedCtx = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'OBJECT_REVIEW',
-        suspiciousObjects: 0,
-        unresolvedMissingCandidates: 0,
-        workingNodes: [
-          {'id': 'B1', 'status': 'CONFIRMED'},
-        ],
-      );
-      expect(service.determineTargetForContext(resolvedCtx), 'object_gate');
-    });
+    test(
+      'Missing candidate queries and unresolved states correctly prioritize missing_candidates highlight target',
+      () {
+        const missingCandidateCtx = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'OBJECT_REVIEW',
+          suspiciousObjects: 0,
+          unresolvedMissingCandidates: 1,
+          workingNodes: [
+            {'id': 'B1', 'status': 'CONFIRMED'},
+            {'id': 'G1', 'status': 'CONFIRMED'},
+          ],
+        );
 
-    test('Expanded glowing target catalog covers 25+ diverse user interaction points via triggerHighlight', () {
-      final targets = [
-        'phase_step_1',
-        'phase_step_2',
-        'phase_step_3',
-        'phase_step_4',
-        'reset_to_beginning',
-        'node_reject',
-        'node_prev',
-        'node_next',
-        'node_class_tile',
-        'line_reject',
-        'line_skip',
-        'line_prev',
-        'line_next',
-        'default_excel_btn',
-        'excel_mismatch_btn',
-        'palette_bus',
-        'palette_line',
-        'palette_generator',
-        'palette_load',
-        'palette_transformer',
-        'guide_dialog',
-        'canvas_clear',
-        'undo_btn',
-        'line_straighten',
-        'cad_reopen_review',
-        'cad_excel_import',
-      ];
-      for (final t in targets) {
-        service.triggerHighlight(t);
-        expect(service.activeHighlightTarget.value, t);
-      }
-      service.clearHighlight();
-      expect(service.activeHighlightTarget.value, isNull);
-    });
+        // When unresolved candidates exist in object review, default target must be missing_candidates
+        expect(
+          service.determineTargetForContext(missingCandidateCtx),
+          'missing_candidates',
+        );
 
-    test('AI companion provides explicit object completion guidance when objects are clean', () async {
-      const cleanCtx = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'OBJECT_REVIEW',
-        suspiciousObjects: 0,
-        unresolvedMissingCandidates: 0,
-        workingNodes: [
-          {'id': 'B1', 'status': 'DETECTED'},
-          {'id': 'G1', 'status': 'DETECTED'},
-        ],
-      );
+        // Stage progression queries with unresolved candidates must direct user to missing_candidates
+        expect(
+          service.determineTargetForContext(
+            missingCandidateCtx,
+            query: '다음 단계로 가고 싶어',
+          ),
+          'missing_candidates',
+        );
+        expect(
+          service.determineTargetForContext(
+            missingCandidateCtx,
+            query: '왜 다음으로 못 넘어가?',
+          ),
+          'missing_candidates',
+        );
 
-      await service.sendMessage('다 잘됐을경우 뭐 눌러?', cleanCtx);
-      final lastMsg = service.messages.last.text;
-      expect(lastMsg, contains('객체 검수 완료'));
-      expect(lastMsg.contains('정상 객체 일괄 승인'), isFalse);
+        // User questions specifically about missing candidates, transformers, or dismiss
+        expect(
+          service.determineTargetForContext(
+            missingCandidateCtx,
+            query: '누락후보를 볼려니깐 안눌러져서 확인을할수없어',
+          ),
+          'missing_candidates',
+        );
+        expect(
+          service.determineTargetForContext(
+            missingCandidateCtx,
+            query: '변압기 가없어서 누락후보라 되는거같은데',
+          ),
+          'missing_candidates',
+        );
+        expect(
+          service.determineTargetForContext(
+            missingCandidateCtx,
+            query: '문제없음 어떻게 해?',
+          ),
+          'missing_candidates',
+        );
+      },
+    );
 
-      // In Object Review V2, quick actions suggest object completion instead of batch approval
-      final quickActions = service.messages.last.suggestedActions;
-      expect(quickActions, contains('객체 검수 완료하기'));
-      expect(quickActions.contains('정상 객체 일괄 승인'), isFalse);
-    });
+    test(
+      'MissingCandidateItem dismissal marks candidate as DISMISSED_BY_HUMAN',
+      () {
+        final cand = MissingCandidateItem(
+          id: 'cand_tr_1',
+          suspectedClass: 'transformer',
+          descriptionKo: '모선 사이에 연결된 변압기가 감지되지 않았습니다.',
+          status: 'OPEN',
+        );
+
+        expect(cand.status, 'OPEN');
+        cand.status = 'DISMISSED_BY_HUMAN';
+        expect(cand.status, 'DISMISSED_BY_HUMAN');
+
+        // When all candidates are dismissed, unresolved count becomes 0
+        final candidateList = [cand];
+        final openCount = candidateList.where((c) => c.status == 'OPEN').length;
+        expect(openCount, 0);
+
+        const resolvedCtx = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'OBJECT_REVIEW',
+          suspiciousObjects: 0,
+          unresolvedMissingCandidates: 0,
+          workingNodes: [
+            {'id': 'B1', 'status': 'CONFIRMED'},
+          ],
+        );
+        expect(service.determineTargetForContext(resolvedCtx), 'object_gate');
+      },
+    );
+
+    test(
+      'Expanded glowing target catalog covers 25+ diverse user interaction points via triggerHighlight',
+      () {
+        final targets = [
+          'phase_step_1',
+          'phase_step_2',
+          'phase_step_3',
+          'phase_step_4',
+          'reset_to_beginning',
+          'node_reject',
+          'node_prev',
+          'node_next',
+          'node_class_tile',
+          'line_reject',
+          'line_skip',
+          'line_prev',
+          'line_next',
+          'default_excel_btn',
+          'excel_mismatch_btn',
+          'palette_bus',
+          'palette_line',
+          'palette_generator',
+          'palette_load',
+          'palette_transformer',
+          'guide_dialog',
+          'canvas_clear',
+          'undo_btn',
+          'line_straighten',
+          'cad_reopen_review',
+          'cad_excel_import',
+        ];
+        for (final t in targets) {
+          service.triggerHighlight(t);
+          expect(service.activeHighlightTarget.value, t);
+        }
+        service.clearHighlight();
+        expect(service.activeHighlightTarget.value, isNull);
+      },
+    );
+
+    test(
+      'AI companion provides explicit object completion guidance when objects are clean',
+      () async {
+        const cleanCtx = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'OBJECT_REVIEW',
+          suspiciousObjects: 0,
+          unresolvedMissingCandidates: 0,
+          workingNodes: [
+            {'id': 'B1', 'status': 'DETECTED'},
+            {'id': 'G1', 'status': 'DETECTED'},
+          ],
+        );
+
+        await service.sendMessage('다 잘됐을경우 뭐 눌러?', cleanCtx);
+        final lastMsg = service.messages.last.text;
+        expect(lastMsg, contains('객체 검수 완료'));
+        expect(lastMsg.contains('정상 객체 일괄 승인'), isFalse);
+
+        // In Object Review V2, quick actions suggest object completion instead of batch approval
+        final quickActions = service.messages.last.suggestedActions;
+        expect(quickActions, contains('객체 검수 완료하기'));
+        expect(quickActions.contains('정상 객체 일괄 승인'), isFalse);
+      },
+    );
   });
 }
-
-

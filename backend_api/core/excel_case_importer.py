@@ -1538,8 +1538,13 @@ class ExcelCaseImporter:
                     conn_buses.append(b_e)
                     all_trans_buses.add(int(b_e))
 
-                # If 2 or more buses connect to this transformer (e.g. multi-port tie transformers)
-                if len(conn_buses) >= 2:
+                # A verified two-winding transformer must resolve to exactly
+                # two explicit bus endpoints.  In strict SLD comparison,
+                # enumerating every pair from an over-connected transformer
+                # can make unrelated nearby branches look like Excel matches.
+                if structured_bus_numbers_only and len(conn_buses) > 2:
+                    unmapped_branch_ids.append(t_id)
+                elif len(conn_buses) >= 2:
                     found_any = False
                     for i in range(len(conn_buses)):
                         for j in range(i + 1, len(conn_buses)):
@@ -1554,10 +1559,13 @@ class ExcelCaseImporter:
                     if m:
                         diagram_branches.add(tuple(sorted([int(m.group(1)), int(m.group(2))])))
 
-        # Multi-bus substation transformers: if both buses connect to transformers and form an Excel transformer branch
-        for fb, tb in excel_transformers:
-            if fb in all_trans_buses and tb in all_trans_buses:
-                diagram_branches.add(tuple(sorted([fb, tb])))
+        # Legacy comparison supports multi-bus substation transformers.  A
+        # verified SLD comparison must not use Excel transformer pairs to
+        # infer topology that its explicit endpoints did not establish.
+        if not structured_bus_numbers_only:
+            for fb, tb in excel_transformers:
+                if fb in all_trans_buses and tb in all_trans_buses:
+                    diagram_branches.add(tuple(sorted([fb, tb])))
 
         for el in elements:
             if 'line' in get_el_type(el):

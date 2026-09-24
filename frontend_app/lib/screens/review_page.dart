@@ -136,7 +136,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   int get _unresolvedCandidatesCount =>
       _missingCandidates.where((c) => c.status == 'OPEN').length;
 
-
   Set<String> _calculateGuideNodeIds(List<Map<String, dynamic>> focusTargets) {
     if (_currentPhase == ReviewPhase.busMappingReview) {
       return BusReviewGateEvaluator.computeGuideBusIds(
@@ -150,24 +149,23 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     );
   }
 
-  Set<String> get guideNodeIds => _calculateGuideNodeIds(
-        PowerLensAIService.instance.lastFocusTargets,
-      );
+  Set<String> get guideNodeIds =>
+      _calculateGuideNodeIds(PowerLensAIService.instance.lastFocusTargets);
 
   bool get _isCleanAuto => ObjectReviewGateEvaluator.canVerifyGate(
-        workingNodes: _workingNodes,
-        missingCandidates: _missingCandidates,
-      );
+    workingNodes: _workingNodes,
+    missingCandidates: _missingCandidates,
+  );
 
   bool get _canVerifyObjectGate => ObjectReviewGateEvaluator.canVerifyGate(
-        workingNodes: _workingNodes,
-        missingCandidates: _missingCandidates,
-      );
+    workingNodes: _workingNodes,
+    missingCandidates: _missingCandidates,
+  );
 
   List<String> get _objectGateBlockers => ObjectReviewGateEvaluator.getBlockers(
-        workingNodes: _workingNodes,
-        missingCandidates: _missingCandidates,
-      );
+    workingNodes: _workingNodes,
+    missingCandidates: _missingCandidates,
+  );
 
   // Statistics (Bus Number Mapping)
   List<ReviewNodeItem> get _busNodes =>
@@ -182,20 +180,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     return counts.entries.where((e) => e.value > 1).map((e) => e.key).toList();
   }
 
-  BusReviewUiState get _busUiState =>
-      BusReviewUiState.fromNodes(_workingNodes);
+  BusReviewUiState get _busUiState => BusReviewUiState.fromNodes(_workingNodes);
 
   int get _busUncertainCount => _busUiState.issueBuses;
 
   int get _busVerifiedCount => _busUiState.verifiedBuses;
 
-  bool get _canVerifyBusGate => BusReviewGateEvaluator.canVerifyGate(
-        workingNodes: _workingNodes,
-      );
+  bool get _canVerifyBusGate =>
+      BusReviewGateEvaluator.canVerifyGate(workingNodes: _workingNodes);
 
-  List<String> get _busGateBlockers => BusReviewGateEvaluator.getBlockers(
-        workingNodes: _workingNodes,
-      );
+  List<String> get _busGateBlockers =>
+      BusReviewGateEvaluator.getBlockers(workingNodes: _workingNodes);
 
   List<ReviewNodeItem> get _filteredAndSortedBusNodes {
     final guideIds = BusReviewGateEvaluator.computeGuideBusIds(
@@ -331,11 +326,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     return mission.isEmpty || _connectionMissionCompleted == mission.length;
   }
 
-  bool get _canVerifyFinalGate =>
-      ConnectionReviewGateEvaluator.canVerifyGate(
-        workingLines: _workingLines,
-        topologyIssues: _topologyIssues,
-      );
+  bool get _canVerifyFinalGate => ConnectionReviewGateEvaluator.canVerifyGate(
+    workingLines: _workingLines,
+    topologyIssues: _topologyIssues,
+  );
 
   // Filtered & Sorted Working Lines
   List<ReviewLineItem> get _filteredAndSortedWorkingLines {
@@ -421,12 +415,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     required bool isMobile,
   }) {
     final size = MediaQuery.of(context).size;
-    final current = _effectiveReviewLensyAlignment(
-      target,
-      isMobile: isMobile,
-    );
-    double clampAlignment(double value) =>
-        value.clamp(-0.94, 0.94).toDouble();
+    final current = _effectiveReviewLensyAlignment(target, isMobile: isMobile);
+    double clampAlignment(double value) => value.clamp(-0.94, 0.94).toDouble();
     setState(() {
       _manualLensyAlignment = Alignment(
         clampAlignment(current.x + delta.dx / math.max(size.width / 2, 1)),
@@ -517,8 +507,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       case PowerLensAppAction.runPowerFlow:
         if (_currentPhase == ReviewPhase.verifiedFinal &&
             _verifiedSld != null) {
-          _handoffToFlutterCanvas();
-          return true;
+          return _handoffToFlutterCanvas();
         }
         return false;
       case PowerLensAppAction.showPowerFlowResults:
@@ -673,7 +662,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           _connFilterStatus = 'ALL';
           var lines = _filteredAndSortedWorkingLines;
           if (lines.isEmpty) {
-            lines = _workingLines.where((l) => l.reviewStatus != 'REJECTED').toList();
+            lines = _workingLines
+                .where((l) => l.reviewStatus != 'REJECTED')
+                .toList();
             if (lines.isEmpty) lines = _workingLines;
           }
           _selectedLine = lines.isNotEmpty ? lines.first : null;
@@ -709,6 +700,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           .where(ConnectionReviewGateEvaluator.isCriticalIssue)
           .length,
       finalVerified: _verifiedSld != null,
+      excelLoaded: _importedExcelData != null,
+      excelMappingStatus: _importedExcelData == null
+          ? 'NONE'
+          : _excelMismatchReport?['is_matched'] == true
+          ? 'MATCHED'
+          : _excelMismatchReport?['is_matched'] == false
+          ? 'MISMATCH'
+          : 'UNKNOWN',
       selectedNode: _selectedNode?.toJson(),
       selectedLine: _selectedLine?.toJson(),
       workingNodes: _workingNodes.map((node) => node.toJson()).toList(),
@@ -740,10 +739,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         : _currentPhase == ReviewPhase.connectionReview
         ? 'CONNECTION_REVIEW'
         : 'FINAL';
-    PowerLensAIService.instance.onStageChanged(
-      stage,
-      _buildAssistantContext(),
-    );
+    PowerLensAIService.instance.onStageChanged(stage, _buildAssistantContext());
   }
 
   // --- Step 1: Upload & Object Detection ---
@@ -868,7 +864,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     });
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text("✓ '${_classNameKo(cand.suspectedClass)}' 누락 후보를 [문제 없음]으로 처리했습니다."),
+        content: Text(
+          "✓ '${_classNameKo(cand.suspectedClass)}' 누락 후보를 [문제 없음]으로 처리했습니다.",
+        ),
         backgroundColor: const Color(0xFF16A34A),
         duration: const Duration(seconds: 2),
       ),
@@ -973,7 +971,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     });
   }
 
-
   // Navigation Logic
   void _selectNextSuspiciousNode() {
     final suspicious = _workingNodes
@@ -1017,9 +1014,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     }
   }
 
-
-
-
   // --- Bus Mapping V2 Methods ---
   void _handleApplyBusNumber(ReviewNodeItem busNode, int num) {
     if (num <= 0) return;
@@ -1032,7 +1026,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     setState(() {
       final oldNum = busNode.busNumber;
       busNode.busNumber = num;
-      busNode.source = busNode.source.contains('human') ? busNode.source : '${busNode.source}_human_modified';
+      busNode.source = busNode.source.contains('human')
+          ? busNode.source
+          : '${busNode.source}_human_modified';
 
       // Check conflict with other buses
       final otherBusesWithNum = _busNodes
@@ -1071,10 +1067,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
       // Check if previous duplicate for oldNum got resolved
       if (oldNum != null && oldNum != num) {
-        final remainingWithOld = _busNodes.where((b) => b.busNumber == oldNum).toList();
+        final remainingWithOld = _busNodes
+            .where((b) => b.busNumber == oldNum)
+            .toList();
         if (remainingWithOld.length == 1) {
           final solo = remainingWithOld.first;
-          solo.busNumberReasons.removeWhere((r) => r == 'DUPLICATE_BUS_NUMBER_$oldNum');
+          solo.busNumberReasons.removeWhere(
+            (r) => r == 'DUPLICATE_BUS_NUMBER_$oldNum',
+          );
           if (solo.busNumberReasons.isEmpty) {
             solo.busNumberStatus = 'VERIFIED';
             solo.displayLabel = "Bus $oldNum";
@@ -1153,10 +1153,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         return "확인이 필요한 결선 예외를 실제 경로와 함께 표시했어요.\n"
             "도면에서 해당 선로를 선택하고 끝점·근거·전기 오류를 확인해주세요.";
       case ReviewPhase.verifiedFinal:
-        return _importedExcelData == null
-            ? "검증이 끝났어요. 이제 엑셀 값을 연결하면 실제 조류계산을 할 수 있어요.\n"
-                "상단 또는 가운데의 [엑셀 파일 선택]을 눌러 계통 제원을 연결해주세요."
-            : "엑셀 값이 연결됐어요. 이제 캔버스로 이동하면 실제 조류계산을 실행할 수 있어요.";
+        return PowerLensAIService.instance.proactiveTextForContext(
+              _buildAssistantContext(),
+            ) ??
+            "최종 검증 상태와 Excel 대조 결과를 확인해주세요.";
     }
   }
 
@@ -1170,8 +1170,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         focusedWidget.hasFocus &&
         focusedWidget.context?.mounted == true &&
         (focusedWidget.context?.widget is EditableText ||
-         focusedWidget.toString().contains('EditableText') ||
-         focusedWidget.toString().contains('TextField'));
+            focusedWidget.toString().contains('EditableText') ||
+            focusedWidget.toString().contains('TextField'));
 
     if (isTyping) {
       return false;
@@ -1848,9 +1848,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       setState(() {
         _isLoading = false;
         _isFinalVerified = res['gate_status'] == 'VERIFIED';
-        _stageGateMessage = _isFinalVerified
-            ? null
-            : '최종 확인에서 다시 검토할 선로가 있어요.';
+        _stageGateMessage = _isFinalVerified ? null : '최종 확인에서 다시 검토할 선로가 있어요.';
         if (res['verified_sld'] != null) {
           _verifiedSld = VerifiedSLD.fromJson(
             res['verified_sld'] as Map<String, dynamic>,
@@ -1938,7 +1936,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             SizedBox(width: 8),
             Text(
               "검수 처음으로 돌아가기",
-              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF0F172A)),
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                fontSize: 16,
+                color: Color(0xFF0F172A),
+              ),
             ),
           ],
         ),
@@ -1946,7 +1948,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           "검수를 처음 단계(① 객체 검수)로 되돌리시겠습니까?\n\n"
           "• 적용된 엑셀 데이터 및 불일치 알림이 초기화됩니다.\n"
           "• 선로 결선 및 최종 검증 상태가 리셋되며, 최초 도면 AI 인식 객체 목록으로 복원됩니다.",
-          style: TextStyle(fontSize: 13.5, height: 1.5, color: Color(0xFF334155)),
+          style: TextStyle(
+            fontSize: 13.5,
+            height: 1.5,
+            color: Color(0xFF334155),
+          ),
         ),
         actions: [
           TextButton(
@@ -1994,7 +2000,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       _objFilterClass = 'ALL';
 
       if (_document != null) {
-        _workingNodes = _document!.nodes.map((n) => ReviewNodeItem.fromJson(n.toJson())).toList();
+        _workingNodes = _document!.nodes
+            .map((n) => ReviewNodeItem.fromJson(n.toJson()))
+            .toList();
         _selectedNode = _workingNodes.isNotEmpty ? _workingNodes.first : null;
       }
       _busNumberEditController.clear();
@@ -2032,10 +2040,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       final stageStr = _currentPhase == ReviewPhase.objectReview
           ? "OBJECT_REVIEW"
           : (_currentPhase == ReviewPhase.busMappingReview
-              ? "BUS_MAPPING_REVIEW"
-              : (_currentPhase == ReviewPhase.connectionReview
-                  ? "CONNECTION_REVIEW"
-                  : "FINAL"));
+                ? "BUS_MAPPING_REVIEW"
+                : (_currentPhase == ReviewPhase.connectionReview
+                      ? "CONNECTION_REVIEW"
+                      : "FINAL"));
 
       final res = await _apiService.sendAgentChat(
         documentId: _document!.documentId,
@@ -2197,7 +2205,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 setState(() {
                   _currentPhase = ReviewPhase.objectReview;
                   _selectedLine = null;
-                  _selectedNode = _workingNodes.isNotEmpty ? _workingNodes.first : null;
+                  _selectedNode = _workingNodes.isNotEmpty
+                      ? _workingNodes.first
+                      : null;
                 });
               },
             ),
@@ -2270,7 +2280,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               guideLabel: "✨ 검수 처음으로 리셋",
               child: OutlinedButton.icon(
                 onPressed: _confirmResetToBeginning,
-                icon: const Icon(Icons.restart_alt, size: 14, color: Color(0xFFDC2626)),
+                icon: const Icon(
+                  Icons.restart_alt,
+                  size: 14,
+                  color: Color(0xFFDC2626),
+                ),
                 label: const Text(
                   "검수 처음으로",
                   style: TextStyle(
@@ -2282,7 +2296,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 style: OutlinedButton.styleFrom(
                   backgroundColor: const Color(0xFFFEF2F2),
                   side: const BorderSide(color: Color(0xFFFCA5A5)),
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 6,
+                  ),
                   visualDensity: VisualDensity.compact,
                 ),
               ),
@@ -2290,45 +2307,60 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             const SizedBox(width: 6),
           ],
           ElevatedButton.icon(
-            onPressed: ReviewFinalContract.canImportExcel(
-              isFinalPhase: _currentPhase == ReviewPhase.verifiedFinal,
-              verifiedSld: _verifiedSld,
-            )
+            onPressed:
+                ReviewFinalContract.canImportExcel(
+                  isFinalPhase: _currentPhase == ReviewPhase.verifiedFinal,
+                  verifiedSld: _verifiedSld,
+                )
                 ? _importExcelInReview
                 : null,
             icon: Icon(
               Icons.table_chart,
               size: 14,
-              color: (_importedExcelData != null &&
-                      !ReviewFinalContract.hasVerifiedExcelMatch(_excelMismatchReport))
+              color:
+                  (_importedExcelData != null &&
+                      !ReviewFinalContract.hasVerifiedExcelMatch(
+                        _excelMismatchReport,
+                      ))
                   ? const Color(0xFFDC2626)
                   : const Color(0xFF0D9488),
             ),
             label: Text(
               _importedExcelData != null
-                  ? (!ReviewFinalContract.hasVerifiedExcelMatch(_excelMismatchReport)
-                      ? "⚠️ 대조 확인 필요"
-                      : "제원 확인됨 (#${_importedExcelData!['slack_bus_number'] ?? '?'})")
+                  ? (!ReviewFinalContract.hasVerifiedExcelMatch(
+                          _excelMismatchReport,
+                        )
+                        ? "⚠️ 대조 확인 필요"
+                        : "제원 확인됨 (#${_importedExcelData!['slack_bus_number'] ?? '?'})")
                   : "Excel 가져오기",
               style: TextStyle(
                 fontSize: 11,
-                color: (_importedExcelData != null &&
-                        !ReviewFinalContract.hasVerifiedExcelMatch(_excelMismatchReport))
+                color:
+                    (_importedExcelData != null &&
+                        !ReviewFinalContract.hasVerifiedExcelMatch(
+                          _excelMismatchReport,
+                        ))
                     ? const Color(0xFFB91C1C)
                     : const Color(0xFF0F172A),
                 fontWeight: FontWeight.bold,
               ),
             ),
             style: ElevatedButton.styleFrom(
-              backgroundColor: (_importedExcelData != null &&
-                      !ReviewFinalContract.hasVerifiedExcelMatch(_excelMismatchReport))
+              backgroundColor:
+                  (_importedExcelData != null &&
+                      !ReviewFinalContract.hasVerifiedExcelMatch(
+                        _excelMismatchReport,
+                      ))
                   ? const Color(0xFFFEF2F2)
                   : const Color(0xFFF1F5F9),
               foregroundColor: const Color(0xFF0F172A),
               elevation: 0,
               side: BorderSide(
-                color: (_importedExcelData != null &&
-                        !ReviewFinalContract.hasVerifiedExcelMatch(_excelMismatchReport))
+                color:
+                    (_importedExcelData != null &&
+                        !ReviewFinalContract.hasVerifiedExcelMatch(
+                          _excelMismatchReport,
+                        ))
                     ? const Color(0xFFFCA5A5)
                     : const Color(0xFFCBD5E1),
               ),
@@ -2465,7 +2497,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     );
   }
 
-  Widget _buildPhaseBadge(String label, bool isCurrent, bool isCompleted, {VoidCallback? onTap}) {
+  Widget _buildPhaseBadge(
+    String label,
+    bool isCurrent,
+    bool isCompleted, {
+    VoidCallback? onTap,
+  }) {
     Color bg = const Color(0xFFF1F5F9);
     Color text = const Color(0xFF64748B);
     Color border = const Color(0xFFE2E8F0);
@@ -2845,11 +2882,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               const Color(0xFF2563EB),
             ),
             const SizedBox(width: 4),
-            _buildAiMetric(
-              '확인됨',
-              _busVerifiedCount,
-              const Color(0xFF16A34A),
-            ),
+            _buildAiMetric('확인됨', _busVerifiedCount, const Color(0xFF16A34A)),
             const SizedBox(width: 4),
             _buildAiMetric(
               '확인 필요',
@@ -2894,9 +2927,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             _buildAiMetric(
               isObjectPhase ? '누락 후보' : '전기 오류',
               isObjectPhase ? _unresolvedCandidatesCount : _criticalIssuesCount,
-              isObjectPhase
-                  ? const Color(0xFF9333EA)
-                  : const Color(0xFFDC2626),
+              isObjectPhase ? const Color(0xFF9333EA) : const Color(0xFFDC2626),
             ),
           ],
           const SizedBox(width: 10),
@@ -3166,143 +3197,184 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                         child: Stack(
                           children: [
                             Positioned.fill(
-                              child: ValueListenableBuilder<List<Map<String, dynamic>>>(
-                                valueListenable: PowerLensAIService.instance.focusTargetsNotifier,
-                                builder: (context, focusTargets, _) {
-                                  return ReviewOverlayView(
-                                    focusTargetKey: _reviewFocusTargetKey,
-                                    imageBytes: _document!.rawBytes,
-                                    imageUrl: _apiService.getOriginalImageUrl(
-                                      _document!.documentId,
-                                    ),
-                                    originalWidth: _document!.image.width,
-                                    originalHeight: _document!.image.height,
-                                    nodes:
-                                        (_currentPhase == ReviewPhase.objectReview)
-                                        ? _filteredAndSortedWorkingNodes
-                                        : _workingNodes,
-                                    selectedNode: _selectedNode,
-                                    guideNodeIds:
-                                        (_currentPhase == ReviewPhase.objectReview ||
-                                            _currentPhase == ReviewPhase.busMappingReview)
-                                        ? _calculateGuideNodeIds(focusTargets)
-                                        : const {},
-                                    openMissingCandidates:
-                                        (_currentPhase == ReviewPhase.objectReview)
-                                        ? _missingCandidates.where((c) => c.status == 'OPEN').toList()
-                                        : const [],
-                                    onSelectCandidate: (cand) {
-                                      _showMissingCandidatesDialog(initialCandidateId: cand.id);
-                                    },
-                                onSelectNode: (node) {
-                                  setState(() {
-                                    _selectedNode = node;
-                                    _isObjectEditExpanded = false;
-                                    if (_isManualAddLineMode &&
-                                        _manualLineStartNode == null) {
-                                      _manualLineStartNode = node;
-                                    }
-                                    if (_currentPhase ==
-                                        ReviewPhase.connectionReview) {
-                                      final matchedIssue = _topologyIssues
-                                          .firstWhere(
-                                            (i) =>
-                                                (i['component_ids'] as List? ??
-                                                        [])
-                                                    .map((e) => e.toString())
-                                                    .contains(node.id),
-                                            orElse: () => {},
+                              child:
+                                  ValueListenableBuilder<
+                                    List<Map<String, dynamic>>
+                                  >(
+                                    valueListenable: PowerLensAIService
+                                        .instance
+                                        .focusTargetsNotifier,
+                                    builder: (context, focusTargets, _) {
+                                      return ReviewOverlayView(
+                                        focusTargetKey: _reviewFocusTargetKey,
+                                        imageBytes: _document!.rawBytes,
+                                        imageUrl: _apiService
+                                            .getOriginalImageUrl(
+                                              _document!.documentId,
+                                            ),
+                                        originalWidth: _document!.image.width,
+                                        originalHeight: _document!.image.height,
+                                        nodes:
+                                            (_currentPhase ==
+                                                ReviewPhase.objectReview)
+                                            ? _filteredAndSortedWorkingNodes
+                                            : _workingNodes,
+                                        selectedNode: _selectedNode,
+                                        guideNodeIds:
+                                            (_currentPhase ==
+                                                    ReviewPhase.objectReview ||
+                                                _currentPhase ==
+                                                    ReviewPhase
+                                                        .busMappingReview)
+                                            ? _calculateGuideNodeIds(
+                                                focusTargets,
+                                              )
+                                            : const {},
+                                        openMissingCandidates:
+                                            (_currentPhase ==
+                                                ReviewPhase.objectReview)
+                                            ? _missingCandidates
+                                                  .where(
+                                                    (c) => c.status == 'OPEN',
+                                                  )
+                                                  .toList()
+                                            : const [],
+                                        onSelectCandidate: (cand) {
+                                          _showMissingCandidatesDialog(
+                                            initialCandidateId: cand.id,
                                           );
-                                      _selectedTopologyIssue =
-                                          matchedIssue.isNotEmpty
-                                          ? matchedIssue
-                                          : null;
-                                      _selectedLine = null;
-                                    }
-                                  });
-                                  if (node.reviewStatus == 'SUSPICIOUS' &&
-                                      node.agentExplanation == null) {
-                                    _triggerAgentReviewNode(node);
-                                  }
-                                },
-                                onNodeOffsetChanged: (nodeId, dx, dy) {
-                                  setState(() {
-                                    for (var n in _workingNodes) {
-                                      if (n.id == nodeId) {
-                                        n.labelOffsetDx = dx;
-                                        n.labelOffsetDy = dy;
-                                        break;
-                                      }
-                                    }
-                                  });
-                                },
-                                showNodeLabels: _showCanvasLabels,
-                                showLineLabels: _showCanvasLabels,
-                                busFocusOnly:
-                                    (_currentPhase ==
-                                        ReviewPhase.busMappingReview &&
-                                    _busFocusOnly),
-                                lineFocusOnly:
-                                    (_currentPhase ==
-                                        ReviewPhase.connectionReview &&
-                                    _lineFocusOnly),
-                                linesOnlyMode:
-                                    (_currentPhase ==
-                                        ReviewPhase.connectionReview &&
-                                    _connectionLinesOnlyMode),
-                                lines:
-                                    (_currentPhase == ReviewPhase.objectReview)
-                                    ? const []
-                                    : _workingLines,
-                                selectedLine: _selectedLine,
-                                onSelectLine: (line) {
-                                  setState(() {
-                                    _selectedLine = line;
-                                    if (_currentPhase ==
-                                        ReviewPhase.connectionReview) {
-                                      _selectedNode = null;
-                                      _selectedTopologyIssue = null;
-                                      if (!_filteredAndSortedWorkingLines.any((l) => l.lineId == line.lineId)) {
-                                        _connFilterStatus = 'ALL';
-                                      }
-                                    }
-                                    final index = _filteredAndSortedWorkingLines
-                                        .indexWhere(
-                                          (item) => item.lineId == line.lineId,
-                                        );
-                                    if (index >= 0) {
-                                      _linePage = index ~/ _linePageSize;
-                                    }
-                                  });
-                                },
-                                onLineOffsetChanged: (lineId, dx, dy) {
-                                  setState(() {
-                                    for (var l in _workingLines) {
-                                      if (l.lineId == lineId) {
-                                        l.labelOffsetDx = dx;
-                                        l.labelOffsetDy = dy;
-                                        break;
-                                      }
-                                    }
-                                  });
-                                },
-                                isManualAddMode: _isManualAddMode,
-                                manualAddClass: _manualAddClass,
-                                onManualAddComplete: _handleManualAddComplete,
-                                isManualAddLineMode: _isManualAddLineMode,
-                                manualLineStartNode: _manualLineStartNode,
-                                onManualAddLineComplete:
-                                    _handleManualAddLineComplete,
-                                violationNodeIds: _topologyIssues
-                                    .where((i) => i['severity'] == 'error')
-                                    .expand(
-                                      (i) => (i['component_ids'] as List? ?? [])
-                                          .map((e) => e.toString()),
-                                    )
-                                    .toSet(),
-                                  );
-                                },
-                              ),
+                                        },
+                                        onSelectNode: (node) {
+                                          setState(() {
+                                            _selectedNode = node;
+                                            _isObjectEditExpanded = false;
+                                            if (_isManualAddLineMode &&
+                                                _manualLineStartNode == null) {
+                                              _manualLineStartNode = node;
+                                            }
+                                            if (_currentPhase ==
+                                                ReviewPhase.connectionReview) {
+                                              final matchedIssue =
+                                                  _topologyIssues.firstWhere(
+                                                    (i) =>
+                                                        (i['component_ids']
+                                                                    as List? ??
+                                                                [])
+                                                            .map(
+                                                              (e) =>
+                                                                  e.toString(),
+                                                            )
+                                                            .contains(node.id),
+                                                    orElse: () => {},
+                                                  );
+                                              _selectedTopologyIssue =
+                                                  matchedIssue.isNotEmpty
+                                                  ? matchedIssue
+                                                  : null;
+                                              _selectedLine = null;
+                                            }
+                                          });
+                                          if (node.reviewStatus ==
+                                                  'SUSPICIOUS' &&
+                                              node.agentExplanation == null) {
+                                            _triggerAgentReviewNode(node);
+                                          }
+                                        },
+                                        onNodeOffsetChanged: (nodeId, dx, dy) {
+                                          setState(() {
+                                            for (var n in _workingNodes) {
+                                              if (n.id == nodeId) {
+                                                n.labelOffsetDx = dx;
+                                                n.labelOffsetDy = dy;
+                                                break;
+                                              }
+                                            }
+                                          });
+                                        },
+                                        showNodeLabels: _showCanvasLabels,
+                                        showLineLabels: _showCanvasLabels,
+                                        busFocusOnly:
+                                            (_currentPhase ==
+                                                ReviewPhase.busMappingReview &&
+                                            _busFocusOnly),
+                                        lineFocusOnly:
+                                            (_currentPhase ==
+                                                ReviewPhase.connectionReview &&
+                                            _lineFocusOnly),
+                                        linesOnlyMode:
+                                            (_currentPhase ==
+                                                ReviewPhase.connectionReview &&
+                                            _connectionLinesOnlyMode),
+                                        lines:
+                                            (_currentPhase ==
+                                                ReviewPhase.objectReview)
+                                            ? const []
+                                            : _workingLines,
+                                        selectedLine: _selectedLine,
+                                        onSelectLine: (line) {
+                                          setState(() {
+                                            _selectedLine = line;
+                                            if (_currentPhase ==
+                                                ReviewPhase.connectionReview) {
+                                              _selectedNode = null;
+                                              _selectedTopologyIssue = null;
+                                              if (!_filteredAndSortedWorkingLines
+                                                  .any(
+                                                    (l) =>
+                                                        l.lineId == line.lineId,
+                                                  )) {
+                                                _connFilterStatus = 'ALL';
+                                              }
+                                            }
+                                            final index =
+                                                _filteredAndSortedWorkingLines
+                                                    .indexWhere(
+                                                      (item) =>
+                                                          item.lineId ==
+                                                          line.lineId,
+                                                    );
+                                            if (index >= 0) {
+                                              _linePage =
+                                                  index ~/ _linePageSize;
+                                            }
+                                          });
+                                        },
+                                        onLineOffsetChanged: (lineId, dx, dy) {
+                                          setState(() {
+                                            for (var l in _workingLines) {
+                                              if (l.lineId == lineId) {
+                                                l.labelOffsetDx = dx;
+                                                l.labelOffsetDy = dy;
+                                                break;
+                                              }
+                                            }
+                                          });
+                                        },
+                                        isManualAddMode: _isManualAddMode,
+                                        manualAddClass: _manualAddClass,
+                                        onManualAddComplete:
+                                            _handleManualAddComplete,
+                                        isManualAddLineMode:
+                                            _isManualAddLineMode,
+                                        manualLineStartNode:
+                                            _manualLineStartNode,
+                                        onManualAddLineComplete:
+                                            _handleManualAddLineComplete,
+                                        violationNodeIds: _topologyIssues
+                                            .where(
+                                              (i) => i['severity'] == 'error',
+                                            )
+                                            .expand(
+                                              (i) =>
+                                                  (i['component_ids']
+                                                              as List? ??
+                                                          [])
+                                                      .map((e) => e.toString()),
+                                            )
+                                            .toSet(),
+                                      );
+                                    },
+                                  ),
                             ),
                             // Floating HUD on Canvas: Direct Label & Focus Toggles
                             Positioned(
@@ -4270,8 +4342,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         if (_objSuspiciousCount == 0 && _unresolvedCandidatesCount == 0) {
           PowerLensAIService.instance.clearFocusTargets();
           setState(() {
-            _stageGateMessage =
-                "제가 의심하는 객체는 이제 없어요. 마지막으로 전체 도면을 한번만 확인해주세요.";
+            _stageGateMessage = "제가 의심하는 객체는 이제 없어요. 마지막으로 전체 도면을 한번만 확인해주세요.";
           });
         }
       },
@@ -4573,7 +4644,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           Icon(
             linesOnly ? Icons.timeline : Icons.grid_view_rounded,
             size: 17,
-            color: linesOnly ? const Color(0xFF0F766E) : const Color(0xFFB45309),
+            color: linesOnly
+                ? const Color(0xFF0F766E)
+                : const Color(0xFFB45309),
           ),
           const SizedBox(width: 7),
           Expanded(
@@ -4645,7 +4718,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       children: [
         Row(
           children: [
-            const Icon(Icons.account_tree_outlined, size: 17, color: Color(0xFF2563EB)),
+            const Icon(
+              Icons.account_tree_outlined,
+              size: 17,
+              color: Color(0xFF2563EB),
+            ),
             const SizedBox(width: 6),
             const Expanded(
               child: Text(
@@ -4809,7 +4886,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         color: hasCritical ? const Color(0xFFFFF1F2) : const Color(0xFFF8FAFC),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color: hasCritical ? const Color(0xFFFCA5A5) : const Color(0xFFE2E8F0),
+          color: hasCritical
+              ? const Color(0xFFFCA5A5)
+              : const Color(0xFFE2E8F0),
         ),
       ),
       child: Column(
@@ -4849,28 +4928,27 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           ),
           if (hasCritical) ...[
             const SizedBox(height: 4),
-            ...critical.take(3).map(
-              (issue) => Padding(
-                padding: const EdgeInsets.only(top: 3),
-                child: Text(
-                  _formatTopologyIssueKo(issue),
-                  style: const TextStyle(
-                    color: Color(0xFF7F1D1D),
-                    fontSize: 10.5,
-                    height: 1.3,
+            ...critical
+                .take(3)
+                .map(
+                  (issue) => Padding(
+                    padding: const EdgeInsets.only(top: 3),
+                    child: Text(
+                      _formatTopologyIssueKo(issue),
+                      style: const TextStyle(
+                        color: Color(0xFF7F1D1D),
+                        fontSize: 10.5,
+                        height: 1.3,
+                      ),
+                    ),
                   ),
                 ),
-              ),
-            ),
           ] else if (warnings.isNotEmpty)
             const Padding(
               padding: EdgeInsets.only(top: 3),
               child: Text(
                 'warning/info는 최종 게이트를 막지 않습니다.',
-                style: TextStyle(
-                  color: Color(0xFF64748B),
-                  fontSize: 10.5,
-                ),
+                style: TextStyle(color: Color(0xFF64748B), fontSize: 10.5),
               ),
             ),
         ],
@@ -4881,7 +4959,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   Widget _buildConnectionReviewV2Inspector(ReviewLineItem line) {
     final color = _connectionLineColor(line);
     final status = ConnectionReviewGateEvaluator.lineStatusLabel(line);
-    final connStr = line.endpointsDisplay ??
+    final connStr =
+        line.endpointsDisplay ??
         (line.connectedTo.isEmpty ? '미연결' : line.connectedTo.join(' ↔ '));
     final hasCrossing = ConnectionReviewGateEvaluator.hasCrossingEvidence(line);
     final isIssue = ConnectionReviewGateEvaluator.isExceptionLine(line);
@@ -5030,12 +5109,18 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                       OutlinedButton(
                         onPressed: () =>
                             _resolveConnectionCrossing(line, 'CONNECTED'),
-                        child: const Text('연결됨', style: TextStyle(fontSize: 10)),
+                        child: const Text(
+                          '연결됨',
+                          style: TextStyle(fontSize: 10),
+                        ),
                       ),
                       OutlinedButton(
                         onPressed: () =>
                             _resolveConnectionCrossing(line, 'CROSSING_ONLY'),
-                        child: const Text('교차만 함', style: TextStyle(fontSize: 10)),
+                        child: const Text(
+                          '교차만 함',
+                          style: TextStyle(fontSize: 10),
+                        ),
                       ),
                     ],
                   ),
@@ -5090,10 +5175,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           Expanded(
             child: Text(
               value,
-              style: const TextStyle(
-                color: Color(0xFF334155),
-                fontSize: 10.5,
-              ),
+              style: const TextStyle(color: Color(0xFF334155), fontSize: 10.5),
             ),
           ),
         ],
@@ -5102,9 +5184,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   void _reassignConnectionEndpoint(ReviewLineItem line, String targetId) {
-    final index = _workingLines.indexWhere((item) => item.lineId == line.lineId);
+    final index = _workingLines.indexWhere(
+      (item) => item.lineId == line.lineId,
+    );
     if (index < 0) return;
-    final updated = ConnectionReviewGateEvaluator.reassignTarget(line, targetId);
+    final updated = ConnectionReviewGateEvaluator.reassignTarget(
+      line,
+      targetId,
+    );
     setState(() {
       _workingLines[index] = updated;
       _selectedLine = updated;
@@ -5116,11 +5203,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     _triggerTopologyValidation();
   }
 
-  void _resolveConnectionCrossing(
-    ReviewLineItem line,
-    String resolution,
-  ) {
-    final index = _workingLines.indexWhere((item) => item.lineId == line.lineId);
+  void _resolveConnectionCrossing(ReviewLineItem line, String resolution) {
+    final index = _workingLines.indexWhere(
+      (item) => item.lineId == line.lineId,
+    );
     if (index < 0) return;
     setState(() {
       final updated = line.copyWith(
@@ -5137,7 +5223,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   void _rejectLine(ReviewLineItem line) {
-    final index = _workingLines.indexWhere((item) => item.lineId == line.lineId);
+    final index = _workingLines.indexWhere(
+      (item) => item.lineId == line.lineId,
+    );
     if (index < 0) return;
     setState(() {
       line.reviewStatus = 'REJECTED';
@@ -5168,7 +5256,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _selectedLine == null && lines.isNotEmpty) {
           setState(() {
-            if (_connFilterStatus != 'ALL' && _filteredAndSortedWorkingLines.isEmpty) {
+            if (_connFilterStatus != 'ALL' &&
+                _filteredAndSortedWorkingLines.isEmpty) {
               _connFilterStatus = 'ALL';
             }
             _selectedLine = lines.first;
@@ -6467,7 +6556,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     return id;
   }
 
-
   String _agentEventTitleKo(String event) {
     switch (event) {
       case 'issue_detected':
@@ -6779,8 +6867,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 raw['bus_number_status']?.toString() ?? 'UNCERTAIN';
             node.busNumberReasons = raw['bus_number_reasons'] is List
                 ? (raw['bus_number_reasons'] as List)
-                    .map((reason) => reason.toString())
-                    .toList()
+                      .map((reason) => reason.toString())
+                      .toList()
                 : <String>[];
             node.displayLabel =
                 raw['display_name']?.toString() ??
@@ -6853,9 +6941,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     final busId = busNode.id;
     busNode.busNumber = newBusNo;
     busNode.busNumberStatus = isDuplicate ? 'UNCERTAIN' : 'VERIFIED';
-    busNode.displayLabel = isDuplicate
-        ? "Bus $newBusNo (중복)"
-        : "Bus $newBusNo";
+    busNode.displayLabel = isDuplicate ? "Bus $newBusNo (중복)" : "Bus $newBusNo";
 
     // Propagate the number to directly connected generators and loads without
     // changing any node or line IDs.
@@ -7279,7 +7365,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
     for (var node in nodes) {
       final cls = node.className.toLowerCase();
-      final bool isSlack = node.metadata['is_slack'] == true ||
+      final bool isSlack =
+          node.metadata['is_slack'] == true ||
           node.metadata['isSlack'] == true ||
           (node.displayLabel?.toLowerCase().contains('slack') ?? false);
       collected.add({
@@ -7300,8 +7387,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         'id': line.lineId,
         'type': 'line',
         'connected_to': line.connectedTo,
-        'startElementId': line.connectedTo.isNotEmpty ? line.connectedTo[0] : null,
-        'endElementId': line.connectedTo.length > 1 ? line.connectedTo[1] : null,
+        'startElementId': line.connectedTo.isNotEmpty
+            ? line.connectedTo[0]
+            : null,
+        'endElementId': line.connectedTo.length > 1
+            ? line.connectedTo[1]
+            : null,
         'label': line.displayLabel ?? '',
         'endpoints_display': line.endpointsDisplay ?? '',
       });
@@ -7326,7 +7417,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       );
       if (applyRes.statusCode == 200) {
         final resJson = jsonDecode(applyRes.body);
-        mismatchReport = (resJson['mismatch_report'] ?? resJson['summary']?['mismatch_report']) as Map<String, dynamic>?;
+        mismatchReport =
+            (resJson['mismatch_report'] ??
+                    resJson['summary']?['mismatch_report'])
+                as Map<String, dynamic>?;
       }
     } catch (e) {
       debugPrint("Review apply_excel_to_elements call error: $e");
@@ -7338,6 +7432,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       _excelMismatchReport = mismatchReport;
       _isLoading = false;
     });
+
+    PowerLensAIService.instance.refreshContextGuidance(
+      _buildAssistantContext(),
+    );
 
     if (!mounted) return;
 
@@ -7353,7 +7451,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               ? "Excel은 불러왔지만 대조 결과를 확인하지 못했습니다. 확인 전까지 계산 준비 완료로 처리하지 않습니다."
               : "Excel 대조 결과: $reportSummary",
         ),
-        backgroundColor: matched ? Colors.green.shade700 : Colors.orange.shade900,
+        backgroundColor: matched
+            ? Colors.green.shade700
+            : Colors.orange.shade900,
         duration: const Duration(seconds: 5),
         showCloseIcon: true,
         closeIconColor: Colors.white,
@@ -7437,7 +7537,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       if (mounted) {
         setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("기본 엑셀 불러오기 실패: $e"), backgroundColor: Colors.red),
+          SnackBar(
+            content: Text("기본 엑셀 불러오기 실패: $e"),
+            backgroundColor: Colors.red,
+          ),
         );
       }
     }
@@ -7449,9 +7552,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       verifiedSld: _verifiedSld,
     )) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Excel 연결은 최종 검증을 통과한 뒤에 할 수 있습니다."),
-        ),
+        const SnackBar(content: Text("Excel 연결은 최종 검증을 통과한 뒤에 할 수 있습니다.")),
       );
       return;
     }
@@ -7729,7 +7830,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   key: _connectionGateKey,
                   onPressed: _verifyFinalGate,
                   icon: const Icon(Icons.verified, size: 16),
-                    label: const Text("결선 검수 완료"),
+                  label: const Text("결선 검수 완료"),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _canVerifyFinalGate
                         ? const Color(0xFF16A34A)
@@ -7752,11 +7853,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   Widget _buildVerifiedFinalView() {
     final sld = _verifiedSld!;
     final hasExcel = _importedExcelData != null;
-    final hasExcelMatch =
-        ReviewFinalContract.hasVerifiedExcelMatch(_excelMismatchReport);
+    final hasExcelMatch = ReviewFinalContract.hasVerifiedExcelMatch(
+      _excelMismatchReport,
+    );
     final mismatchReport = _excelMismatchReport ?? const <String, dynamic>{};
-    final mismatchMessages =
-        ReviewFinalContract.mismatchMessages(_excelMismatchReport);
+    final mismatchMessages = ReviewFinalContract.mismatchMessages(
+      _excelMismatchReport,
+    );
     return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
@@ -7766,10 +7869,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: const Color(0xFF86EFAC),
-              width: 2,
-            ),
+            border: Border.all(color: const Color(0xFF86EFAC), width: 2),
             boxShadow: const [
               BoxShadow(
                 color: Color(0x0F000000),
@@ -7817,8 +7917,16 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
-                    _buildFinalSummaryItem("확정 모선", "${_busNodes.length}개", const Color(0xFF2563EB)),
-                    _buildFinalSummaryItem("확정 결선", "${sld.lines.length}개", const Color(0xFFEA580C)),
+                    _buildFinalSummaryItem(
+                      "확정 모선",
+                      "${_busNodes.length}개",
+                      const Color(0xFF2563EB),
+                    ),
+                    _buildFinalSummaryItem(
+                      "확정 결선",
+                      "${sld.lines.length}개",
+                      const Color(0xFFEA580C),
+                    ),
                     _buildFinalSummaryItem(
                       "발전기/부하",
                       "${_workingNodes.where((n) => n.className.contains('gen') || n.className.contains('load')).length}개",
@@ -7839,8 +7947,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   border: Border.all(
                     color: hasExcel
                         ? (hasExcelMatch
-                            ? const Color(0xFF86EFAC)
-                            : const Color(0xFFF87171))
+                              ? const Color(0xFF86EFAC)
+                              : const Color(0xFFF87171))
                         : const Color(0xFFCBD5E1),
                     width: 1.5,
                   ),
@@ -7880,10 +7988,19 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                 guideLabel: "✨ 기본 25모선 예제 엑셀",
                                 child: OutlinedButton.icon(
                                   onPressed: _loadDefaultExcelInReview,
-                                  icon: const Icon(Icons.auto_stories, size: 14),
-                                  label: const Text("기본 25모선 엑셀", style: TextStyle(fontSize: 11)),
+                                  icon: const Icon(
+                                    Icons.auto_stories,
+                                    size: 14,
+                                  ),
+                                  label: const Text(
+                                    "기본 25모선 엑셀",
+                                    style: TextStyle(fontSize: 11),
+                                  ),
                                   style: OutlinedButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 6,
+                                    ),
                                     visualDensity: VisualDensity.compact,
                                   ),
                                 ),
@@ -7900,8 +8017,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                 icon: const Icon(Icons.file_upload, size: 14),
                                 label: Text(
                                   _importedExcelData != null
-                                    ? "다른 Excel 다시 가져오기"
-                                    : "Excel 가져오기",
+                                      ? "다른 Excel 다시 가져오기"
+                                      : "Excel 가져오기",
                                   style: const TextStyle(fontSize: 11),
                                 ),
                                 style: ElevatedButton.styleFrom(
@@ -7933,11 +8050,19 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                             children: [
                               Row(
                                 children: [
-                                  const Icon(Icons.warning_amber_rounded, color: Color(0xFFDC2626), size: 20),
+                                  const Icon(
+                                    Icons.warning_amber_rounded,
+                                    color: Color(0xFFDC2626),
+                                    size: 20,
+                                  ),
                                   const SizedBox(width: 8),
                                   const Text(
                                     "⚠️ Excel 대조를 통과하지 못했어요.",
-                                    style: TextStyle(color: Color(0xFF991B1B), fontWeight: FontWeight.bold, fontSize: 13),
+                                    style: TextStyle(
+                                      color: Color(0xFF991B1B),
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                    ),
                                   ),
                                   if (_excelMismatchReport != null) ...[
                                     const Spacer(),
@@ -7947,14 +8072,27 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                       guideLabel: "✨ AI 진단 & 세부비교",
                                       child: TextButton.icon(
                                         onPressed: _showReviewMismatchDialog,
-                                        icon: const Icon(Icons.auto_awesome, size: 14, color: Color(0xFF4F46E5)),
+                                        icon: const Icon(
+                                          Icons.auto_awesome,
+                                          size: 14,
+                                          color: Color(0xFF4F46E5),
+                                        ),
                                         label: const Text(
                                           "AI 진단 & 세부비교 보기",
-                                          style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: Color(0xFF4F46E5)),
+                                          style: TextStyle(
+                                            fontSize: 11.5,
+                                            fontWeight: FontWeight.bold,
+                                            color: Color(0xFF4F46E5),
+                                          ),
                                         ),
                                         style: TextButton.styleFrom(
-                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                          backgroundColor: const Color(0xFFEEF2FF),
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 4,
+                                          ),
+                                          backgroundColor: const Color(
+                                            0xFFEEF2FF,
+                                          ),
                                         ),
                                       ),
                                     ),
@@ -7964,7 +8102,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                               const SizedBox(height: 6),
                               Text(
                                 "• ${mismatchReport['summary'] ?? '대조 결과를 확인하지 못했습니다. 파일을 다시 불러오거나 연결 상태를 확인해주세요.'}",
-                                style: const TextStyle(color: Color(0xFFB91C1C), fontSize: 11.5, fontWeight: FontWeight.w600),
+                                style: const TextStyle(
+                                  color: Color(0xFFB91C1C),
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                               if (mismatchMessages.isNotEmpty) ...[
                                 const SizedBox(height: 6),
@@ -7983,22 +8125,38 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                               const SizedBox(height: 4),
                               Text(
                                 "• 도면: 모선 ${_busNodes.length}개, 결선 ${sld.lines.length}개  |  Excel: 모선 ${_importedExcelData!['total_buses'] ?? 0}개, 선로 ${_importedExcelData!['total_branches'] ?? 0}개",
-                                style: const TextStyle(color: Color(0xFF7F1D1D), fontSize: 11),
+                                style: const TextStyle(
+                                  color: Color(0xFF7F1D1D),
+                                  fontSize: 11,
+                                ),
                               ),
                               const SizedBox(height: 8),
                               Row(
                                 children: [
                                   OutlinedButton.icon(
                                     onPressed: _confirmResetToBeginning,
-                                    icon: const Icon(Icons.restart_alt, size: 14, color: Color(0xFFDC2626)),
+                                    icon: const Icon(
+                                      Icons.restart_alt,
+                                      size: 14,
+                                      color: Color(0xFFDC2626),
+                                    ),
                                     label: const Text(
                                       "다시 검수 처음으로 돌아가기",
-                                      style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold, color: Color(0xFFDC2626)),
+                                      style: TextStyle(
+                                        fontSize: 11.5,
+                                        fontWeight: FontWeight.bold,
+                                        color: Color(0xFFDC2626),
+                                      ),
                                     ),
                                     style: OutlinedButton.styleFrom(
                                       backgroundColor: Colors.white,
-                                      side: const BorderSide(color: Color(0xFFFCA5A5)),
-                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                      side: const BorderSide(
+                                        color: Color(0xFFFCA5A5),
+                                      ),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 6,
+                                      ),
                                       visualDensity: VisualDensity.compact,
                                     ),
                                   ),
@@ -8009,15 +8167,31 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                         _importedExcelData = null;
                                         _excelMismatchReport = null;
                                       });
-                                      ScaffoldMessenger.of(context).clearSnackBars();
+                                      PowerLensAIService.instance
+                                          .refreshContextGuidance(
+                                            _buildAssistantContext(),
+                                          );
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).clearSnackBars();
                                     },
-                                    icon: const Icon(Icons.link_off, size: 14, color: Color(0xFF64748B)),
+                                    icon: const Icon(
+                                      Icons.link_off,
+                                      size: 14,
+                                      color: Color(0xFF64748B),
+                                    ),
                                     label: const Text(
                                       "엑셀 연결 해제",
-                                      style: TextStyle(fontSize: 11, color: Color(0xFF64748B)),
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Color(0xFF64748B),
+                                      ),
                                     ),
                                     style: TextButton.styleFrom(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
+                                      ),
                                     ),
                                   ),
                                 ],
@@ -8038,18 +8212,29 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                             children: [
                               Row(
                                 children: [
-                                  const Icon(Icons.check_circle, color: Color(0xFF16A34A), size: 18),
+                                  const Icon(
+                                    Icons.check_circle,
+                                    color: Color(0xFF16A34A),
+                                    size: 18,
+                                  ),
                                   const SizedBox(width: 8),
                                   const Text(
                                     "Excel 제원이 검증된 도면과 일치합니다.",
-                                    style: TextStyle(color: Color(0xFF15803D), fontWeight: FontWeight.bold, fontSize: 13),
+                                    style: TextStyle(
+                                      color: Color(0xFF15803D),
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                    ),
                                   ),
                                 ],
                               ),
                               const SizedBox(height: 6),
                               Text(
                                 "• 슬랙 모선: #${_importedExcelData!['slack_bus_number'] ?? '자동'}  |  모선: ${_importedExcelData!['total_buses'] ?? 0}개  |  발전기: ${_importedExcelData!['total_generators'] ?? 0}개  |  선로/변압기: ${_importedExcelData!['total_branches'] ?? 0}개",
-                                style: const TextStyle(color: Color(0xFF166534), fontSize: 11.5),
+                                style: const TextStyle(
+                                  color: Color(0xFF166534),
+                                  fontSize: 11.5,
+                                ),
                               ),
                             ],
                           ),
@@ -8075,31 +8260,31 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                  GlowingTargetWrapper(
-                    targetId: 'final_canvas_handoff',
-                    borderRadius: BorderRadius.circular(8),
-                    guideLabel: "✨ CAD로 이동",
-                    child: ElevatedButton.icon(
-                      key: _finalCanvasHandoffKey,
-                      onPressed: _handoffToFlutterCanvas,
-                      icon: const Icon(Icons.open_in_new),
-                      label: const Text(
-                        "CAD로 이동",
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
+                    GlowingTargetWrapper(
+                      targetId: 'final_canvas_handoff',
+                      borderRadius: BorderRadius.circular(8),
+                      guideLabel: "✨ CAD로 이동",
+                      child: ElevatedButton.icon(
+                        key: _finalCanvasHandoffKey,
+                        onPressed: _handoffToFlutterCanvas,
+                        icon: const Icon(Icons.open_in_new),
+                        label: const Text(
+                          "CAD로 이동",
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF16A34A),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 28,
-                          vertical: 14,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF16A34A),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 28,
+                            vertical: 14,
+                          ),
                         ),
                       ),
                     ),
-                  ),
                   ],
                 ),
               ],
@@ -8299,7 +8484,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     );
   }
 
-
   Widget _buildMissingCandidateBadge(String label, int count, Color color) {
     final hasCandidates = count > 0;
     return Tooltip(
@@ -8344,7 +8528,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   style: TextStyle(
                     color: hasCandidates ? color : const Color(0xFF64748B),
                     fontSize: 9.2,
-                    fontWeight: hasCandidates ? FontWeight.bold : FontWeight.normal,
+                    fontWeight: hasCandidates
+                        ? FontWeight.bold
+                        : FontWeight.normal,
                   ),
                 ),
               ],
@@ -8356,7 +8542,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   Widget _buildMissingCandidatesAlertCard() {
-    final openCands = _missingCandidates.where((c) => c.status == 'OPEN').toList();
+    final openCands = _missingCandidates
+        .where((c) => c.status == 'OPEN')
+        .toList();
     if (openCands.isEmpty) return const SizedBox.shrink();
 
     return Container(
@@ -8378,7 +8566,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         children: [
           Row(
             children: [
-              const Icon(Icons.warning_amber_rounded, size: 16, color: Color(0xFF9333EA)),
+              const Icon(
+                Icons.warning_amber_rounded,
+                size: 16,
+                color: Color(0xFF9333EA),
+              ),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
@@ -8649,25 +8841,24 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                             ),
                           ),
                           const SizedBox(height: 12),
-                          ...openCands.map(
-                            (c) {
-                              final isInitial = c.id == initialCandidateId;
-                              return Container(
-                                key: ValueKey('MissingCandidateCard_${c.id}'),
-                                margin: const EdgeInsets.only(bottom: 10),
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
+                          ...openCands.map((c) {
+                            final isInitial = c.id == initialCandidateId;
+                            return Container(
+                              key: ValueKey('MissingCandidateCard_${c.id}'),
+                              margin: const EdgeInsets.only(bottom: 10),
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: isInitial
+                                    ? const Color(0xFFF3E8FF)
+                                    : const Color(0xFFFAF5FF),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
                                   color: isInitial
-                                      ? const Color(0xFFF3E8FF)
-                                      : const Color(0xFFFAF5FF),
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(
-                                    color: isInitial
-                                        ? const Color(0xFF9333EA)
-                                        : const Color(0xFFD8B4FE),
-                                    width: isInitial ? 2.0 : 1.2,
-                                  ),
+                                      ? const Color(0xFF9333EA)
+                                      : const Color(0xFFD8B4FE),
+                                  width: isInitial ? 2.0 : 1.2,
                                 ),
+                              ),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
@@ -8791,8 +8982,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                 ],
                               ),
                             );
-                          },
-                        ),
+                          }),
                         ],
                       ),
                     ),
