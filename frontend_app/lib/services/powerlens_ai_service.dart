@@ -1207,6 +1207,34 @@ class PowerLensAIService extends ChangeNotifier {
         return;
       }
 
+      // Explicit object-completeness confirmation is a local UI action. Do
+      // not let free-form backend routing reinterpret or ignore this gate
+      // confirmation after the visual sweep is complete.
+      if (requestedActions.contains(
+        PowerLensAppAction.confirmObjectCompleteness,
+      )) {
+        final handled = await dispatchAction(
+          PowerLensAppAction.confirmObjectCompleteness,
+          context: context,
+        );
+        _messages.add(
+          PowerLensAIMessageItem(
+            id: 'ai_object_confirm_${DateTime.now().millisecondsSinceEpoch}',
+            sender: 'assistant',
+            text: _getActionReply(
+              PowerLensAppAction.confirmObjectCompleteness,
+              handled,
+              context,
+            ),
+            stage: context.workflowStage,
+            suggestedActions: _getQuickActions(context.workflowStage, context),
+            agentStatus: 'LOCAL_DETERMINISTIC',
+          ),
+        );
+        finalMascotState = handled ? 'success' : 'blocked';
+        return;
+      }
+
       // 1. Semantic Routing First: Send query to backend Agent /review/agent_chat
       final uri = Uri.parse('$baseUrl/review/agent_chat');
       final payload = {

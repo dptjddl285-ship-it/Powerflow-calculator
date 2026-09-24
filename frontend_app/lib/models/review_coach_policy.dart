@@ -76,10 +76,11 @@ class ReviewCoachPolicy {
       final id = focus['id']?.toString();
       return ReviewCoachDecision(
         coachTarget: 'object_bbox',
-        coachMessage: '한 번 더 확인할 객체를 도면에 표시했어요. 표시된 객체와 인식 근거를 살펴봐주세요.',
+        coachMessage:
+            'AI가 확인이 필요한 객체 ${suspicious.length > 0 ? suspicious.length : context.suspiciousObjects}개를 찾았습니다. 먼저 반짝이는 객체부터 확인해 주세요.',
         coachMode: 'GUIDE',
         highlightTarget: null,
-        focusNodeId: id,
+        focusNodeId: context.objectVisualSweepCurrentId ?? id,
       );
     }
     if (!context.hasDiagram &&
@@ -96,6 +97,16 @@ class ReviewCoachPolicy {
         context.totalObjects == 0 &&
         context.selectedNode == null &&
         context.workingNodes.isNotEmpty;
+    if (context.objectHumanCompletenessConfirmed &&
+        context.currentBlockers.isNotEmpty) {
+      return ReviewCoachDecision(
+        coachTarget: 'object_gate',
+        coachMessage:
+            '전체 객체 확인을 기록했어요. 객체 검수에 남은 항목을 먼저 해결해 주세요: ${context.currentBlockers.first}',
+        coachMode: 'BLOCKED',
+        highlightTarget: null,
+      );
+    }
     if (context.objectHumanCompletenessConfirmed || legacySummaryContext) {
       return const ReviewCoachDecision(
         coachTarget: 'object_gate',
@@ -104,11 +115,24 @@ class ReviewCoachPolicy {
         highlightTarget: 'object_gate',
       );
     }
-    final selectedId = context.selectedNode?['id']?.toString();
+    if (context.objectReviewStage == 'WAITING_HUMAN_COMPLETE') {
+      return const ReviewCoachDecision(
+        coachTarget: 'object_human_confirmation',
+        coachMessage: '검출된 객체를 모두 확인했습니다. 문제가 없다면 “확인했어”라고 말씀해 주세요.',
+        coachMode: 'GUIDE',
+        highlightTarget: null,
+      );
+    }
+    final selectedId =
+        context.objectVisualSweepCurrentId ??
+        context.selectedNode?['id']?.toString();
+    final progress = context.objectVisualSweepTotal > 0
+        ? ' (${context.objectVisualSweepVisited + 1}/${context.objectVisualSweepTotal})'
+        : '';
     return ReviewCoachDecision(
       coachTarget: 'object_bbox',
       coachMessage:
-          'AI 1차 검수에서 의심 객체는 발견되지 않았어요. 그래도 최종 확인을 위해 도면의 주요 객체를 한 번 살펴본 뒤 “확인했어”라고 알려주세요.',
+          'AI 1차 검수에서는 의심 객체가 없습니다. 마지막으로 검출된 객체를 하나씩 빠르게 확인해 주세요.$progress',
       coachMode: 'GUIDE',
       highlightTarget: null,
       focusNodeId: selectedId,

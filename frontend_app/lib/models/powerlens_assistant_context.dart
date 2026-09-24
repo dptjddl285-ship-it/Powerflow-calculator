@@ -46,6 +46,10 @@ class PowerLensAssistantContext {
   // keep the guide honest about whether a human check or AI bus read is still
   // in progress; they are optional so existing callers remain compatible.
   final bool objectHumanCompletenessConfirmed;
+  final String objectReviewStage;
+  final int objectVisualSweepVisited;
+  final int objectVisualSweepTotal;
+  final String? objectVisualSweepCurrentId;
   final bool busMappingAiReading;
   final String? activeBusId;
   final String? busModelUsed;
@@ -85,6 +89,10 @@ class PowerLensAssistantContext {
     this.topologyIssues = const [],
     this.currentBlockers = const [],
     this.objectHumanCompletenessConfirmed = false,
+    this.objectReviewStage = '',
+    this.objectVisualSweepVisited = 0,
+    this.objectVisualSweepTotal = 0,
+    this.objectVisualSweepCurrentId,
     this.busMappingAiReading = false,
     this.activeBusId,
     this.busModelUsed,
@@ -125,6 +133,11 @@ class PowerLensAssistantContext {
     'topology_issues': topologyIssues,
     'current_blockers': currentBlockers,
     'object_human_completeness_confirmed': objectHumanCompletenessConfirmed,
+    'object_review_stage': objectReviewStage,
+    'object_visual_sweep_visited': objectVisualSweepVisited,
+    'object_visual_sweep_total': objectVisualSweepTotal,
+    if (objectVisualSweepCurrentId != null)
+      'object_visual_sweep_current_id': objectVisualSweepCurrentId,
     'bus_mapping_ai_reading': busMappingAiReading,
     if (activeBusId != null) 'active_bus_id': activeBusId,
     if (busModelUsed != null) 'bus_model_used': busModelUsed,
@@ -165,6 +178,10 @@ class PowerLensAssistantContext {
     List<Map<String, dynamic>>? topologyIssues,
     List<String>? currentBlockers,
     bool? objectHumanCompletenessConfirmed,
+    String? objectReviewStage,
+    int? objectVisualSweepVisited,
+    int? objectVisualSweepTotal,
+    String? objectVisualSweepCurrentId,
     bool? busMappingAiReading,
     String? activeBusId,
     String? busModelUsed,
@@ -209,6 +226,13 @@ class PowerLensAssistantContext {
       objectHumanCompletenessConfirmed:
           objectHumanCompletenessConfirmed ??
           this.objectHumanCompletenessConfirmed,
+      objectReviewStage: objectReviewStage ?? this.objectReviewStage,
+      objectVisualSweepVisited:
+          objectVisualSweepVisited ?? this.objectVisualSweepVisited,
+      objectVisualSweepTotal:
+          objectVisualSweepTotal ?? this.objectVisualSweepTotal,
+      objectVisualSweepCurrentId:
+          objectVisualSweepCurrentId ?? this.objectVisualSweepCurrentId,
       busMappingAiReading: busMappingAiReading ?? this.busMappingAiReading,
       activeBusId: activeBusId ?? this.activeBusId,
       busModelUsed: busModelUsed ?? this.busModelUsed,

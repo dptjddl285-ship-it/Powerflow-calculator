@@ -330,6 +330,39 @@ void main() {
         }
       },
     );
+
+    test(
+      'object completeness confirmation dispatches locally before backend routing',
+      () async {
+        final dispatched = <PowerLensAppAction>[];
+        Future<bool> handler(
+          PowerLensAppAction action,
+          Map<String, dynamic>? params,
+        ) async {
+          dispatched.add(action);
+          return true;
+        }
+
+        service.registerActionHandler(handler);
+        try {
+          const context = PowerLensAssistantContext(
+            currentScreen: 'REVIEW_PAGE',
+            workflowStage: 'OBJECT_REVIEW',
+            objectReviewStage: 'WAITING_HUMAN_COMPLETE',
+            objectVisualSweepVisited: 1,
+            objectVisualSweepTotal: 1,
+          );
+
+          await service.sendMessage('확인했어', context);
+
+          expect(dispatched, [PowerLensAppAction.confirmObjectCompleteness]);
+          expect(service.messages.last.agentStatus, 'LOCAL_DETERMINISTIC');
+          expect(service.messages.last.text, contains('객체 검수 완료'));
+        } finally {
+          service.unregisterActionHandler(handler);
+        }
+      },
+    );
   });
 
   group('Agent Core V2 Proactive Deduplication Tests', () {

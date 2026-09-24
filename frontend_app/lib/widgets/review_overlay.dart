@@ -10,6 +10,9 @@ class ReviewOverlayView extends StatefulWidget {
   final int originalHeight;
   final List<ReviewNodeItem> nodes;
   final ReviewNodeItem? selectedNode;
+  final String? currentObjectReviewId;
+  final bool objectReviewTargetActive;
+  final Set<String> visitedObjectIds;
 
   /// Optional key attached to the selected node's rendered bounding box so a
   /// coaching companion can follow the actual on-screen target.
@@ -57,6 +60,9 @@ class ReviewOverlayView extends StatefulWidget {
     required this.originalHeight,
     required this.nodes,
     required this.selectedNode,
+    this.currentObjectReviewId,
+    this.objectReviewTargetActive = false,
+    this.visitedObjectIds = const {},
     this.focusTargetKey,
     required this.onSelectNode,
     this.onNodeOffsetChanged,
@@ -531,6 +537,21 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
 
                         final bool isSelected =
                             widget.selectedNode?.id == node.id;
+                        final bool isCurrentObjectTarget =
+                            widget.objectReviewTargetActive &&
+                            widget.currentObjectReviewId == node.id;
+                        final bool isVisitedObject =
+                            widget.objectReviewTargetActive &&
+                            widget.visitedObjectIds.contains(node.id) &&
+                            !isCurrentObjectTarget;
+                        final bool isSelectedForNodeStyle =
+                            widget.objectReviewTargetActive
+                            ? isCurrentObjectTarget
+                            : isSelected;
+                        final Color selectionColor =
+                            widget.objectReviewTargetActive
+                            ? Colors.cyanAccent
+                            : Colors.yellowAccent;
                         final bool isEndpointOfSelectedLine =
                             lineEndpointNodeIds.contains(node.id);
                         final bool isViolation = widget.violationNodeIds
@@ -538,9 +559,11 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                         final bool isBus =
                             node.className.toLowerCase() == 'bus';
                         final bool isGuide = isBus
-                            ? widget.guideNodeIds.contains(node.id)
+                            ? (widget.guideNodeIds.contains(node.id) ||
+                                  isCurrentObjectTarget)
                             : (widget.guideNodeIds.contains(node.id) ||
-                                  node.reviewStatus == 'SUSPICIOUS');
+                                  node.reviewStatus == 'SUSPICIOUS' ||
+                                  isCurrentObjectTarget);
                         final bool isCurrentBusGuide =
                             isBus && widget.currentCoachNodeId == node.id;
 
@@ -613,7 +636,9 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                     decoration: BoxDecoration(
                                       borderRadius: BorderRadius.circular(4),
                                       border: Border.all(
-                                        color: isCurrentBusGuide
+                                        color: isCurrentObjectTarget
+                                            ? const Color(0xFF06B6D4)
+                                            : isCurrentBusGuide
                                             ? const Color(0xFF06B6D4)
                                             : isBus
                                             ? const Color(0xFFA855F7)
@@ -623,7 +648,8 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                       boxShadow: [
                                         BoxShadow(
                                           color:
-                                              (isCurrentBusGuide
+                                              (isCurrentObjectTarget ||
+                                                          isCurrentBusGuide
                                                       ? const Color(0xFF06B6D4)
                                                       : isBus
                                                       ? const Color(0xFFA855F7)
@@ -648,7 +674,9 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                           vertical: 0.5,
                                         ),
                                         decoration: BoxDecoration(
-                                          color: isCurrentBusGuide
+                                          color: isCurrentObjectTarget
+                                              ? const Color(0xFF0891B2)
+                                              : isCurrentBusGuide
                                               ? const Color(0xFF0891B2)
                                               : isBus
                                               ? const Color(0xFF7E22CE)
@@ -669,7 +697,9 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                               ),
                                               const SizedBox(width: 1.5),
                                               Text(
-                                                isCurrentBusGuide
+                                                isCurrentObjectTarget
+                                                    ? '현재 확인할 객체'
+                                                    : isCurrentBusGuide
                                                     ? 'Lensy가 가리키는 모선'
                                                     : isBus
                                                     ? '번호 확인 필요'
@@ -691,7 +721,9 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
 
                             // Bounding Box Rect
                             Positioned(
-                              key: isSelected ? widget.focusTargetKey : null,
+                              key: isSelectedForNodeStyle
+                                  ? widget.focusTargetKey
+                                  : null,
                               left: renderLeft,
                               top: renderTop,
                               child: Opacity(
@@ -718,8 +750,8 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                     width: renderW,
                                     height: renderH,
                                     decoration: BoxDecoration(
-                                      color: isSelected
-                                          ? Colors.yellowAccent.withValues(
+                                      color: isSelectedForNodeStyle
+                                          ? selectionColor.withValues(
                                               alpha: 0.2 + 0.15 * pulseVal,
                                             )
                                           : (isViolation
@@ -735,32 +767,47 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                                   0.2 *
                                                                       pulseVal,
                                                             )
-                                                      : classColor.withValues(
-                                                          alpha: 0.08,
-                                                        ))),
+                                                      : (isVisitedObject
+                                                            ? const Color(
+                                                                0xFFF59E0B,
+                                                              ).withValues(
+                                                                alpha: 0.08,
+                                                              )
+                                                            : classColor
+                                                                  .withValues(
+                                                                    alpha: 0.08,
+                                                                  )))),
                                       border: Border.all(
-                                        color: isSelected
-                                            ? Colors.yellowAccent
+                                        color: isSelectedForNodeStyle
+                                            ? selectionColor
                                             : (isViolation
                                                   ? Colors.redAccent
                                                   : (isEndpointOfSelectedLine
                                                         ? Colors.cyanAccent
                                                         : (isRejected
                                                               ? Colors.redAccent
-                                                              : classColor))),
-                                        width: isSelected
+                                                              : (isVisitedObject
+                                                                    ? const Color(
+                                                                        0xFFF59E0B,
+                                                                      )
+                                                                    : classColor)))),
+                                        width: isSelectedForNodeStyle
                                             ? (2.0 + 1.2 * pulseVal)
-                                            : (isViolation
-                                                  ? (2.2 + 1.5 * pulseVal)
-                                                  : (isEndpointOfSelectedLine
-                                                        ? (2.2 + 1.8 * pulseVal)
-                                                        : 1.2)),
+                                            : (isVisitedObject
+                                                  ? 1.5
+                                                  : (isViolation
+                                                        ? (2.2 + 1.5 * pulseVal)
+                                                        : (isEndpointOfSelectedLine
+                                                              ? (2.2 +
+                                                                    1.8 *
+                                                                        pulseVal)
+                                                              : 1.2))),
                                       ),
                                       borderRadius: BorderRadius.circular(2),
-                                      boxShadow: isSelected
+                                      boxShadow: isSelectedForNodeStyle
                                           ? [
                                               BoxShadow(
-                                                color: Colors.yellowAccent
+                                                color: selectionColor
                                                     .withValues(
                                                       alpha:
                                                           0.5 + 0.4 * pulseVal,
@@ -816,7 +863,8 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                             // Draggable Label Badge
                             if (widget.showNodeLabels &&
                                 !widget.linesOnlyMode &&
-                                (nodeDimOpacity >= 0.5 || isSelected))
+                                (nodeDimOpacity >= 0.5 ||
+                                    isSelectedForNodeStyle))
                               Positioned(
                                 left: labelBaseX,
                                 top: labelBaseY,
@@ -854,8 +902,8 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                   isBus &&
                                                   isSelected)
                                               ? const Color(0xFF2563EB)
-                                              : (isSelected
-                                                    ? Colors.yellowAccent
+                                              : (isSelectedForNodeStyle
+                                                    ? selectionColor
                                                     : (isViolation
                                                           ? Colors.redAccent
                                                           : (isEndpointOfSelectedLine
@@ -870,7 +918,7 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                             4,
                                           ),
                                           border: Border.all(
-                                            color: isSelected
+                                            color: isSelectedForNodeStyle
                                                 ? (widget.busFocusOnly && isBus
                                                       ? Colors.white
                                                       : Colors.orangeAccent)
@@ -879,7 +927,7 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                       : (isEndpointOfSelectedLine
                                                             ? Colors.white
                                                             : statusColor)),
-                                            width: isSelected
+                                            width: isSelectedForNodeStyle
                                                 ? 1.5
                                                 : (isViolation ||
                                                           isEndpointOfSelectedLine

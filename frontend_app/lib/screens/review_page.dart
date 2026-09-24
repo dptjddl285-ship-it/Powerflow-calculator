@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/review_models.dart';
 import '../models/review_final_contract.dart';
+import '../models/object_visual_sweep.dart';
 import '../models/powerlens_assistant_context.dart';
 import '../models/connection_visual_sweep.dart';
 import '../models/review_coach_policy.dart';
@@ -120,8 +121,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   String? _completenessAssessment;
   String? _completenessMessageKo;
   bool _humanCompletenessConfirmed = false;
-  bool _objectHumanCheckDone = false;
-  final Set<String> _reviewedObjectIds = <String>{};
+  final ObjectVisualSweepState _objectSweep = ObjectVisualSweepState();
 
   // Object Gate & Final Gate States
   bool _isObjectVerified = false;
@@ -173,8 +173,23 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     missingCandidates: _missingCandidates,
   );
 
+  bool get _objectHumanCheckDone => _objectSweep.humanCompleteConfirmed;
+
+  List<ReviewNodeItem> get _orderedObjectReviewTargets =>
+      _objectSweep.orderedTargets(_workingNodes);
+
+  ReviewNodeItem? get _objectReviewCurrentTarget => _objectSweep.currentTarget(
+    _workingNodes,
+    hasOpenMissingCandidates: _unresolvedCandidatesCount > 0,
+  );
+
+  ObjectReviewFlowStage get _objectReviewFlowStage => _objectSweep.stage(
+    _workingNodes,
+    hasOpenMissingCandidates: _unresolvedCandidatesCount > 0,
+  );
+
   bool get _objectGateReadyForUser =>
-      _canVerifyObjectGate && (_objectHumanCheckDone || _objectHumanCheckReady);
+      _canVerifyObjectGate && _objectHumanCheckDone && _objectHumanCheckReady;
 
   List<String> get _objectGateBlockers => ObjectReviewGateEvaluator.getBlockers(
     workingNodes: _workingNodes,
@@ -660,15 +675,29 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       _focusNextReviewTask();
       if (mounted) {
         setState(() {
-          _stageGateMessage = '주요 객체를 도면에서 한 번 선택해 확인한 뒤 다시 “확인했어”라고 알려주세요.';
+          _stageGateMessage = '표시된 객체를 모두 확인한 뒤 “확인했어”라고 알려주세요.';
+        });
+      }
+      return false;
+    }
+    if (!_canVerifyObjectGate) {
+      _focusNextReviewTask();
+      if (mounted) {
+        setState(() {
+          _stageGateMessage = _objectGateBlockers.isEmpty
+              ? '아직 객체 검수를 완료할 수 없습니다.'
+              : '객체 검수 전에 남은 항목이 있어요: ${_objectGateBlockers.first}';
         });
       }
       return false;
     }
     setState(() {
-      _objectHumanCheckDone = true;
+      _objectSweep.confirmHumanComplete(
+        _workingNodes,
+        hasOpenMissingCandidates: _unresolvedCandidatesCount > 0,
+      );
       _humanCompletenessConfirmed = true;
-      _stageGateMessage = '주요 객체 확인을 기록했어요. 객체 검수 완료 버튼을 확인해주세요.';
+      _stageGateMessage = '좋습니다. 마지막으로 아래 [객체 검수 완료]를 눌러주세요.';
     });
     _announceReviewStage();
     return true;
@@ -704,27 +733,72 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     return true;
   }
 
-  bool get _objectHumanCheckReady {
-    final suspicious = _workingNodes
-        .where((node) => node.reviewStatus == 'SUSPICIOUS')
-        .toList();
-    final targets = suspicious.isNotEmpty
-        ? suspicious
-        : _workingNodes
-              .where((node) => node.reviewStatus != 'REJECTED')
-              .toList();
-    return targets.isNotEmpty &&
-        targets.every((node) => _reviewedObjectIds.contains(node.id));
-  }
+  bool get _objectHumanCheckReady => _objectSweep.isComplete(
+    _workingNodes,
+    hasOpenMissingCandidates: _unresolvedCandidatesCount > 0,
+  );
 
-  void _selectReviewNode(ReviewNodeItem node) {
+  void _selectReviewNode(ReviewNodeItem node, {int? listPage}) {
+    var visitedCurrentTarget = false;
     setState(() {
       _selectedNode = node;
-      _reviewedObjectIds.add(node.id);
       _isObjectEditExpanded = false;
+      if (listPage != null) _nodePage = listPage;
+      if (_currentPhase == ReviewPhase.objectReview) {
+        visitedCurrentTarget = _objectSweep.visitCurrentTarget(
+          node.id,
+          _workingNodes,
+          hasOpenMissingCandidates: _unresolvedCandidatesCount > 0,
+        );
+        if (visitedCurrentTarget) {
+          final total = _orderedObjectReviewTargets.length;
+          final visited = _objectSweep.visitedCount(_workingNodes);
+          _stageGateMessage = _objectReviewCurrentTarget == null
+              ? '검출된 객체를 모두 확인했습니다. 문제가 없다면 “확인했어”라고 말씀해 주세요.'
+              : '확인했습니다. 다음 반짝이는 객체도 확인해 주세요. ($visited/$total)';
+        }
+      }
     });
     if (node.reviewStatus == 'SUSPICIOUS' && node.agentExplanation == null) {
       _triggerAgentReviewNode(node);
+    }
+    if (_currentPhase == ReviewPhase.objectReview) _announceReviewStage();
+  }
+
+  void _refreshObjectReviewFocus({bool exceptionResolved = false}) {
+    if (_currentPhase != ReviewPhase.objectReview) return;
+    final unresolved = _objectSweep.unresolvedExceptions(_workingNodes);
+    final hasOpenCandidates = _unresolvedCandidatesCount > 0;
+    final target = _objectSweep.currentTarget(
+      _workingNodes,
+      hasOpenMissingCandidates: hasOpenCandidates,
+    );
+    setState(() {
+      if (!_objectHumanCheckReady) _objectSweep.invalidateHumanComplete();
+      if (unresolved.isNotEmpty) {
+        _objFilterStatus = 'SUSPICIOUS';
+        _objFilterClass = 'ALL';
+        _selectedNode = unresolved.first;
+        _stageGateMessage =
+            'AI가 확인이 필요한 객체 ${unresolved.length}개를 찾았습니다. 먼저 반짝이는 객체부터 확인해 주세요.';
+      } else {
+        _objFilterStatus = 'ALL';
+        _objFilterClass = 'ALL';
+        if (target != null) {
+          _selectedNode = target;
+          if (exceptionResolved && !hasOpenCandidates) {
+            _stageGateMessage = '의심 객체 확인이 끝났어요. 마지막으로 전체 도면의 객체를 하나씩 확인해볼게요.';
+          } else if (hasOpenCandidates) {
+            _stageGateMessage = '누락 후보를 먼저 확인한 뒤 전체 객체를 하나씩 확인할게요.';
+          }
+        } else if (_objectHumanCheckReady) {
+          _stageGateMessage = '검출된 객체를 모두 확인했습니다. 문제가 없다면 “확인했어”라고 말씀해 주세요.';
+        }
+      }
+    });
+    if (_selectedNode?.reviewStatus == 'SUSPICIOUS' &&
+        _selectedNode?.agentExplanation == null) {
+      _triggerAgentReviewNode(_selectedNode!);
     }
     _announceReviewStage();
   }
@@ -939,9 +1013,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           ? _busGateBlockers
           : connectionBlockers,
       objectHumanCompletenessConfirmed:
-          _objectHumanCheckDone ||
-          _humanCompletenessConfirmed ||
-          _objectHumanCheckReady,
+          _objectHumanCheckDone && _objectHumanCheckReady,
+      objectReviewStage: _objectReviewFlowStage.wireName,
+      objectVisualSweepVisited: _objectSweep.visitedCount(_workingNodes),
+      objectVisualSweepTotal: _orderedObjectReviewTargets.length,
+      objectVisualSweepCurrentId: _objectReviewCurrentTarget?.id,
       busMappingAiReading: _isLinkingBusNumbers,
       activeBusId: _selectedNode?.className.toLowerCase() == 'bus'
           ? _selectedNode?.id
@@ -981,8 +1057,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _completenessAssessment = null;
         _completenessMessageKo = null;
         _humanCompletenessConfirmed = false;
-        _objectHumanCheckDone = false;
-        _reviewedObjectIds.clear();
+        _objectSweep.reset();
         _visitedConnectionLineIds.clear();
         _busModelUsed = null;
         _busFallbackUsed = false;
@@ -1002,21 +1077,19 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       setState(() {
         _document = doc;
         _workingNodes = List.from(doc.nodes);
-        final suspiciousNodes = _workingNodes
-            .where((n) => n.reviewStatus == 'SUSPICIOUS')
-            .toList();
+        final suspiciousNodes = _objectSweep.unresolvedExceptions(
+          _workingNodes,
+        );
         _objFilterStatus = suspiciousNodes.isNotEmpty ? 'SUSPICIOUS' : 'ALL';
 
-        _selectedNode = suspiciousNodes.isNotEmpty
-            ? suspiciousNodes.first
-            : (_workingNodes.isNotEmpty ? _workingNodes.first : null);
+        _selectedNode = _objectSweep.currentTarget(_workingNodes);
         _isLoading = false;
 
         // Greeting and Proactive Summary in Chat
         final suspiciousCount = suspiciousNodes.length;
         final summaryMsg = suspiciousCount == 0
-            ? 'AI 1차 검수 결과: 의심 객체 0개입니다. 주요 객체를 한 번 확인한 뒤 “확인했어”라고 알려주세요.'
-            : 'AI 1차 검수 결과: 의심 객체 ${suspiciousCount}개입니다. 표시된 객체를 순서대로 확인해주세요.';
+            ? 'AI 1차 검수에서는 의심 객체가 없습니다. 마지막으로 검출된 객체를 하나씩 빠르게 확인해 주세요.'
+            : 'AI가 확인이 필요한 객체 ${suspiciousCount}개를 찾았습니다. 먼저 반짝이는 객체부터 확인해 주세요.';
 
         _chatHistory.add(
           ChatMessageItem(
@@ -1081,7 +1154,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _completenessAssessment = res.assessment;
         _completenessMessageKo = res.messageKo;
       });
-      _announceReviewStage();
+      _refreshObjectReviewFocus();
     } catch (e) {
       print("완결성 검사 호출 오류: $e");
     }
@@ -1100,9 +1173,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         duration: const Duration(seconds: 2),
       ),
     );
-    if (_canVerifyObjectGate) {
-      PowerLensAIService.instance.triggerHighlight('object_gate');
-    }
+    _refreshObjectReviewFocus(
+      exceptionResolved: _objectSweep.hasResolvedExceptions,
+    );
   }
 
   Future<void> _fetchAgentRuns() async {
@@ -1157,7 +1230,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   void _rejectNode(ReviewNodeItem node) {
-    _reviewedObjectIds.add(node.id);
+    final wasException = node.reviewStatus.toUpperCase() == 'SUSPICIOUS';
+    _objectSweep.markExceptionResolved(node.id, wasException: wasException);
     final removedLineIds = _workingLines
         .where((line) => line.connectedTo.contains(node.id))
         .map((line) => line.lineId)
@@ -1190,6 +1264,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     if (_currentPhase == ReviewPhase.connectionReview && _document != null) {
       _triggerTopologyValidation();
     }
+    _refreshObjectReviewFocus(exceptionResolved: wasException);
 
     final removedLineMessage = removedLineIds.isEmpty
         ? ''
@@ -1205,12 +1280,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   void _changeNodeClass(ReviewNodeItem node, String newClass) {
-    _reviewedObjectIds.add(node.id);
+    final wasException = node.reviewStatus.toUpperCase() == 'SUSPICIOUS';
+    _objectSweep.markExceptionResolved(node.id, wasException: wasException);
     setState(() {
       node.className = newClass;
       node.reviewStatus = 'CONFIRMED';
       node.source = 'human_class_changed';
     });
+    _refreshObjectReviewFocus(exceptionResolved: wasException);
   }
 
   // Navigation Logic
@@ -1608,6 +1685,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         }
       }
     });
+    _refreshObjectReviewFocus(
+      exceptionResolved: _objectSweep.hasResolvedExceptions,
+    );
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -1644,10 +1724,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   Future<void> _completeObjectReview() async {
     if (_document == null || _isLoading) return;
 
-    if (!_objectHumanCheckDone && !_objectHumanCheckReady) {
+    if (!_objectHumanCheckDone || !_objectHumanCheckReady) {
       setState(() {
-        _stageGateMessage =
-            'AI 결과만으로는 완료할 수 없어요. 도면의 주요 객체를 직접 확인한 뒤 완료 버튼을 눌러주세요.';
+        _stageGateMessage = '모든 객체를 하나씩 확인하고 Lensy에게 “확인했어”라고 말씀해 주세요.';
       });
       _focusNextReviewTask();
       return;
@@ -1666,7 +1745,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     }
 
     _humanCompletenessConfirmed = true;
-    _objectHumanCheckDone = true;
     await _verifyObjectGate();
   }
 
@@ -2299,6 +2377,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       _isFinalVerified = false;
       _objectGateMessage = null;
       _humanCompletenessConfirmed = false;
+      _objectSweep.reset();
       _workingLines.clear();
       _verifiedSld = null;
       _topologyIssues.clear();
@@ -2314,7 +2393,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _workingNodes = _document!.nodes
             .map((n) => ReviewNodeItem.fromJson(n.toJson()))
             .toList();
-        _selectedNode = _workingNodes.isNotEmpty ? _workingNodes.first : null;
+        _selectedNode = _objectSweep.currentTarget(_workingNodes);
       }
       _busNumberEditController.clear();
     });
@@ -3063,7 +3142,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         return '누락 의심 설비 $_unresolvedCandidatesCount개를 복구하거나 문제없음 처리하세요.';
       }
       if (!_objectHumanCheckDone && !_objectHumanCheckReady) {
-        return 'AI 결과를 확인했으면 도면의 주요 객체를 직접 선택해 확인해 주세요.';
+        return '반짝이는 객체를 순서대로 확인한 뒤 “확인했어”라고 말해 주세요.';
       }
       return '객체 확인이 완료되었습니다. 모선 번호 매핑으로 이동할 수 있습니다.';
     }
@@ -3085,13 +3164,15 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         !_objectHumanCheckReady;
     setState(() {
       if (_currentPhase == ReviewPhase.objectReview) {
-        final suspicious = _workingNodes
-            .where((node) => node.reviewStatus == 'SUSPICIOUS')
-            .toList();
+        final suspicious = _objectSweep.unresolvedExceptions(_workingNodes);
         if (suspicious.isNotEmpty) {
           _objFilterStatus = 'SUSPICIOUS';
           _objFilterClass = 'ALL';
           _selectedNode = suspicious.first;
+        } else if (_unresolvedCandidatesCount == 0) {
+          _objFilterStatus = 'ALL';
+          _objFilterClass = 'ALL';
+          _selectedNode = _objectReviewCurrentTarget ?? _selectedNode;
         }
       } else if (_currentPhase == ReviewPhase.busMappingReview) {
         _busFilterStatus = 'UNCERTAIN';
@@ -3121,7 +3202,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     if (needsCompletenessCheck) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('오른쪽 아래의 원본 도면 대조 확인 항목을 체크해 주세요.'),
+          content: Text('도면에서 cyan으로 반짝이는 객체를 순서대로 확인해 주세요.'),
           backgroundColor: Colors.blueAccent,
         ),
       );
@@ -3593,206 +3674,201 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                         child: Stack(
                           children: [
                             Positioned.fill(
-                              child:
-                                  ValueListenableBuilder<
-                                    List<Map<String, dynamic>>
-                                  >(
-                                    valueListenable: PowerLensAIService
-                                        .instance
-                                        .focusTargetsNotifier,
-                                    builder: (context, focusTargets, _) {
-                                      return ReviewOverlayView(
-                                        focusTargetKey: _reviewFocusTargetKey,
-                                        imageBytes: _document!.rawBytes,
-                                        imageUrl: _apiService
-                                            .getOriginalImageUrl(
-                                              _document!.documentId,
-                                            ),
-                                        originalWidth: _document!.image.width,
-                                        originalHeight: _document!.image.height,
-                                        nodes:
-                                            (_currentPhase ==
-                                                ReviewPhase.objectReview)
-                                            ? _filteredAndSortedWorkingNodes
-                                            : _workingNodes,
-                                        selectedNode: _selectedNode,
-                                        guideNodeIds:
-                                            (_currentPhase ==
-                                                    ReviewPhase.objectReview ||
-                                                _currentPhase ==
-                                                    ReviewPhase
-                                                        .busMappingReview)
-                                            ? _calculateGuideNodeIds(
-                                                focusTargets,
-                                              )
-                                            : const {},
-                                        currentCoachNodeId:
-                                            _reviewCoachDecision.focusNodeId,
-                                        openMissingCandidates:
-                                            (_currentPhase ==
-                                                ReviewPhase.objectReview)
-                                            ? _missingCandidates
-                                                  .where(
-                                                    (c) => c.status == 'OPEN',
-                                                  )
-                                                  .toList()
-                                            : const [],
-                                        onSelectCandidate: (cand) {
-                                          _showMissingCandidatesDialog(
-                                            initialCandidateId: cand.id,
-                                          );
-                                        },
-                                        onSelectNode: (node) {
-                                          setState(() {
-                                            _selectedNode = node;
-                                            if (_currentPhase ==
-                                                ReviewPhase.objectReview) {
-                                              _reviewedObjectIds.add(node.id);
-                                            }
-                                            _isObjectEditExpanded = false;
-                                            if (_isManualAddLineMode &&
-                                                _manualLineStartNode == null) {
-                                              _manualLineStartNode = node;
-                                            }
-                                            if (_currentPhase ==
-                                                ReviewPhase.connectionReview) {
-                                              final matchedIssue =
-                                                  _topologyIssues.firstWhere(
-                                                    (i) =>
-                                                        (i['component_ids']
-                                                                    as List? ??
-                                                                [])
-                                                            .map(
-                                                              (e) =>
-                                                                  e.toString(),
-                                                            )
-                                                            .contains(node.id),
-                                                    orElse: () => {},
-                                                  );
-                                              _selectedTopologyIssue =
-                                                  matchedIssue.isNotEmpty
-                                                  ? matchedIssue
-                                                  : null;
-                                              _selectedLine = null;
-                                            }
-                                          });
-                                          if (node.reviewStatus ==
-                                                  'SUSPICIOUS' &&
-                                              node.agentExplanation == null) {
-                                            _triggerAgentReviewNode(node);
-                                          }
-                                          if (_currentPhase ==
-                                              ReviewPhase.objectReview) {
-                                            _announceReviewStage();
-                                          }
-                                        },
-                                        onNodeOffsetChanged: (nodeId, dx, dy) {
-                                          setState(() {
-                                            for (var n in _workingNodes) {
-                                              if (n.id == nodeId) {
-                                                n.labelOffsetDx = dx;
-                                                n.labelOffsetDy = dy;
-                                                break;
-                                              }
-                                            }
-                                          });
-                                        },
-                                        showNodeLabels: _showCanvasLabels,
-                                        showLineLabels: _showCanvasLabels,
-                                        busFocusOnly:
-                                            (_currentPhase ==
-                                                ReviewPhase.busMappingReview &&
-                                            _busFocusOnly),
-                                        lineFocusOnly:
-                                            (_currentPhase ==
-                                                ReviewPhase.connectionReview &&
-                                            _lineFocusOnly),
-                                        linesOnlyMode:
-                                            (_currentPhase ==
-                                                ReviewPhase.connectionReview &&
-                                            _connectionLinesOnlyMode),
-                                        lines:
-                                            (_currentPhase ==
-                                                ReviewPhase.objectReview)
-                                            ? const []
-                                            : _workingLines,
-                                        selectedLine: _selectedLine,
-                                        visitedLineIds:
-                                            _visitedConnectionLineIds,
-                                        onSelectLine: (line) {
-                                          setState(() {
-                                            if (_currentPhase ==
-                                                    ReviewPhase
-                                                        .connectionReview &&
-                                                _selectedLine != null &&
-                                                _selectedLine!.lineId !=
-                                                    line.lineId) {
-                                              _visitedConnectionLineIds.add(
-                                                _selectedLine!.lineId,
-                                              );
-                                            }
-                                            _selectedLine = line;
-                                            if (_currentPhase ==
-                                                ReviewPhase.connectionReview) {
-                                              _selectedNode = null;
-                                              _selectedTopologyIssue = null;
-                                              if (!_filteredAndSortedWorkingLines
-                                                  .any(
-                                                    (l) =>
-                                                        l.lineId == line.lineId,
-                                                  )) {
-                                                _connFilterStatus = 'ALL';
-                                              }
-                                            }
-                                            final index =
-                                                _filteredAndSortedWorkingLines
-                                                    .indexWhere(
-                                                      (item) =>
-                                                          item.lineId ==
-                                                          line.lineId,
-                                                    );
-                                            if (index >= 0) {
-                                              _linePage =
-                                                  index ~/ _linePageSize;
-                                            }
-                                          });
-                                        },
-                                        onLineOffsetChanged: (lineId, dx, dy) {
-                                          setState(() {
-                                            for (var l in _workingLines) {
-                                              if (l.lineId == lineId) {
-                                                l.labelOffsetDx = dx;
-                                                l.labelOffsetDy = dy;
-                                                break;
-                                              }
-                                            }
-                                          });
-                                        },
-                                        isManualAddMode: _isManualAddMode,
-                                        manualAddClass: _manualAddClass,
-                                        onManualAddComplete:
-                                            _handleManualAddComplete,
-                                        isManualAddLineMode:
-                                            _isManualAddLineMode,
-                                        manualLineStartNode:
-                                            _manualLineStartNode,
-                                        onManualAddLineComplete:
-                                            _handleManualAddLineComplete,
-                                        violationNodeIds: _topologyIssues
-                                            .where(
-                                              (i) => i['severity'] == 'error',
-                                            )
-                                            .expand(
-                                              (i) =>
-                                                  (i['component_ids']
-                                                              as List? ??
-                                                          [])
-                                                      .map((e) => e.toString()),
-                                            )
-                                            .toSet(),
+                              child: ValueListenableBuilder<List<Map<String, dynamic>>>(
+                                valueListenable: PowerLensAIService
+                                    .instance
+                                    .focusTargetsNotifier,
+                                builder: (context, focusTargets, _) {
+                                  return ReviewOverlayView(
+                                    focusTargetKey: _reviewFocusTargetKey,
+                                    imageBytes: _document!.rawBytes,
+                                    imageUrl: _apiService.getOriginalImageUrl(
+                                      _document!.documentId,
+                                    ),
+                                    originalWidth: _document!.image.width,
+                                    originalHeight: _document!.image.height,
+                                    nodes:
+                                        (_currentPhase ==
+                                            ReviewPhase.objectReview)
+                                        ? (_objectReviewFlowStage ==
+                                                      ObjectReviewFlowStage
+                                                          .visualSweep ||
+                                                  _objectReviewFlowStage ==
+                                                      ObjectReviewFlowStage
+                                                          .waitingHumanComplete ||
+                                                  _objectReviewFlowStage ==
+                                                      ObjectReviewFlowStage
+                                                          .readyToComplete
+                                              ? _workingNodes
+                                              : _filteredAndSortedWorkingNodes)
+                                        : _workingNodes,
+                                    selectedNode: _selectedNode,
+                                    currentObjectReviewId:
+                                        _objectReviewCurrentTarget?.id,
+                                    objectReviewTargetActive:
+                                        _currentPhase ==
+                                            ReviewPhase.objectReview &&
+                                        _objectReviewCurrentTarget != null,
+                                    visitedObjectIds:
+                                        _objectSweep.visitedObjectIds,
+                                    guideNodeIds:
+                                        (_currentPhase ==
+                                                ReviewPhase.objectReview ||
+                                            _currentPhase ==
+                                                ReviewPhase.busMappingReview)
+                                        ? _calculateGuideNodeIds(focusTargets)
+                                        : const {},
+                                    currentCoachNodeId:
+                                        _reviewCoachDecision.focusNodeId,
+                                    openMissingCandidates:
+                                        (_currentPhase ==
+                                            ReviewPhase.objectReview)
+                                        ? _missingCandidates
+                                              .where((c) => c.status == 'OPEN')
+                                              .toList()
+                                        : const [],
+                                    onSelectCandidate: (cand) {
+                                      _showMissingCandidatesDialog(
+                                        initialCandidateId: cand.id,
                                       );
                                     },
-                                  ),
+                                    onSelectNode: (node) {
+                                      if (_currentPhase ==
+                                          ReviewPhase.objectReview) {
+                                        _selectReviewNode(node);
+                                        return;
+                                      }
+                                      setState(() {
+                                        _selectedNode = node;
+                                        _isObjectEditExpanded = false;
+                                        if (_isManualAddLineMode &&
+                                            _manualLineStartNode == null) {
+                                          _manualLineStartNode = node;
+                                        }
+                                        if (_currentPhase ==
+                                            ReviewPhase.connectionReview) {
+                                          final matchedIssue = _topologyIssues
+                                              .firstWhere(
+                                                (i) =>
+                                                    (i['component_ids']
+                                                                as List? ??
+                                                            [])
+                                                        .map(
+                                                          (e) => e.toString(),
+                                                        )
+                                                        .contains(node.id),
+                                                orElse: () => {},
+                                              );
+                                          _selectedTopologyIssue =
+                                              matchedIssue.isNotEmpty
+                                              ? matchedIssue
+                                              : null;
+                                          _selectedLine = null;
+                                        }
+                                      });
+                                      if (node.reviewStatus == 'SUSPICIOUS' &&
+                                          node.agentExplanation == null) {
+                                        _triggerAgentReviewNode(node);
+                                      }
+                                    },
+                                    onNodeOffsetChanged: (nodeId, dx, dy) {
+                                      setState(() {
+                                        for (var n in _workingNodes) {
+                                          if (n.id == nodeId) {
+                                            n.labelOffsetDx = dx;
+                                            n.labelOffsetDy = dy;
+                                            break;
+                                          }
+                                        }
+                                      });
+                                    },
+                                    showNodeLabels: _showCanvasLabels,
+                                    showLineLabels: _showCanvasLabels,
+                                    busFocusOnly:
+                                        (_currentPhase ==
+                                            ReviewPhase.busMappingReview &&
+                                        _busFocusOnly),
+                                    lineFocusOnly:
+                                        (_currentPhase ==
+                                            ReviewPhase.connectionReview &&
+                                        _lineFocusOnly),
+                                    linesOnlyMode:
+                                        (_currentPhase ==
+                                            ReviewPhase.connectionReview &&
+                                        _connectionLinesOnlyMode),
+                                    lines:
+                                        (_currentPhase ==
+                                            ReviewPhase.objectReview)
+                                        ? const []
+                                        : _workingLines,
+                                    selectedLine: _selectedLine,
+                                    visitedLineIds: _visitedConnectionLineIds,
+                                    onSelectLine: (line) {
+                                      setState(() {
+                                        if (_currentPhase ==
+                                                ReviewPhase.connectionReview &&
+                                            _selectedLine != null &&
+                                            _selectedLine!.lineId !=
+                                                line.lineId) {
+                                          _visitedConnectionLineIds.add(
+                                            _selectedLine!.lineId,
+                                          );
+                                        }
+                                        _selectedLine = line;
+                                        if (_currentPhase ==
+                                            ReviewPhase.connectionReview) {
+                                          _selectedNode = null;
+                                          _selectedTopologyIssue = null;
+                                          if (!_filteredAndSortedWorkingLines
+                                              .any(
+                                                (l) => l.lineId == line.lineId,
+                                              )) {
+                                            _connFilterStatus = 'ALL';
+                                          }
+                                        }
+                                        final index =
+                                            _filteredAndSortedWorkingLines
+                                                .indexWhere(
+                                                  (item) =>
+                                                      item.lineId ==
+                                                      line.lineId,
+                                                );
+                                        if (index >= 0) {
+                                          _linePage = index ~/ _linePageSize;
+                                        }
+                                      });
+                                    },
+                                    onLineOffsetChanged: (lineId, dx, dy) {
+                                      setState(() {
+                                        for (var l in _workingLines) {
+                                          if (l.lineId == lineId) {
+                                            l.labelOffsetDx = dx;
+                                            l.labelOffsetDy = dy;
+                                            break;
+                                          }
+                                        }
+                                      });
+                                    },
+                                    isManualAddMode: _isManualAddMode,
+                                    manualAddClass: _manualAddClass,
+                                    onManualAddComplete:
+                                        _handleManualAddComplete,
+                                    isManualAddLineMode: _isManualAddLineMode,
+                                    manualLineStartNode: _manualLineStartNode,
+                                    onManualAddLineComplete:
+                                        _handleManualAddLineComplete,
+                                    violationNodeIds: _topologyIssues
+                                        .where((i) => i['severity'] == 'error')
+                                        .expand(
+                                          (i) =>
+                                              (i['component_ids'] as List? ??
+                                                      [])
+                                                  .map((e) => e.toString()),
+                                        )
+                                        .toSet(),
+                                  );
+                                },
+                              ),
                             ),
                             // Floating HUD on Canvas: Direct Label & Focus Toggles
                             Positioned(
@@ -4447,23 +4523,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           runSpacing: 6,
           children: pageNodes.map((n) {
             final isSelected = _selectedNode?.id == n.id;
+            final isCurrentTarget = _objectReviewCurrentTarget?.id == n.id;
+            final isVisited =
+                _objectSweep.visitedObjectIds.contains(n.id) &&
+                !isCurrentTarget;
             final isSuspicious = n.reviewStatus == 'SUSPICIOUS';
             final isConfirmed = n.reviewStatus == 'CONFIRMED';
             final isRejected = n.reviewStatus == 'REJECTED';
             final classColor = _getClassColor(n.className);
 
             return GestureDetector(
-              onTap: () {
-                setState(() {
-                  _selectedNode = n;
-                  _reviewedObjectIds.add(n.id);
-                  _nodePage = currentPage;
-                });
-                if (isSuspicious && n.agentExplanation == null) {
-                  _triggerAgentReviewNode(n);
-                }
-                _announceReviewStage();
-              },
+              onTap: () => _selectReviewNode(n, listPage: currentPage),
               child: Container(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 7,
@@ -4472,14 +4542,20 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                 decoration: BoxDecoration(
                   color: isSelected
                       ? classColor.withValues(alpha: 0.22)
-                      : const Color(0xFFF8FAFC),
+                      : (isVisited
+                            ? const Color(0xFFFFFBEB)
+                            : const Color(0xFFF8FAFC)),
                   border: Border.all(
-                    color: isSelected
+                    color: isCurrentTarget
+                        ? const Color(0xFF06B6D4)
+                        : isSelected
                         ? const Color(0xFFF59E0B)
-                        : (isSuspicious
-                              ? const Color(0xFFF97316)
-                              : classColor.withValues(alpha: 0.6)),
-                    width: isSelected ? 1.8 : 1.2,
+                        : (isVisited
+                              ? const Color(0xFFF59E0B)
+                              : (isSuspicious
+                                    ? const Color(0xFFF97316)
+                                    : classColor.withValues(alpha: 0.6))),
+                    width: isCurrentTarget ? 2.2 : (isSelected ? 1.8 : 1.2),
                   ),
                   borderRadius: BorderRadius.circular(5),
                 ),
@@ -4774,35 +4850,34 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   Widget _buildSelectedNodePanel() {
     final node = _selectedNode!;
-    return ObjectInspectorView(
-      node: node,
-      isEditExpanded: _isObjectEditExpanded,
-      onMatch: () {
-        setState(() {
-          _reviewedObjectIds.add(node.id);
-          node.reviewStatus = 'CONFIRMED';
-          node.source = '${node.source}_human_confirmed';
-        });
-        if (_objSuspiciousCount == 0 && _unresolvedCandidatesCount == 0) {
-          PowerLensAIService.instance.clearFocusTargets();
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      onTap: () => _selectReviewNode(node),
+      child: ObjectInspectorView(
+        node: node,
+        isEditExpanded: _isObjectEditExpanded,
+        onMatch: () {
           setState(() {
-            _stageGateMessage = "제가 의심하는 객체는 이제 없어요. 마지막으로 전체 도면을 한번만 확인해주세요.";
+            _objectSweep.markExceptionResolved(node.id);
+            node.reviewStatus = 'CONFIRMED';
+            node.source = '${node.source}_human_confirmed';
           });
-        }
-      },
-      onEditToggle: () {
-        setState(() {
-          _isObjectEditExpanded = !_isObjectEditExpanded;
-        });
-      },
-      onClassChanged: (cls) {
-        _changeNodeClass(node, cls);
-        setState(() {
-          _isObjectEditExpanded = false;
-        });
-      },
-      onReject: () => _rejectNode(node),
-      onEditDisplayLabel: () => _editNodeDisplayLabel(node),
+          _refreshObjectReviewFocus(exceptionResolved: true);
+        },
+        onEditToggle: () {
+          setState(() {
+            _isObjectEditExpanded = !_isObjectEditExpanded;
+          });
+        },
+        onClassChanged: (cls) {
+          _changeNodeClass(node, cls);
+          setState(() {
+            _isObjectEditExpanded = false;
+          });
+        },
+        onReject: () => _rejectNode(node),
+        onEditDisplayLabel: () => _editNodeDisplayLabel(node),
+      ),
     );
   }
 
@@ -9842,10 +9917,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                           setDialogState(() {});
                                           if (_unresolvedCandidatesCount == 0) {
                                             Navigator.of(dialogCtx).pop();
-                                            PowerLensAIService.instance
-                                                .triggerHighlight(
-                                                  'object_gate',
-                                                );
                                           }
                                         },
                                         icon: const Icon(Icons.check, size: 14),
