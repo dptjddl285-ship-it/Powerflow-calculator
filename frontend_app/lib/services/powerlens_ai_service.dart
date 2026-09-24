@@ -1527,8 +1527,8 @@ class PowerLensAIService extends ChangeNotifier {
             "• 확인 필요, 교차 근거, 전기 오류가 표시된 예외만 실제 도면과 대조한 뒤 [결선 검수 완료]를 눌러주세요.";
       } else {
         reply =
-            "✨ **정상 항목 일괄 승인 안내:**\n"
-            "• 우측 패널의 일괄 승인 버튼을 누르면 현재 단계의 정상 항목들을 한 번에 확정하고 다음 단계로 진행하실 수 있습니다.";
+            "✨ **현재 단계 안내:**\n"
+            "• 이 단계에는 일괄 승인 동작이 없습니다. 화면의 현재 단계 Gate와 입력 절차에 따라 진행해주세요.";
       }
     } else if (_containsAny(normalizedQuery, const [
       '다음에뭐',

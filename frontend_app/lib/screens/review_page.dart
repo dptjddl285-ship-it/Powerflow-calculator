@@ -4478,7 +4478,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   ),
                 ),
                 child: Text(
-                  '핵심 검토 $completed/$total',
+                  '예외 확인 $completed/$total',
                   style: TextStyle(
                     color: done
                         ? const Color(0xFF15803D)

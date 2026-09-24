@@ -267,6 +267,16 @@ class AgentCoreV2Test(unittest.TestCase):
                 self.assertEqual(result["action_mode"], "EXECUTE", result)
                 self.assertEqual(result["action_id"], expected_action, result)
 
+        guidance = self.local_prov.answer_chat(
+            message="다음에 무엇을 해야 해?",
+            document_id="doc_test",
+            stage="OBJECT_REVIEW",
+            working_nodes=[{"id": "bus_1", "review_status": "SUSPICIOUS"}],
+            missing_candidates=[{"status": "OPEN"}],
+        )
+        self.assertEqual(guidance["action_mode"], "NONE", guidance)
+        self.assertIsNone(guidance["action_id"], guidance)
+
     def test_05_fabricated_target_filtering(self):
         """TEST 5: Fabricated target prevention (fabricated targets dropped)."""
         raw = {

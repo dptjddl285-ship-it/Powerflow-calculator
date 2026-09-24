@@ -917,7 +917,7 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
         stage_completion_terms = completion_terms_by_stage.get(stage_upper)
         if stage_completion_terms is not None and (
             any(term in msg_norm for term in stage_completion_terms)
-            or any(term in msg_norm for term in ["다봤", "다음", "다음단계", "검수완료해"])
+            or msg_norm in {"다봤", "다봤어", "다음", "다음단계", "검수완료해"}
         ):
             res = {
                 "reply_ko": "현재 검수 단계 완료 버튼과 같은 Gate 검증을 요청합니다.",
