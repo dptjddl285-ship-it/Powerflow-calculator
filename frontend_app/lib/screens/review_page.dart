@@ -7908,12 +7908,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         'bus_number': node.busNumber,
         'connected_bus_number': node.connectedBusNumber,
         'parentBusId': node.connectedBusId,
+        'connected_bus_id': node.connectedBusId,
         'is_slack': isSlack,
         'isSlack': isSlack,
       });
     }
 
     for (var line in lines) {
+      final isLead = line.traceMethod == 'equipment_lead' ||
+          line.evidence['is_equipment_lead'] == true ||
+          line.evidence['is_transformer_lead'] == true ||
+          line.evidence['electricalBranch'] == false;
       collected.add({
         'id': line.lineId,
         'type': 'line',
@@ -7926,6 +7931,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             : null,
         'label': line.displayLabel ?? '',
         'endpoints_display': line.endpointsDisplay ?? '',
+        'is_equipment_lead': isLead,
+        'isEquipmentLead': isLead,
+        'electricalBranch': !isLead,
+        'evidence': line.evidence,
       });
     }
 
@@ -7992,10 +8001,117 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         closeIconColor: Colors.white,
       ),
     );
+
+    if (!matched && mismatchReport != null) {
+      _showReviewMismatchDialog();
+    }
+  }
+
+  Future<void> _applyEquipmentProposal(Map<String, dynamic> proposal) async {
+    final busNum = (proposal['bus_number'] as num?)?.toInt();
+    if (busNum == null) return;
+    final category = proposal['category']?.toString() ?? 'generator';
+    final isGen = category == 'generator';
+
+    ReviewNodeItem? parentBus;
+    for (var n in _workingNodes) {
+      if (n.className.toLowerCase() == 'bus' &&
+          (n.busNumber == busNum || n.displayNumber == busNum)) {
+        parentBus = n;
+        break;
+      }
+    }
+    if (parentBus == null && _verifiedSld != null) {
+      for (var n in _verifiedSld!.nodes) {
+        if (n.className.toLowerCase() == 'bus' &&
+            (n.busNumber == busNum || n.displayNumber == busNum)) {
+          parentBus = n;
+          break;
+        }
+      }
+    }
+    if (parentBus == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text("연결할 Bus $busNum 모선을 찾지 못했습니다."),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    final targetBusId = parentBus.id;
+    final cx = parentBus.bbox[0];
+    final cy = parentBus.bbox[1];
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final equipId = "${category}_supp_${busNum}_$timestamp";
+
+    final excelData = proposal['excel_data'] is Map
+        ? Map<String, dynamic>.from(proposal['excel_data'] as Map)
+        : <String, dynamic>{};
+    final displayLabel = excelData['label']?.toString() ??
+        (isGen ? "G_$busNum" : "Load_$busNum");
+
+    final newNode = ReviewNodeItem(
+      id: equipId,
+      className: category,
+      bbox: [cx + 20.0, cy - 60.0, 40.0, 40.0],
+      confidence: 1.0,
+      source: 'excel_repair_proposal',
+      reviewStatus: 'CONFIRMED',
+      busNumber: busNum,
+      connectedBusNumber: busNum,
+      connectedBusId: targetBusId,
+      displayLabel: displayLabel,
+      metadata: excelData,
+    );
+
+    final leadLineId = "lead_${equipId}_to_$targetBusId";
+    final newLine = ReviewLineItem(
+      lineId: leadLineId,
+      connectedTo: [equipId, targetBusId],
+      path: [
+        [cx + 20.0, cy - 40.0],
+        [cx, cy],
+      ],
+      traceMethod: 'equipment_lead',
+      reviewStatus: 'CONFIRMED',
+      source: 'excel_repair_proposal',
+      displayLabel: 'Lead',
+      endpointsDisplay: "$displayLabel ↔ Bus $busNum",
+      evidence: {
+        'is_equipment_lead': true,
+        'electricalBranch': false,
+        'repair_proposal': true,
+      },
+    );
+
+    setState(() {
+      _workingNodes.add(newNode);
+      _workingLines.add(newLine);
+      if (_verifiedSld != null) {
+        _verifiedSld = VerifiedSLD(
+          schemaVersion: _verifiedSld!.schemaVersion,
+          documentId: _verifiedSld!.documentId,
+          status: _verifiedSld!.status,
+          image: _verifiedSld!.image,
+          nodes: [..._verifiedSld!.nodes, newNode],
+          lines: [..._verifiedSld!.lines, newLine],
+          verification: _verifiedSld!.verification,
+        );
+      }
+    });
+
+    if (_importedExcelData != null) {
+      await _validateAndSetExcelData(_importedExcelData!);
+    }
   }
 
   void _showReviewMismatchDialog() {
     if (_excelMismatchReport == null || _importedExcelData == null) return;
+    final proposals = List<Map<String, dynamic>>.from(
+      _excelMismatchReport!['repair_proposals'] as List? ?? const [],
+    );
     ScaffoldMessenger.of(context).clearSnackBars();
     showDialog(
       context: context,
@@ -8004,6 +8120,21 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         mismatchReport: _excelMismatchReport!,
         excelData: _importedExcelData!,
         elements: _collectCurrentReviewElements(),
+        repairProposals: proposals,
+        onApplyProposal: (proposal) async {
+          Navigator.of(ctx).pop();
+          await _applyEquipmentProposal(proposal);
+        },
+        onRejectProposal: (proposal) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                "${proposal['category'] == 'generator' ? '발전기' : '부하'} 보완 제안이 거부되었습니다.",
+              ),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        },
         autoRecoverLabel: "불일치 확인 후 돌아가기",
         onResetToStart: () {
           Navigator.of(ctx).pop();

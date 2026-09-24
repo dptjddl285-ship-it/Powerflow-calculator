@@ -1685,10 +1685,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 --------------------------------------------------------------------------------
 cross_file
-file_selector_linux
 file_selector_macos
 file_selector_platform_interface
-file_selector_windows
 flutter_plugin_android_lifecycle
 image_picker_for_web
 image_picker_macos
@@ -5562,8 +5560,6 @@ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 --------------------------------------------------------------------------------
 flutter_lints
-image_picker_linux
-image_picker_windows
 plugin_platform_interface
 
 Copyright 2013 The Flutter Authors. All rights reserved.

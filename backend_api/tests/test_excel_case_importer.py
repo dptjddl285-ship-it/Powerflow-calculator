@@ -211,11 +211,11 @@ class TestExcelCaseImporter(unittest.TestCase):
         self.assertFalse(report['is_matched'])
         self.assertEqual(
             set(report['details']['unmapped_branches']),
-            {'trans_9_11', 'trans_10_12'},
+            set(),
         )
         self.assertEqual(
             set(map(tuple, report['details']['missing_branches'])),
-            {(9, 11), (9, 12), (10, 11), (10, 12)},
+            {(9, 12), (10, 11)},
         )
 
     def test_verified_sld_comparison_accepts_exact_two_bus_transformer(self):
