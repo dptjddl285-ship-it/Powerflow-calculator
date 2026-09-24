@@ -2344,7 +2344,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
       return;
     }
 
-    final url = Uri.parse('http://127.0.0.1:8000/run_simulation');
+    final url = Uri.parse('${ReviewApiService.baseUrl}/run_simulation');
     final payload = jsonEncode({
       'elements': elements.map((e) => e.toJson()).toList(),
       's_base_mva': powerFlowSBase,
@@ -3176,7 +3176,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         const SnackBar(content: Text("📊 엑셀 계통 데이터를 분석하고 있습니다...")),
       );
 
-      var uri = Uri.parse('http://127.0.0.1:8000/upload_excel');
+      var uri = Uri.parse('${ReviewApiService.baseUrl}/upload_excel');
       var request = http.MultipartRequest('POST', uri);
       request.files.add(
         http.MultipartFile.fromBytes('file', bytes, filename: file.name),
@@ -3374,7 +3374,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
 
     // 1. Authoritative Backend Binding: Call backend /apply_excel_to_elements
     try {
-      final uri = Uri.parse('http://127.0.0.1:8000/apply_excel_to_elements');
+      final uri = Uri.parse(
+        '${ReviewApiService.baseUrl}/apply_excel_to_elements',
+      );
       final response = await http.post(
         uri,
         headers: {'Content-Type': 'application/json'},
@@ -4086,7 +4088,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
 
     try {
       final response = await http.post(
-        Uri.parse('http://127.0.0.1:8000/apply_excel_to_elements'),
+        Uri.parse('${ReviewApiService.baseUrl}/apply_excel_to_elements'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({
           'elements': mapping.elements
@@ -4468,13 +4470,12 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                             coachTarget,
                             isMobile: false,
                           );
-                          final groupRect =
-                              PowerLensCompanionLayout.groupRect(
-                                viewport: viewport,
-                                robotCenterAlignment: alignment,
-                                panelOpen: _isAiPanelOpen,
-                                panelBounds: panelBounds,
-                              );
+                          final groupRect = PowerLensCompanionLayout.groupRect(
+                            viewport: viewport,
+                            robotCenterAlignment: alignment,
+                            panelOpen: _isAiPanelOpen,
+                            panelBounds: panelBounds,
+                          );
                           return Stack(
                             clipBehavior: Clip.none,
                             children: [
@@ -4500,11 +4501,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                                         child: PowerLensAIPanel(
                                           assistantContext:
                                               _buildAssistantContext(),
-                                          onClose: () =>
-                                              _setLensyPanelOpen(
-                                                false,
-                                                viewport,
-                                              ),
+                                          onClose: () => _setLensyPanelOpen(
+                                            false,
+                                            viewport,
+                                          ),
                                           isMobile: false,
                                           onCompanionDragDelta: (delta) =>
                                               _handleLensyDrag(
@@ -4516,8 +4516,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                                               _handleLensyDragStart,
                                           onCompanionDragEnd:
                                               _handleLensyDragEnd,
-                                          onCompanionReset:
-                                              _resetLensyPosition,
+                                          onCompanionReset: _resetLensyPosition,
                                           isCompanionMoved:
                                               _manualLensyAlignment != null,
                                           desktopMaxSize: panelBounds,
@@ -4815,8 +4814,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
   }
 
   void _handleLensyDrag(Offset delta, String target, {required bool isMobile}) {
-    final size = _canvasStackKey.currentContext?.size ??
-        MediaQuery.of(context).size;
+    final size =
+        _canvasStackKey.currentContext?.size ?? MediaQuery.of(context).size;
     final current = _effectiveLensyAlignment(target, isMobile: isMobile);
     double clampAlignment(double value) => value.clamp(-0.94, 0.94).toDouble();
     if (!isMobile) {
@@ -4828,15 +4827,14 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         panelOpen: _isAiPanelOpen,
         panelBounds: panelBounds,
       );
-      final nextCenter = PowerLensCompanionLayout.robotCenter(currentRect) +
-          delta;
+      final nextCenter =
+          PowerLensCompanionLayout.robotCenter(currentRect) + delta;
       final proposed = PowerLensCompanionLayout.groupRect(
         viewport: viewport,
-        robotCenterAlignment:
-            PowerLensCompanionLayout.alignmentForRobotCenter(
-              nextCenter,
-              viewport,
-            ),
+        robotCenterAlignment: PowerLensCompanionLayout.alignmentForRobotCenter(
+          nextCenter,
+          viewport,
+        ),
         panelOpen: _isAiPanelOpen,
         panelBounds: panelBounds,
       );
@@ -4891,8 +4889,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
     );
     final center = PowerLensCompanionLayout.robotCenter(proposed);
     setState(() {
-      _manualLensyAlignment =
-          PowerLensCompanionLayout.alignmentForRobotCenter(center, viewport);
+      _manualLensyAlignment = PowerLensCompanionLayout.alignmentForRobotCenter(
+        center,
+        viewport,
+      );
       _isAiPanelOpen = isOpen;
     });
   }

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import '../services/review_api_service.dart';
 
 // ==========================================
 // EXCEL MISMATCH ALERT & AGENT DIAGNOSTIC DIALOG
@@ -41,7 +42,9 @@ class _ExcelMismatchDialogState extends State<ExcelMismatchDialog> {
     });
 
     try {
-      final uri = Uri.parse('http://127.0.0.1:8000/diagnose_excel_mismatch');
+      final uri = Uri.parse(
+        '${ReviewApiService.baseUrl}/diagnose_excel_mismatch',
+      );
       final serializedElements = widget.elements.map((e) {
         if (e is Map) return e;
         try {
@@ -98,7 +101,9 @@ class _ExcelMismatchDialogState extends State<ExcelMismatchDialog> {
         color: const Color(0xFF0F172A),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(
-          color: match ? Colors.green.withValues(alpha: 0.5) : Colors.redAccent.withValues(alpha: 0.6),
+          color: match
+              ? Colors.green.withValues(alpha: 0.5)
+              : Colors.redAccent.withValues(alpha: 0.6),
           width: 1.5,
         ),
       ),
@@ -115,7 +120,11 @@ class _ExcelMismatchDialogState extends State<ExcelMismatchDialog> {
               const SizedBox(width: 4),
               Text(
                 title,
-                style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ],
           ),
@@ -135,11 +144,13 @@ class _ExcelMismatchDialogState extends State<ExcelMismatchDialog> {
 
   @override
   Widget build(BuildContext context) {
-    final stats = (widget.mismatchReport['stats'] as Map<String, dynamic>?) ?? {};
+    final stats =
+        (widget.mismatchReport['stats'] as Map<String, dynamic>?) ?? {};
     final excelStats = (stats['excel'] as Map<String, dynamic>?) ?? {};
     final diagStats = (stats['diagram'] as Map<String, dynamic>?) ?? {};
 
-    final discrepancies = (widget.mismatchReport['discrepancies'] as List?) ?? [];
+    final discrepancies =
+        (widget.mismatchReport['discrepancies'] as List?) ?? [];
 
     return Dialog(
       backgroundColor: const Color(0xFF1E293B),
@@ -161,7 +172,11 @@ class _ExcelMismatchDialogState extends State<ExcelMismatchDialog> {
                       color: Colors.redAccent.withValues(alpha: 0.2),
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(Icons.warning_amber_rounded, color: Colors.redAccent, size: 28),
+                    child: const Icon(
+                      Icons.warning_amber_rounded,
+                      color: Colors.redAccent,
+                      size: 28,
+                    ),
                   ),
                   const SizedBox(width: 14),
                   const Expanded(
@@ -170,7 +185,11 @@ class _ExcelMismatchDialogState extends State<ExcelMismatchDialog> {
                       children: [
                         Text(
                           "⚠️ 도면과 엑셀 데이터가 일치하지 않습니다!",
-                          style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                         SizedBox(height: 3),
                         Text(
@@ -225,7 +244,11 @@ class _ExcelMismatchDialogState extends State<ExcelMismatchDialog> {
               // Discrepancy List
               const Text(
                 "📋 불일치 상세 내역",
-                style: TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               const SizedBox(height: 6),
               Flexible(
@@ -239,12 +262,16 @@ class _ExcelMismatchDialogState extends State<ExcelMismatchDialog> {
                   ),
                   child: discrepancies.isEmpty
                       ? const Center(
-                          child: Text("발견된 세부 불일치 항목이 없습니다.", style: TextStyle(color: Colors.white54)),
+                          child: Text(
+                            "발견된 세부 불일치 항목이 없습니다.",
+                            style: TextStyle(color: Colors.white54),
+                          ),
                         )
                       : ListView.separated(
                           shrinkWrap: true,
                           itemCount: discrepancies.length,
-                          separatorBuilder: (c, i) => const Divider(color: Colors.white10, height: 6),
+                          separatorBuilder: (c, i) =>
+                              const Divider(color: Colors.white10, height: 6),
                           itemBuilder: (ctx, idx) {
                             final item = discrepancies[idx];
                             final type = item['type']?.toString() ?? '';
@@ -254,18 +281,31 @@ class _ExcelMismatchDialogState extends State<ExcelMismatchDialog> {
                             return Row(
                               children: [
                                 Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 5,
+                                    vertical: 2,
+                                  ),
                                   decoration: BoxDecoration(
-                                    color: isMissing ? Colors.red.withValues(alpha: 0.2) : Colors.orange.withValues(alpha: 0.2),
+                                    color: isMissing
+                                        ? Colors.red.withValues(alpha: 0.2)
+                                        : Colors.orange.withValues(alpha: 0.2),
                                     borderRadius: BorderRadius.circular(4),
                                     border: Border.all(
-                                      color: isMissing ? Colors.redAccent.withValues(alpha: 0.4) : Colors.orangeAccent.withValues(alpha: 0.4),
+                                      color: isMissing
+                                          ? Colors.redAccent.withValues(
+                                              alpha: 0.4,
+                                            )
+                                          : Colors.orangeAccent.withValues(
+                                              alpha: 0.4,
+                                            ),
                                     ),
                                   ),
                                   child: Text(
                                     isMissing ? "누락" : "초과",
                                     style: TextStyle(
-                                      color: isMissing ? Colors.redAccent : Colors.orangeAccent,
+                                      color: isMissing
+                                          ? Colors.redAccent
+                                          : Colors.orangeAccent,
                                       fontSize: 10,
                                       fontWeight: FontWeight.bold,
                                     ),
@@ -275,7 +315,10 @@ class _ExcelMismatchDialogState extends State<ExcelMismatchDialog> {
                                 Expanded(
                                   child: Text(
                                     msg,
-                                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                                    style: const TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 12,
+                                    ),
                                     overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
@@ -295,24 +338,44 @@ class _ExcelMismatchDialogState extends State<ExcelMismatchDialog> {
                       ? const SizedBox(
                           width: 16,
                           height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
                         )
-                      : const Icon(Icons.auto_awesome, color: Colors.amberAccent, size: 18),
+                      : const Icon(
+                          Icons.auto_awesome,
+                          color: Colors.amberAccent,
+                          size: 18,
+                        ),
                   label: Text(
-                    _isLoadingDiagnosis ? "AI 에이전트가 불일치 원인을 분석 중입니다..." : "🤖 AI 에이전트 원인 진단 및 해결 가이드 요청",
-                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                    _isLoadingDiagnosis
+                        ? "AI 에이전트가 불일치 원인을 분석 중입니다..."
+                        : "🤖 AI 에이전트 원인 진단 및 해결 가이드 요청",
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
                   ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF4F46E5),
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 11),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
                   ),
                 ),
                 if (_diagError != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
-                    child: Text(_diagError!, style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+                    child: Text(
+                      _diagError!,
+                      style: const TextStyle(
+                        color: Colors.redAccent,
+                        fontSize: 12,
+                      ),
+                    ),
                   ),
               ] else ...[
                 Flexible(
@@ -322,7 +385,10 @@ class _ExcelMismatchDialogState extends State<ExcelMismatchDialog> {
                     decoration: BoxDecoration(
                       color: const Color(0xFF1E1B4B).withValues(alpha: 0.8),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFF6366F1), width: 1.2),
+                      border: Border.all(
+                        color: const Color(0xFF6366F1),
+                        width: 1.2,
+                      ),
                     ),
                     child: SingleChildScrollView(
                       child: Column(
@@ -330,18 +396,30 @@ class _ExcelMismatchDialogState extends State<ExcelMismatchDialog> {
                         children: [
                           Row(
                             children: [
-                              const Icon(Icons.auto_awesome, color: Colors.amberAccent, size: 15),
+                              const Icon(
+                                Icons.auto_awesome,
+                                color: Colors.amberAccent,
+                                size: 15,
+                              ),
                               const SizedBox(width: 5),
                               Text(
                                 "AI 에이전트 진단 리포트 (${_agentDiagnosis!['agent_provider'] ?? 'AI'})",
-                                style: const TextStyle(color: Colors.amberAccent, fontWeight: FontWeight.bold, fontSize: 12),
+                                style: const TextStyle(
+                                  color: Colors.amberAccent,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 12,
+                                ),
                               ),
                             ],
                           ),
                           const SizedBox(height: 6),
                           SelectableText(
                             _agentDiagnosis!['advice_ko']?.toString() ?? '',
-                            style: const TextStyle(color: Colors.white, fontSize: 12, height: 1.4),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              height: 1.4,
+                            ),
                           ),
                         ],
                       ),
@@ -357,15 +435,28 @@ class _ExcelMismatchDialogState extends State<ExcelMismatchDialog> {
                   if (widget.onResetToStart != null) ...[
                     OutlinedButton.icon(
                       onPressed: widget.onResetToStart,
-                      icon: const Icon(Icons.restart_alt, size: 16, color: Colors.orangeAccent),
+                      icon: const Icon(
+                        Icons.restart_alt,
+                        size: 16,
+                        color: Colors.orangeAccent,
+                      ),
                       label: const Text(
                         "다시 검수 처음으로 돌아가기",
-                        style: TextStyle(color: Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                          color: Colors.orangeAccent,
+                          fontSize: 12,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                       style: OutlinedButton.styleFrom(
                         side: const BorderSide(color: Colors.orangeAccent),
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
                       ),
                     ),
                   ],
@@ -375,7 +466,10 @@ class _ExcelMismatchDialogState extends State<ExcelMismatchDialog> {
                       Navigator.of(context).pop();
                       widget.onCancel?.call();
                     },
-                    child: const Text("닫기 (도면 직접 수정)", style: TextStyle(color: Colors.white60)),
+                    child: const Text(
+                      "닫기 (도면 직접 수정)",
+                      style: TextStyle(color: Colors.white60),
+                    ),
                   ),
                   const SizedBox(width: 8),
                   ElevatedButton.icon(
@@ -385,8 +479,13 @@ class _ExcelMismatchDialogState extends State<ExcelMismatchDialog> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.teal.shade700,
                       foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
                     ),
                   ),
                 ],
