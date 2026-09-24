@@ -8014,15 +8014,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     final isGen = category == 'generator';
 
     ReviewNodeItem? parentBus;
-    for (var n in _workingNodes) {
-      if (n.className.toLowerCase() == 'bus' &&
-          (n.busNumber == busNum || n.displayNumber == busNum)) {
-        parentBus = n;
-        break;
+    if (_verifiedSld != null) {
+      for (var n in _verifiedSld!.nodes) {
+        if (n.className.toLowerCase() == 'bus' &&
+            (n.busNumber == busNum || n.displayNumber == busNum)) {
+          parentBus = n;
+          break;
+        }
       }
     }
-    if (parentBus == null && _verifiedSld != null) {
-      for (var n in _verifiedSld!.nodes) {
+    if (parentBus == null) {
+      for (var n in _workingNodes) {
         if (n.className.toLowerCase() == 'bus' &&
             (n.busNumber == busNum || n.displayNumber == busNum)) {
           parentBus = n;

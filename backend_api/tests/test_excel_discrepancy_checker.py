@@ -70,7 +70,7 @@ class TestExcelDiscrepancyChecker(unittest.TestCase):
 
 
     def test_synchronous_condenser_load_equivalence(self):
-        """Load does not satisfy generator requirement; apply_to_elements auto-supplements missing generator."""
+        """Load does not satisfy generator requirement; the importer returns a proposal without mutation."""
         elements = []
         for k in self.excel_data["buses"].keys():
             elements.append({"id": f"bus_{k}", "type": "bus", "bus_number": int(k), "label": f"{k}"})
@@ -86,11 +86,15 @@ class TestExcelDiscrepancyChecker(unittest.TestCase):
         raw_report = self.importer.compare_elements_with_excel(elements, self.excel_data)
         self.assertIn(14, raw_report["details"]["missing_generators"])
 
-        # After apply_to_elements: Bus 14 generator is auto-supplemented
+        # After apply_to_elements: Bus 14 remains missing and receives a user-approval proposal.
         updated_elements, summary = self.importer.apply_to_elements(elements, self.excel_data)
-        self.assertTrue(any(e.get('id') == 'gen_auto_14' for e in updated_elements))
+        self.assertFalse(any(e.get('id') == 'gen_auto_14' for e in updated_elements))
         report = summary["mismatch_report"]
-        self.assertNotIn(14, report["details"]["missing_generators"])
+        self.assertIn(14, report["details"]["missing_generators"])
+        self.assertTrue(any(
+            proposal.get("category") == "generator" and proposal.get("bus_number") == 14
+            for proposal in summary.get("repair_proposals", [])
+        ))
 
     def test_transformer_multibus_connections(self):
         """Transformers connecting 9, 10, 11, 12 should resolve 9-12 and 10-11."""

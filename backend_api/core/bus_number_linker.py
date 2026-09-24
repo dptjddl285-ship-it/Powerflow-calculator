@@ -52,9 +52,20 @@ def link_and_validate_bus_numbers(
         return nodes, {'error': 'Image decode failed'}
     h_img, w_img = img.shape[:2]
     
+    active_model = model_name or get_gemini_model_name()
+    fallback_m = get_gemini_fallback_model_name()
+
     bus_nodes = [n for n in nodes if (n.get('class') or n.get('class_name') or '').lower() == 'bus']
     if not bus_nodes:
-        return nodes, {'total_buses': 0, 'verified_count': 0, 'uncertain_count': 0}
+        return nodes, {
+            'total_buses': 0,
+            'verified_count': 0,
+            'uncertain_count': 0,
+            'model_used': None,
+            'fallback_used': False,
+            'primary_model': active_model,
+            'fallback_model': fallback_m,
+        }
         
     if not api_key:
         for b in bus_nodes:
@@ -68,7 +79,11 @@ def link_and_validate_bus_numbers(
             'duplicates': [],
             'missing_range_numbers': [],
             'verified_rate_pct': 0.0,
-            'warning': 'No API Key'
+            'warning': 'No API Key',
+            'model_used': None,
+            'fallback_used': False,
+            'primary_model': active_model,
+            'fallback_model': fallback_m,
         }
 
     # 1. Generate High-Precision Grid Crop Collage of each bus bar
@@ -127,48 +142,69 @@ def link_and_validate_bus_numbers(
     
     active_model = model_name or get_gemini_model_name()
     fallback_m = get_gemini_fallback_model_name()
-    candidate_models = [active_model, fallback_m]
+    candidate_models = [active_model, "gemini-3.6-flash", "gemini-3.5-flash", fallback_m]
     # Deduplicate preserving order
     seen_models = set()
     models_to_try = [m for m in candidate_models if not (m in seen_models or seen_models.add(m))]
 
     candidates = {}
     last_err = None
+    model_used = None
+    fallback_used = False
 
     for m_name in models_to_try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={api_key}"
         payload = {
             'contents': [{'parts': [{'text': prompt}, {'inlineData': {'mimeType': 'image/jpeg', 'data': b64_marked}}]}],
-            'generationConfig': {'responseMimeType': 'application/json', 'maxOutputTokens': 800}
+            'generationConfig': {'maxOutputTokens': 800}
         }
-        try:
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(payload).encode('utf-8'),
-                headers={'Content-Type': 'application/json'},
-                method='POST'
-            )
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-                txt = data['candidates'][0]['content']['parts'][0]['text']
-                res_json = json.loads(txt)
-                if isinstance(res_json, dict):
-                    for k, v in res_json.items():
-                        if isinstance(v, int):
-                            candidates[k] = v
-                        elif isinstance(v, dict):
-                            candidates[k] = v.get('bus_number')
-                        elif isinstance(v, str) and v.isdigit():
-                            candidates[k] = int(v)
-                elif isinstance(res_json, list):
-                    for item in res_json:
-                        if isinstance(item, dict) and item.get('id'):
-                            candidates[item['id']] = item.get('bus_number')
-                last_err = None
-                break
-        except Exception as e:
-            last_err = e
-            continue
+        success = False
+        for attempt in range(2):
+            try:
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode('utf-8'),
+                    headers={'Content-Type': 'application/json'},
+                    method='POST'
+                )
+                with urllib.request.urlopen(req, timeout=45) as resp:
+                    data = json.loads(resp.read().decode('utf-8'))
+                    txt = data['candidates'][0]['content']['parts'][0]['text']
+                    import re
+                    match = re.search(r'\{.*\}', txt, re.DOTALL)
+                    res_json = json.loads(match.group(0)) if match else json.loads(txt)
+                    if isinstance(res_json, dict):
+                        for k, v in res_json.items():
+                            if isinstance(v, int):
+                                candidates[k] = v
+                            elif isinstance(v, dict):
+                                candidates[k] = v.get('bus_number')
+                            elif isinstance(v, str) and v.isdigit():
+                                candidates[k] = int(v)
+                    elif isinstance(res_json, list):
+                        for item in res_json:
+                            if isinstance(item, dict) and item.get('id'):
+                                candidates[item['id']] = item.get('bus_number')
+                    model_used = m_name
+                    fallback_used = (m_name != active_model)
+                    last_err = None
+                    print(f"[BusLinker] Successfully recognized bus numbers using {m_name} (fallback={fallback_used})")
+                    success = True
+                    break
+            except urllib.error.HTTPError as e:
+                last_err = e
+                print(f"[BusLinker] Model {m_name} attempt {attempt+1} failed: {e}")
+                if e.code == 429:
+                    break
+                if attempt == 0:
+                    time.sleep(2.0)
+            except Exception as e:
+                last_err = e
+                print(f"[BusLinker] Model {m_name} attempt {attempt+1} failed: {e}")
+                if attempt == 0:
+                    time.sleep(2.0)
+        if success:
+            break
             
     if last_err is not None:
         print(f'[BusLinker Error] {last_err}')
@@ -183,6 +219,10 @@ def link_and_validate_bus_numbers(
             'duplicates': [],
             'missing_range_numbers': [],
             'verified_rate_pct': 0.0,
+            'model_used': None,
+            'fallback_used': False,
+            'primary_model': active_model,
+            'fallback_model': fallback_m,
             'error': str(last_err)
         }
 
@@ -250,7 +290,11 @@ def link_and_validate_bus_numbers(
         'uncertain_count': uncertain_count,
         'duplicates': duplicates,
         'missing_range_numbers': missing_range_numbers,
-        'verified_rate_pct': round((verified_count / len(bus_nodes)) * 100, 1) if bus_nodes else 0.0
+        'verified_rate_pct': round((verified_count / len(bus_nodes)) * 100, 1) if bus_nodes else 0.0,
+        'model_used': model_used,
+        'fallback_used': fallback_used,
+        'primary_model': active_model,
+        'fallback_model': fallback_m,
     }
     return nodes, report
 

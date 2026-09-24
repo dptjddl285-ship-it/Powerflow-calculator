@@ -469,6 +469,10 @@ async def review_link_bus_numbers(request: LinkBusNumbersRequest):
             "document_id": request.document_id,
             "nodes": updated_nodes,
             "bus_number_report": bus_report,
+            "model_used": bus_report.get("model_used"),
+            "fallback_used": bus_report.get("fallback_used", False),
+            "primary_model": bus_report.get("primary_model"),
+            "fallback_model": bus_report.get("fallback_model"),
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}

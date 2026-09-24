@@ -111,9 +111,22 @@ class VerifiedSldCanvasMapper {
       final id = node['id'].toString();
       final className = node['class'].toString();
       final bbox = (node['bbox'] as List).cast<num>();
-      final connectedBusId = node['connected_bus_id']?.toString();
+      var connectedBusId = node['connected_bus_id']?.toString();
       final connectedBusNumber = _readInt(node['connected_bus_number']);
       final busNumber = _readInt(node['bus_number']);
+      if (connectedBusId != null &&
+          (!nodeIds.contains(connectedBusId) ||
+              nodeTypes[connectedBusId] != Tool.bus)) {
+        final busNum = connectedBusNumber ?? busNumber;
+        if (busNum != null) {
+          for (final entry in busNumbersById.entries) {
+            if (entry.value == busNum) {
+              connectedBusId = entry.key;
+              break;
+            }
+          }
+        }
+      }
       if (connectedBusId != null &&
           (!nodeIds.contains(connectedBusId) ||
               nodeTypes[connectedBusId] != Tool.bus)) {

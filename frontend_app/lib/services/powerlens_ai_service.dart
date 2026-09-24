@@ -46,7 +46,7 @@ class PowerLensAIService extends ChangeNotifier {
 
   static String baseUrl = const String.fromEnvironment(
     'POWERLENS_API_BASE_URL',
-    defaultValue: 'http://127.0.0.1:8001',
+    defaultValue: 'http://127.0.0.1:8000',
   );
 
   final List<PowerLensAIMessageItem> _messages = [];

@@ -12,7 +12,7 @@ load_env()
 
 DEFAULT_GEMINI_PRIMARY_MODEL = "gemini-3.8-flash"
 DEFAULT_GEMINI_MODEL = DEFAULT_GEMINI_PRIMARY_MODEL
-DEFAULT_GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
+DEFAULT_GEMINI_FALLBACK_MODEL = "gemini-3.6-flash"
 
 
 def get_gemini_model_name() -> str:
@@ -22,6 +22,6 @@ def get_gemini_model_name() -> str:
 
 
 def get_gemini_fallback_model_name() -> str:
-    """Return the configured fallback Gemini model name (default: gemini-3.5-flash-lite)."""
+    """Return the configured fallback Gemini model name (default: gemini-3.6-flash)."""
     val = (os.environ.get("GEMINI_FALLBACK_MODEL") or DEFAULT_GEMINI_FALLBACK_MODEL).strip()
     return val if val else DEFAULT_GEMINI_FALLBACK_MODEL

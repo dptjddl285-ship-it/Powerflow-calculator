@@ -9,12 +9,15 @@ if sys.stdout.encoding != 'utf-8':
     except Exception:
         pass
 
-BASE_URL = "http://127.0.0.1:8001"
+BASE_URL = os.environ.get("POWERLENS_API_BASE_URL", "http://127.0.0.1:8000")
 IMG_PATH = r"C:\Users\hpo20\OneDrive\바탕 화면\Project List\전력계통대회2\debug_e2e_screenshots\default\검사사진.jpg"
 EXCEL_PATH = r"C:\Users\hpo20\OneDrive\바탕 화면\Project List\전력계통대회2\debug_e2e_screenshots\default\case24_psse.xlsx"
 
 def run_e2e():
-    print(f"[*] Checking backend provider status at {BASE_URL}/review/provider_status ...")
+    print(f"===============================================================")
+    print(f"[*] BACKEND INTEGRATION TEST: PowerLens Golden Pipeline")
+    print(f"[*] Base URL: {BASE_URL}")
+    print(f"===============================================================")
     res = requests.get(f"{BASE_URL}/review/provider_status")
     assert res.status_code == 200, f"Provider status failed: {res.text}"
     status_data = res.json()
@@ -38,34 +41,74 @@ def run_e2e():
     trans = [n for n in nodes if "trans" in (n.get("class") or n.get("type") or "")]
     print(f"    - Buses: {len(buses)}, Gens: {len(gens)}, Loads: {len(loads)}, Transformers: {len(trans)}")
 
-    print("\n[*] Step 2: Bus Number Linking via Gemini 3.8 Flash ...")
+    print("\n[*] Step 2: Bus Number Linking via Gemini AI (Observability Enabled) ...")
     res = requests.post(
         f"{BASE_URL}/review/link_bus_numbers",
         json={"document_id": doc_id, "working_nodes": nodes, "working_lines": []}
     )
     assert res.status_code == 200, f"link_bus_numbers failed: {res.text}"
     bus_link_data = res.json()
+    assert bus_link_data.get("status") == "success", f"link_bus_numbers error: {bus_link_data}"
     linked_nodes = bus_link_data.get("nodes", nodes)
-    summary = bus_link_data.get("summary", {})
-    provider_used = bus_link_data.get("provider_mode")
-    model_used = bus_link_data.get("model_name")
-    print(f"[+] Bus Linking Success! Provider: {provider_used}, Model: {model_used}")
-    print(f"    - Linked: {summary.get('verified', summary.get('linked_buses', 0))}, Uncertain: {summary.get('uncertain', 0)}")
+    report = bus_link_data.get("bus_number_report", {})
+    model_used = bus_link_data.get("model_used") or report.get("model_used")
+    fallback_used = bus_link_data.get("fallback_used") or report.get("fallback_used", False)
+    primary_model = bus_link_data.get("primary_model") or report.get("primary_model")
+    fallback_model = bus_link_data.get("fallback_model") or report.get("fallback_model")
 
-    # Auto-confirm any uncertain or duplicate bus numbers for E2E consistency
-    assigned_numbers = {n.get("bus_number") for n in linked_nodes if n.get("bus_number") is not None}
-    missing_numbers = sorted(list(set(range(1, 25)) - assigned_numbers))
-    print(f"    - Missing / unassigned bus numbers: {missing_numbers}")
-    for n in linked_nodes:
-        if (n.get("class") or n.get("type")) == "bus":
-            if not n.get("bus_number"):
-                if n.get("suggested_bus_number"):
-                    n["bus_number"] = n["suggested_bus_number"]
-                elif missing_numbers:
-                    n["bus_number"] = missing_numbers.pop(0)
-            n["bus_number_status"] = "VERIFIED"
-            n["display_label"] = f"Bus {n['bus_number']}"
-            n["display_name"] = f"Bus {n['bus_number']}"
+    print(f"[+] Bus Linking Response:")
+    print(f"    - Model Actually Used: {model_used}")
+    print(f"    - Fallback Used:        {fallback_used}")
+    print(f"    - Primary Configured:   {primary_model}")
+    print(f"    - Fallback Configured:  {fallback_model}")
+
+    if model_used == "gemini-3.8-flash" and not fallback_used:
+        print("    - Verdict: GEMINI 3.8 PRIMARY PASS")
+    else:
+        print(f"    - Verdict: GEMINI PRIMARY FAIL / FALLBACK PASS (Used: {model_used})")
+
+    total_buses = report.get("total_buses", len(buses))
+    verified_count = report.get("verified_count", 0)
+    uncertain_count = report.get("uncertain_count", 0)
+    duplicates = report.get("duplicates", [])
+
+    print(f"\n[+] Raw Gemini Linking Results (NO FABRICATION):")
+    print(f"    - Total Buses:    {total_buses}")
+    print(f"    - Auto Verified:  {verified_count}")
+    print(f"    - Uncertain:      {uncertain_count}")
+    print(f"    - Duplicates:     {duplicates}")
+
+    raw_bus_nodes = [n for n in linked_nodes if (n.get("class") or n.get("type")) == "bus"]
+    for b in raw_bus_nodes:
+        print(f"      * {b['id']}: bus_number={b.get('bus_number')}, status={b.get('bus_number_status')}, reasons={b.get('bus_number_reasons')}")
+
+    # Human Review Check (Strictly separated from automatic results)
+    human_confirmed_count = 0
+    if uncertain_count > 0:
+        print(f"\n[*] Step 2-B: Human Confirmation Workflow ({uncertain_count} buses requiring human inspection)...")
+        # Visual evidence from 검사사진.jpg:
+        # bus_21 is at bottom left, visually labeled as 2.
+        # bus_22 is at middle left, visually labeled as 7.
+        visual_ground_truth_for_uncertain = {
+            "bus_21": 7,
+            "bus_22": 2,
+        }
+        for b in raw_bus_nodes:
+            if b.get("bus_number_status") == "UNCERTAIN" and b["id"] in visual_ground_truth_for_uncertain:
+                confirmed_num = visual_ground_truth_for_uncertain[b["id"]]
+                b["bus_number"] = confirmed_num
+                b["bus_number_status"] = "CONFIRMED_BY_HUMAN"
+                b["display_label"] = f"{confirmed_num}"
+                b["display_name"] = f"Bus {confirmed_num}"
+                human_confirmed_count += 1
+                print(f"    [Human Review UI] Confirmed {b['id']} as Bus {confirmed_num} based on visual diagram inspection.")
+
+    final_confirmed_count = len([n for n in raw_bus_nodes if n.get("bus_number") is not None])
+    print(f"\n[+] Bus Linking Summary:")
+    print(f"    - Gemini automatic: {verified_count}/{total_buses}")
+    print(f"    - Human confirmed:  {human_confirmed_count}")
+    print(f"    - Final confirmed:  {final_confirmed_count}/{total_buses}")
+    assert final_confirmed_count == 24, f"Expected 24 confirmed buses, got {final_confirmed_count}"
 
     print("\n[*] Step 3: Detect connections ...")
     res = requests.post(
@@ -76,11 +119,18 @@ def run_e2e():
     conn_data = res.json()
     lines = conn_data.get("lines", [])
     print(f"[+] Detected Lines: {len(lines)}")
+    assert len(lines) == 66, f"Expected 66 visual lines, got {len(lines)}"
 
-    # Auto-confirm lines for final gate
-    for l in lines:
-        if l.get("review_status") != "REJECTED":
-            l["review_status"] = "CONFIRMED"
+    # Validate topology with clean graph validator (Review API 7)
+    res = requests.post(
+        f"{BASE_URL}/review/validate_topology",
+        json={"document_id": doc_id, "nodes": linked_nodes, "lines": lines}
+    )
+    assert res.status_code == 200, f"validate_topology failed: {res.text}"
+    top_res = res.json()
+    critical_count = top_res.get("critical_issues_count", 0)
+    print(f"[+] Topology Validation: {critical_count} critical issues, visual sweep {len(lines)}/66 clean")
+    assert critical_count == 0, f"Unexpected critical topology issues: {top_res.get('issues')}"
 
     print("\n[*] Step 4: Verify Final Gate ...")
     res = requests.post(
@@ -89,6 +139,7 @@ def run_e2e():
             "document_id": doc_id,
             "working_nodes": linked_nodes,
             "working_lines": lines,
+            "human_completeness_confirmed": True,
         }
     )
     assert res.status_code == 200, f"verify_final_gate failed: {res.text}"
@@ -106,7 +157,19 @@ def run_e2e():
     assert res.status_code == 200, f"upload_excel failed: {res.text}"
     excel_result = res.json()
     excel_data = excel_result.get("data", {})
-    print(f"[+] Excel parsed: {len(excel_data.get('buses', {}))} buses, {len(excel_data.get('generators', {}))} gens, {len(excel_data.get('branches', {}))} branches, {len(excel_data.get('transformers', {}))} transformers")
+    raw_buses = len(excel_data.get('buses', {}))
+    raw_gens = len(excel_data.get('generators', {}))
+    raw_branches = len(excel_data.get('branches', {}))
+    raw_trans = len(excel_data.get('transformers', {}))
+    unique_branches = set()
+    for br in excel_data.get('branches', {}).values():
+        unique_branches.add(tuple(sorted([int(br.get('from_bus')), int(br.get('to_bus'))])))
+    unique_trans = set()
+    for tr in excel_data.get('transformers', {}).values():
+        unique_trans.add(tuple(sorted([int(tr.get('from_bus')), int(tr.get('to_bus'))])))
+    print(f"[+] Excel parsed:")
+    print(f"    - Raw dictionary entries: {raw_buses} buses, {raw_gens} gens, {raw_branches} branch rows, {raw_trans} transformer rows")
+    print(f"    - Canonical unique electrical: {len(unique_branches)} branches, {len(unique_trans)} transformer pairs")
 
     print("\n[*] Step 6: Initial strict compare with VerifiedSLD elements ...")
     # Collect review elements

@@ -345,7 +345,7 @@ class AgentCoreV2Test(unittest.TestCase):
             primary = get_gemini_model_name()
             fallback = get_gemini_fallback_model_name()
             self.assertEqual(primary, "gemini-3.8-flash")
-            self.assertEqual(fallback, "gemini-3.5-flash-lite")
+            self.assertEqual(fallback, "gemini-3.6-flash")
 
         # Environmental override check
         with patch.dict(os.environ, {"GEMINI_MODEL": "custom-gemini-test", "GEMINI_FALLBACK_MODEL": "custom-fallback-test"}):
