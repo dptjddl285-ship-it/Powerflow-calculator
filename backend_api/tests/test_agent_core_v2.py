@@ -229,9 +229,6 @@ class AgentCoreV2Test(unittest.TestCase):
             ("다음", "OBJECT_REVIEW", "COMPLETE_CURRENT_STAGE"),
             ("모선 다 봤어", "BUS_MAPPING", "COMPLETE_CURRENT_STAGE"),
             ("다음", "BUS_MAPPING", "COMPLETE_CURRENT_STAGE"),
-            ("결선 다 봤어", "CONNECTION_REVIEW", "COMPLETE_CURRENT_STAGE"),
-            ("결선 끝났어", "CONNECTION_REVIEW", "COMPLETE_CURRENT_STAGE"),
-            ("다음", "CONNECTION_REVIEW", "COMPLETE_CURRENT_STAGE"),
             ("엑셀 넣을게", "FINAL", "OPEN_EXCEL_PICKER"),
             ("제원 가져와", "FINAL", "OPEN_EXCEL_PICKER"),
             ("CAD로 넘어가", "FINAL", "HANDOFF_TO_CANVAS"),
@@ -266,6 +263,29 @@ class AgentCoreV2Test(unittest.TestCase):
                 )
                 self.assertEqual(result["action_mode"], "EXECUTE", result)
                 self.assertEqual(result["action_id"], expected_action, result)
+
+        for message in ("다 봤어", "한번 다 확인했어", "결선 다 봤어", "결선 끝났어", "다음"):
+            with self.subTest(connection_guidance=message):
+                result = self.local_prov.answer_chat(
+                    message=message,
+                    document_id="doc_connection_guide",
+                    stage="CONNECTION_REVIEW",
+                    working_nodes=clean_nodes,
+                    working_lines=clean_lines,
+                )
+                self.assertEqual(result["action_mode"], "GUIDE", result)
+                self.assertIsNone(result["action_id"], result)
+                self.assertEqual(result["highlight_target"], "connection_gate", result)
+
+        explicit_gate = self.local_prov.answer_chat(
+            message="결선 검수 완료 실행해줘",
+            document_id="doc_connection_explicit_gate",
+            stage="CONNECTION_REVIEW",
+            working_nodes=clean_nodes,
+            working_lines=clean_lines,
+        )
+        self.assertEqual(explicit_gate["action_mode"], "EXECUTE", explicit_gate)
+        self.assertEqual(explicit_gate["action_id"], "COMPLETE_CURRENT_STAGE", explicit_gate)
 
         guidance = self.local_prov.answer_chat(
             message="다음에 무엇을 해야 해?",
@@ -985,9 +1005,22 @@ class AgentCoreV2Test(unittest.TestCase):
             working_lines=[{"line_id": "l_clean", "review_status": "DETECTED"}],
         )
         self.assertEqual(clean["decision"], "PROCEED")
-        self.assertEqual(clean["action_mode"], "NONE")
-        self.assertIsNone(clean["highlight_target"])
-        self.assertEqual(clean["focus_targets"], [])
+        self.assertEqual(clean["action_mode"], "GUIDE")
+        self.assertEqual(clean["highlight_target"], "connection_focus_toggle")
+        self.assertEqual(clean["focus_targets"][0]["id"], "connection_focus_toggle")
+
+        swept = self.local_prov.generate_proactive_summary(
+            document_id="doc_conn_sweep_done",
+            stage="CONNECTION_REVIEW",
+            working_lines=[{"line_id": "l_clean", "review_status": "DETECTED"}],
+            app_context={
+                "connection_visual_sweep_started": True,
+                "connection_visual_sweep_complete": True,
+            },
+        )
+        self.assertEqual(swept["action_mode"], "GUIDE")
+        self.assertEqual(swept["highlight_target"], "connection_gate")
+        self.assertIn("육안 확인", swept["reply_ko"])
 
         ambiguous = self.local_prov.generate_proactive_summary(
             document_id="doc_conn_ambiguous",

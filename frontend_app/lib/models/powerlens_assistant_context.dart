@@ -21,6 +21,8 @@ class PowerLensAssistantContext {
   final int totalConnections;
   final int ambiguousConnections;
   final int topologyIssueCount;
+  final bool connectionVisualSweepStarted;
+  final bool connectionVisualSweepComplete;
 
   final bool finalVerified;
   final bool excelLoaded;
@@ -55,6 +57,8 @@ class PowerLensAssistantContext {
     this.totalConnections = 0,
     this.ambiguousConnections = 0,
     this.topologyIssueCount = 0,
+    this.connectionVisualSweepStarted = false,
+    this.connectionVisualSweepComplete = false,
     this.finalVerified = false,
     this.excelLoaded = false,
     this.excelMappingStatus = 'NONE',
@@ -87,6 +91,8 @@ class PowerLensAssistantContext {
     'total_connections': totalConnections,
     'ambiguous_connections': ambiguousConnections,
     'topology_issue_count': topologyIssueCount,
+    'connection_visual_sweep_started': connectionVisualSweepStarted,
+    'connection_visual_sweep_complete': connectionVisualSweepComplete,
     'final_verified': finalVerified,
     'excel_loaded': excelLoaded,
     'excel_mapping_status': excelMappingStatus,
@@ -119,6 +125,8 @@ class PowerLensAssistantContext {
     int? totalConnections,
     int? ambiguousConnections,
     int? topologyIssueCount,
+    bool? connectionVisualSweepStarted,
+    bool? connectionVisualSweepComplete,
     bool? finalVerified,
     bool? excelLoaded,
     String? excelMappingStatus,
@@ -151,6 +159,10 @@ class PowerLensAssistantContext {
       totalConnections: totalConnections ?? this.totalConnections,
       ambiguousConnections: ambiguousConnections ?? this.ambiguousConnections,
       topologyIssueCount: topologyIssueCount ?? this.topologyIssueCount,
+      connectionVisualSweepStarted:
+          connectionVisualSweepStarted ?? this.connectionVisualSweepStarted,
+      connectionVisualSweepComplete:
+          connectionVisualSweepComplete ?? this.connectionVisualSweepComplete,
       finalVerified: finalVerified ?? this.finalVerified,
       excelLoaded: excelLoaded ?? this.excelLoaded,
       excelMappingStatus: excelMappingStatus ?? this.excelMappingStatus,

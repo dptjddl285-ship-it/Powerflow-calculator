@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../models/powerlens_assistant_context.dart';
+import '../models/review_coach_policy.dart';
 import '../models/review_models.dart';
 import '../widgets/powerlens_ai/powerlens_ai_message.dart';
 
@@ -43,7 +44,10 @@ class PowerLensAIService extends ChangeNotifier {
   static PowerLensAIService get instance => _instance;
   PowerLensAIService._internal();
 
-  static String baseUrl = 'http://127.0.0.1:8000';
+  static String baseUrl = const String.fromEnvironment(
+    'POWERLENS_API_BASE_URL',
+    defaultValue: 'http://127.0.0.1:8000',
+  );
 
   final List<PowerLensAIMessageItem> _messages = [];
   List<PowerLensAIMessageItem> get messages => List.unmodifiable(_messages);
@@ -129,6 +133,8 @@ class PowerLensAIService extends ChangeNotifier {
     null,
   );
   Timer? _highlightTimer;
+  String? _stageHighlightTarget;
+  String? get stageHighlightTarget => _stageHighlightTarget;
 
   /// Focus targets received from the latest proactive summary or agent chat
   final ValueNotifier<List<Map<String, dynamic>>> focusTargetsNotifier =
@@ -170,13 +176,25 @@ class PowerLensAIService extends ChangeNotifier {
     activeHighlightTarget.value = target;
     _highlightTimer = Timer(duration, () {
       if (activeHighlightTarget.value == target) {
-        activeHighlightTarget.value = null;
+        activeHighlightTarget.value = _stageHighlightTarget;
       }
     });
   }
 
+  /// Keeps stage guidance active when a temporary response highlight expires.
+  void setStageHighlightTarget(String? target) {
+    _stageHighlightTarget = target;
+    if (activeHighlightTarget.value != target) {
+      _highlightTimer?.cancel();
+      _highlightTimer = null;
+      activeHighlightTarget.value = target;
+    }
+  }
+
   void clearHighlight() {
     _highlightTimer?.cancel();
+    _highlightTimer = null;
+    _stageHighlightTarget = null;
     activeHighlightTarget.value = null;
   }
 
@@ -185,112 +203,18 @@ class PowerLensAIService extends ChangeNotifier {
     String? query,
   }) {
     final screen = context.currentScreen.toUpperCase();
-    final stage = context.workflowStage.toLowerCase();
 
-    // Pure State-Based Fallback (Zero Keyword Dictionary).
-    // All natural-language questions and intent reasoning are handled directly by Gemini LLM.
     if (screen == 'REVIEW_PAGE') {
-      switch (stage) {
-        case 'object_review':
-          if (context.unresolvedMissingCandidates > 0) {
-            return 'missing_candidates';
-          }
-          final hasSuspicious =
-              context.suspiciousObjects > 0 ||
-              context.workingNodes.any(
-                (n) =>
-                    n['status'] == 'SUSPICIOUS' ||
-                    n['review_status'] == 'SUSPICIOUS',
-              );
-          if (hasSuspicious) {
-            // In V2, suspicious objects are guided by on-canvas Guide Boxes, not a button highlight
-            return null;
-          }
-          return 'object_gate';
-        case 'bus_mapping':
-        case 'bus_mapping_review':
-          final busNodes = context.workingNodes.where(_isActiveBusMap).toList();
-          final numbers = <int>[];
-          final duplicates = <int>{};
-          for (final b in busNodes) {
-            final rawNum = b['busNumber'] ?? b['bus_number'];
-            final parsedNo = rawNum is num
-                ? rawNum.toInt()
-                : (rawNum != null ? int.tryParse(rawNum.toString()) : null);
-            if (parsedNo != null && parsedNo > 0) {
-              if (numbers.contains(parsedNo)) {
-                duplicates.add(parsedNo);
-              } else {
-                numbers.add(parsedNo);
-              }
-            }
-          }
-          final hasIssue =
-              busNodes.isEmpty ||
-              context.unresolvedBusNumbers > 0 ||
-              context.duplicateBusNumbers > 0 ||
-              busNodes.any((n) {
-                final rawNum = n['busNumber'] ?? n['bus_number'];
-                final parsedNo = rawNum is num
-                    ? rawNum.toInt()
-                    : (rawNum != null ? int.tryParse(rawNum.toString()) : null);
-                final status =
-                    (n['busNumberStatus'] ??
-                            n['bus_number_status'] ??
-                            n['status'])
-                        ?.toString()
-                        .toUpperCase();
-                if (parsedNo == null ||
-                    parsedNo <= 0 ||
-                    duplicates.contains(parsedNo)) {
-                  return true;
-                }
-                if (status == 'UNCERTAIN' || status == 'PENDING') {
-                  return true;
-                }
-                return false;
-              });
-          if (hasIssue) {
-            // In V2, bus issues are guided by on-canvas Bus Guide Boxes, not a button highlight
-            return null;
-          }
-          return 'bus_gate';
-        case 'connection_review':
-          final lines = context.workingLines
-              .map((raw) => ReviewLineItem.fromJson(raw))
-              .toList();
-          final blockers = ConnectionReviewGateEvaluator.getBlockers(
-            workingLines: lines,
-            topologyIssues: context.topologyIssues,
-          );
-          // Exception lines are guided by their real LINE/ISSUE focus on the
-          // canvas. The only stable UI target for a clean review is the
-          // single final CTA.
-          return blockers.isEmpty ? 'connection_gate' : null;
-        case 'verified_final':
-        case 'final':
-          if (!context.excelLoaded) {
-            return 'final_excel_upload';
-          }
-          if (_hasVerifiedFinalExcelMatch(context)) {
-            return 'final_canvas_handoff';
-          }
-          return context.excelMappingStatus.toUpperCase() == 'MISMATCH'
-              ? 'excel_mismatch_btn'
-              : 'final_excel_upload';
-        default:
-          return null;
-      }
-    } else {
-      if (!context.hasDiagram && context.totalObjects == 0) {
-        return 'home_upload';
-      } else if (context.powerflowConverged == true) {
-        return 'result_flow';
-      } else if (context.powerflowReady && !context.powerflowRunning) {
-        return 'final_powerflow';
-      }
-      return null;
+      return ReviewCoachPolicy.resolve(context).highlightTarget;
     }
+    if (!context.hasDiagram && context.totalObjects == 0) {
+      return 'home_upload';
+    } else if (context.powerflowConverged == true) {
+      return 'result_flow';
+    } else if (context.powerflowReady && !context.powerflowRunning) {
+      return 'final_powerflow';
+    }
+    return null;
   }
 
   bool _hasVerifiedFinalExcelMatch(PowerLensAssistantContext context) =>
@@ -732,12 +656,25 @@ class PowerLensAIService extends ChangeNotifier {
     }
 
     final isConnectionReview = _isConnectionReviewStage(context);
-    // Connection Review V2 is a whole-network exception review. Legacy
-    // view-mode and next-line commands remain in the enum for compatibility,
-    // but are intentionally not emitted by the active semantic router.
+    if (isConnectionReview &&
+        const {'다봤어', '한번다확인했어', '결선다봤어', '다음', '다음단계'}.contains(q)) {
+      // Generic completion language is sent to the backend GUIDE contract;
+      // it is never dispatched as a local Gate action.
+      return const [];
+    }
+    // Connection Review keeps actual exceptions first; its explicit focus
+    // mode starts a visual-only path sweep without changing line status.
     final asksForSequentialConnection =
         isConnectionReview &&
         _containsAny(q, const ['다음선', '다음선로', '다음거', '하나씩볼', '한선씩', '이선봐']);
+
+    if (isConnectionReview && _containsAny(q, const ['선로만집중', '집중모드'])) {
+      final decision = ReviewCoachPolicy.resolve(context!);
+      if (decision.coachTarget == 'connection_focus_toggle') {
+        return const [PowerLensAppAction.connectionLinesOnly];
+      }
+      return const [];
+    }
 
     if (_containsAny(q, const [
       '캔버스로이동',
@@ -899,11 +836,14 @@ class PowerLensAIService extends ChangeNotifier {
         '모선다봤',
         '버스번호확인끝',
       ],
-      'CONNECTION_REVIEW' ||
-      'LINE_REVIEW' => const ['결선검수완료', '결선확인완료', '결선끝', '결선다봤'],
+      'CONNECTION_REVIEW' || 'LINE_REVIEW' => const <String>[],
       _ => const <String>[],
     };
+    if (isConnectionReview && q == '결선검수완료실행해줘') {
+      return const [PowerLensAppAction.goToNextStage];
+    }
     if (_isReviewCompletionStage(context) &&
+        !isConnectionReview &&
         (_containsAny(q, stageCompletionTerms) ||
             _containsAny(q, const [
               '다봤',
@@ -1466,8 +1406,8 @@ class PowerLensAIService extends ChangeNotifier {
             : '지금은 결선 검수 화면을 열 수 없어요.';
       case PowerLensAppAction.connectionLinesOnly:
         return handled
-            ? '전체 네트워크 화면에서 확인이 필요한 결선을 표시했어요.'
-            : '지금은 결선 검수 화면을 열 수 없어요.';
+            ? '최종 육안 확인을 시작했어요. 선택된 선로의 경로와 양 끝점을 살펴보세요.'
+            : '지금은 결선 육안 확인을 시작할 수 없어요.';
       case PowerLensAppAction.connectionNextLine:
         return handled
             ? '자동 선로 이동은 사용하지 않아요. 확인이 필요한 결선을 도면에서 선택해주세요.'
@@ -1514,6 +1454,10 @@ class PowerLensAIService extends ChangeNotifier {
     }
 
     final stage = context.workflowStage.toUpperCase();
+
+    if (stage == 'CONNECTION_REVIEW' || stage == 'LINE_REVIEW') {
+      return ReviewCoachPolicy.resolve(context).coachMessage;
+    }
 
     if (stage == 'OBJECT_REVIEW') {
       final susp = context.suspiciousObjects;
@@ -1832,6 +1776,9 @@ class PowerLensAIService extends ChangeNotifier {
   }
 
   String _getNextActionAnswer(PowerLensAssistantContext ctx) {
+    if (ctx.currentScreen.toUpperCase() == 'REVIEW_PAGE') {
+      return ReviewCoachPolicy.resolve(ctx).coachMessage;
+    }
     final selected = ctx.selectedElement;
     if (ctx.currentScreen.toUpperCase() == 'CAD_CANVAS') {
       if (ctx.powerflowConverged == true) {
@@ -2011,6 +1958,9 @@ class PowerLensAIService extends ChangeNotifier {
   }
 
   String _getStageGreeting(String stage, [PowerLensAssistantContext? ctx]) {
+    if (ctx?.currentScreen.toUpperCase() == 'REVIEW_PAGE') {
+      return ReviewCoachPolicy.resolve(ctx!).coachMessage;
+    }
     switch (stage) {
       case 'HOME':
         return "👋 **안녕하세요! PowerLens AI 도우미입니다.**\n"
@@ -2083,6 +2033,9 @@ class PowerLensAIService extends ChangeNotifier {
   }
 
   String? _getStageProactiveText(PowerLensAssistantContext ctx) {
+    if (ctx.currentScreen.toUpperCase() == 'REVIEW_PAGE') {
+      return ReviewCoachPolicy.resolve(ctx).coachMessage;
+    }
     if (ctx.currentScreen.toUpperCase() == 'CAD_CANVAS') {
       if (ctx.powerflowConverged == true) {
         return _powerFlowEvidenceSummary(ctx);
@@ -2211,7 +2164,7 @@ class PowerLensAIService extends ChangeNotifier {
                 topologyIssues: ctx.topologyIssues,
               ).isNotEmpty;
         return [
-          hasConnIssues ? '결선 예외 확인' : '결선 검수 완료하기',
+          hasConnIssues ? '결선 예외 확인' : '선로만 집중 모드',
           '다음에 뭐 해?',
           '전체 네트워크 요약',
         ];

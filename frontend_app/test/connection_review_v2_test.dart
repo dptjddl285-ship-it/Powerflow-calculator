@@ -30,61 +30,66 @@ ReviewLineItem makeConnectionLine({
 
 void main() {
   group('Connection Review V2 production evaluator', () {
-    test('AA-AE: production filters preserve empty results and clear stale selection', () {
-      final normalA = makeConnectionLine(id: 'normal_a');
-      final normalB = makeConnectionLine(id: 'normal_b');
-      final normalC = makeConnectionLine(id: 'normal_c');
-      final ambiguous = makeConnectionLine(
-        id: 'exception_1',
-        status: 'AMBIGUOUS',
-      );
-      final lines = [normalA, normalB, normalC, ambiguous];
+    test(
+      'AA-AE: production filters preserve empty results and clear stale selection',
+      () {
+        final normalA = makeConnectionLine(id: 'normal_a');
+        final normalB = makeConnectionLine(id: 'normal_b');
+        final normalC = makeConnectionLine(id: 'normal_c');
+        final ambiguous = makeConnectionLine(
+          id: 'exception_1',
+          status: 'AMBIGUOUS',
+        );
+        final lines = [normalA, normalB, normalC, ambiguous];
 
-      expect(
-        ConnectionReviewGateEvaluator.filter(
-          lines,
-          status: ConnectionReviewGateEvaluator.filterAll,
-        ),
-        hasLength(4),
-      );
-      expect(
-        ConnectionReviewGateEvaluator.filter(
-          [normalA, normalB, normalC],
-          status: ConnectionReviewGateEvaluator.filterNeedsReview,
-        ),
-        isEmpty,
-      );
-      expect(
-        ConnectionReviewGateEvaluator.filter(
-          [normalA, normalB, normalC],
-          status: ConnectionReviewGateEvaluator.filterCrossing,
-        ),
-        isEmpty,
-      );
-      expect(
-        ConnectionReviewGateEvaluator.filter(
-          lines,
-          status: ConnectionReviewGateEvaluator.filterNeedsReview,
-        ),
-        [ambiguous],
-      );
-      expect(
-        ConnectionReviewGateEvaluator.selectedLineForFilter(
-          workingLines: lines,
-          status: ConnectionReviewGateEvaluator.filterNeedsReview,
-          selectedLine: normalA,
-        ),
-        isNull,
-      );
-      expect(
-        ConnectionReviewGateEvaluator.selectedLineForFilter(
-          workingLines: lines,
-          status: ConnectionReviewGateEvaluator.filterNeedsReview,
-          selectedLine: ambiguous,
-        ),
-        same(ambiguous),
-      );
-    });
+        expect(
+          ConnectionReviewGateEvaluator.filter(
+            lines,
+            status: ConnectionReviewGateEvaluator.filterAll,
+          ),
+          hasLength(4),
+        );
+        expect(
+          ConnectionReviewGateEvaluator.filter([
+            normalA,
+            normalB,
+            normalC,
+          ], status: ConnectionReviewGateEvaluator.filterNeedsReview),
+          isEmpty,
+        );
+        expect(
+          ConnectionReviewGateEvaluator.filter([
+            normalA,
+            normalB,
+            normalC,
+          ], status: ConnectionReviewGateEvaluator.filterCrossing),
+          isEmpty,
+        );
+        expect(
+          ConnectionReviewGateEvaluator.filter(
+            lines,
+            status: ConnectionReviewGateEvaluator.filterNeedsReview,
+          ),
+          [ambiguous],
+        );
+        expect(
+          ConnectionReviewGateEvaluator.selectedLineForFilter(
+            workingLines: lines,
+            status: ConnectionReviewGateEvaluator.filterNeedsReview,
+            selectedLine: normalA,
+          ),
+          isNull,
+        );
+        expect(
+          ConnectionReviewGateEvaluator.selectedLineForFilter(
+            workingLines: lines,
+            status: ConnectionReviewGateEvaluator.filterNeedsReview,
+            selectedLine: ambiguous,
+          ),
+          same(ambiguous),
+        );
+      },
+    );
 
     test('COUNT: duplicate line/topology critical evidence counts once', () {
       const Map<String, dynamic> shared = {
@@ -93,10 +98,7 @@ void main() {
         'severity': 'error',
         'message': '동일한 결선 오류',
       };
-      final line = makeConnectionLine(
-        id: 'line_shared',
-        issues: [shared],
-      );
+      final line = makeConnectionLine(id: 'line_shared', issues: [shared]);
 
       expect(
         ConnectionReviewGateEvaluator.criticalErrorCount(
@@ -130,15 +132,10 @@ void main() {
         isNotEmpty,
       );
       expect(
-        ConnectionReviewGateEvaluator.computeGuideLineIds(
-          workingLines: [line],
-        ),
+        ConnectionReviewGateEvaluator.computeGuideLineIds(workingLines: [line]),
         contains('line_amb'),
       );
-      expect(
-        ConnectionReviewGateEvaluator.lineStatusLabel(line),
-        '확인 필요',
-      );
+      expect(ConnectionReviewGateEvaluator.lineStatusLabel(line), '확인 필요');
     });
 
     test('C/X: severity error blocks; warning/info do not', () {
@@ -149,15 +146,10 @@ void main() {
         ],
       );
       expect(
-        ConnectionReviewGateEvaluator.canVerifyGate(
-          workingLines: [errorLine],
-        ),
+        ConnectionReviewGateEvaluator.canVerifyGate(workingLines: [errorLine]),
         isFalse,
       );
-      expect(
-        ConnectionReviewGateEvaluator.lineStatusLabel(errorLine),
-        '전기 오류',
-      );
+      expect(ConnectionReviewGateEvaluator.lineStatusLabel(errorLine), '전기 오류');
 
       final cleanLine = makeConnectionLine(id: 'line_warning');
       expect(
@@ -173,7 +165,10 @@ void main() {
     });
 
     test('E: zero active lines is a deterministic blocker', () {
-      final rejected = makeConnectionLine(id: 'line_rejected', status: 'REJECTED');
+      final rejected = makeConnectionLine(
+        id: 'line_rejected',
+        status: 'REJECTED',
+      );
       final blockers = ConnectionReviewGateEvaluator.getBlockers(
         workingLines: [rejected],
       );
@@ -186,30 +181,33 @@ void main() {
       );
     });
 
-    test('G/H/I/P: guides preserve actual IDs and discard fabricated focus', () {
-      final line = makeConnectionLine(id: 'line_real', status: 'AMBIGUOUS');
-      final guides = ConnectionReviewGateEvaluator.computeGuideLineIds(
-        workingLines: [line],
-        focusTargets: const [
-          {'type': 'LINE', 'id': 'line_fake'},
-          {'type': 'LINE', 'id': 'line_real'},
-        ],
-      );
-      expect(guides, {'line_real'});
+    test(
+      'G/H/I/P: guides preserve actual IDs and discard fabricated focus',
+      () {
+        final line = makeConnectionLine(id: 'line_real', status: 'AMBIGUOUS');
+        final guides = ConnectionReviewGateEvaluator.computeGuideLineIds(
+          workingLines: [line],
+          focusTargets: const [
+            {'type': 'LINE', 'id': 'line_fake'},
+            {'type': 'LINE', 'id': 'line_real'},
+          ],
+        );
+        expect(guides, {'line_real'});
 
-      final topologyGuides =
-          ConnectionReviewGateEvaluator.computeGuideLineIds(
-        workingLines: [line],
-        topologyIssues: const [
-          {
-            'id': 'issue_real',
-            'severity': 'error',
-            'component_ids': ['bus_1', 'load_1'],
-          },
-        ],
-      );
-      expect(topologyGuides, contains('line_real'));
-    });
+        final topologyGuides =
+            ConnectionReviewGateEvaluator.computeGuideLineIds(
+              workingLines: [line],
+              topologyIssues: const [
+                {
+                  'id': 'issue_real',
+                  'severity': 'error',
+                  'component_ids': ['bus_1', 'load_1'],
+                },
+              ],
+            );
+        expect(topologyGuides, contains('line_real'));
+      },
+    );
 
     test('Y/Z: crossing actions are available only with explicit evidence', () {
       final noEvidence = makeConnectionLine(id: 'line_plain');
@@ -247,17 +245,23 @@ void main() {
       );
     });
 
-    test('U: explicit candidate selection changes the endpoint and confirms the line', () {
-      final line = makeConnectionLine(
-        id: 'line_candidate',
-        status: 'AMBIGUOUS',
-        candidates: const ['bus_2'],
-      );
-      final updated = ConnectionReviewGateEvaluator.reassignTarget(line, 'bus_2');
-      expect(updated.connectedTo, ['bus_1', 'bus_2']);
-      expect(updated.reviewStatus, 'CONFIRMED');
-      expect(updated.source, 'human_reconnected');
-    });
+    test(
+      'U: explicit candidate selection changes the endpoint and confirms the line',
+      () {
+        final line = makeConnectionLine(
+          id: 'line_candidate',
+          status: 'AMBIGUOUS',
+          candidates: const ['bus_2'],
+        );
+        final updated = ConnectionReviewGateEvaluator.reassignTarget(
+          line,
+          'bus_2',
+        );
+        expect(updated.connectedTo, ['bus_1', 'bus_2']);
+        expect(updated.reviewStatus, 'CONFIRMED');
+        expect(updated.source, 'human_reconnected');
+      },
+    );
 
     test('J/K/S/T: legacy sequential intents are not emitted', () {
       const context = PowerLensAssistantContext(
@@ -273,39 +277,49 @@ void main() {
       expect(service.resolveIntentActions('이거 괜찮아', context), isEmpty);
       expect(
         service.resolveIntentActions('검토 완료하고 다음 단계로 가자', context),
-        [PowerLensAppAction.goToNextStage],
+        isEmpty,
       );
+      for (final message in ['다 봤어', '한번 다 확인했어', '결선 다 봤어', '다음']) {
+        expect(service.resolveIntentActions(message, context), isEmpty);
+      }
+      expect(service.resolveIntentActions('결선 검수 완료 실행해줘', context), [
+        PowerLensAppAction.goToNextStage,
+      ]);
+      expect(service.resolveIntentActions('선로만 집중 모드', context), isEmpty);
     });
 
-    test('L/M/Q/R: clean and exception speech use the single final CTA', () {
-      final service = PowerLensAIService.instance;
-      const cleanContext = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'CONNECTION_REVIEW',
-        workingLines: [
-          {'line_id': 'line_clean', 'review_status': 'DETECTED'},
-        ],
-      );
-      expect(
-        service.generateOfflineFallbackReply('다음에 뭐 해?', cleanContext),
-        contains('결선 검수 완료'),
-      );
-      expect(
-        service.generateOfflineFallbackReply('다음에 뭐 해?', cleanContext),
-        isNot(contains('선로 승인하고 다음')),
-      );
+    test(
+      'L/M/Q/R: clean guidance starts visual sweep; issues remain exception-first',
+      () {
+        final service = PowerLensAIService.instance;
+        const cleanContext = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'CONNECTION_REVIEW',
+          workingLines: [
+            {'line_id': 'line_clean', 'review_status': 'DETECTED'},
+          ],
+        );
+        expect(
+          service.generateOfflineFallbackReply('다음에 뭐 해?', cleanContext),
+          contains('선로만 집중 모드'),
+        );
+        expect(
+          service.generateOfflineFallbackReply('다음에 뭐 해?', cleanContext),
+          isNot(contains('결선 검수 완료')),
+        );
 
-      const issueContext = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'CONNECTION_REVIEW',
-        workingLines: [
-          {'line_id': 'line_issue', 'review_status': 'AMBIGUOUS'},
-        ],
-      );
-      expect(
-        service.generateOfflineFallbackReply('검토 필요', issueContext),
-        contains('예외'),
-      );
-    });
+        const issueContext = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'CONNECTION_REVIEW',
+          workingLines: [
+            {'line_id': 'line_issue', 'review_status': 'AMBIGUOUS'},
+          ],
+        );
+        expect(
+          service.generateOfflineFallbackReply('검토 필요', issueContext),
+          contains('예외'),
+        );
+      },
+    );
   });
 }

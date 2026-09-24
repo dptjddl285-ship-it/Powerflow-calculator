@@ -109,9 +109,6 @@ void main() {
           ('다음', PowerLensAppAction.goToNextStage, objectReview),
           ('모선 다 봤어', PowerLensAppAction.goToNextStage, busReview),
           ('다음', PowerLensAppAction.goToNextStage, busReview),
-          ('결선 다 봤어', PowerLensAppAction.goToNextStage, connectionReview),
-          ('결선 끝났어', PowerLensAppAction.goToNextStage, connectionReview),
-          ('다음', PowerLensAppAction.goToNextStage, connectionReview),
           ('엑셀 넣을게', PowerLensAppAction.triggerExcelUpload, verifiedFinal),
           ('제원 가져와', PowerLensAppAction.triggerExcelUpload, verifiedFinal),
           ('CAD로 넘어가', PowerLensAppAction.handoffToCanvas, verifiedFinal),
@@ -140,6 +137,27 @@ void main() {
             );
             expect(dispatched.last, expected, reason: utterance);
           }
+          for (final phrase in ['다 봤어', '결선 다 봤어', '결선 끝났어', '다음']) {
+            expect(
+              service.resolveIntentActions(phrase, connectionReview),
+              isEmpty,
+              reason: '$phrase must guide to the connection Gate, not run it',
+            );
+          }
+          const explicitGateCommand = '결선 검수 완료 실행해줘';
+          final gateActions = service.resolveIntentActions(
+            explicitGateCommand,
+            connectionReview,
+          );
+          expect(gateActions, [PowerLensAppAction.goToNextStage]);
+          expect(
+            await service.dispatchAction(
+              gateActions.single,
+              context: connectionReview,
+            ),
+            isTrue,
+          );
+          expect(dispatched.last, PowerLensAppAction.goToNextStage);
         } finally {
           service.unregisterActionHandler(handler);
         }

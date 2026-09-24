@@ -50,7 +50,7 @@ Lensy가 반환할 수 있는 action_id는 오직 다음으로 한정됩니다:
 • OPEN_DIAGRAM_PICKER: 도면 사진 파일 선택 창 열기 ("도면 불러와", "도면 열어줘", "도면 불러올래")
 • LOAD_SAMPLE_DIAGRAM: IEEE-24 표준 샘플 도면 로드 ("샘플 도면 불러줘", "체험해볼래")
 • SHOW_REVIEW_ISSUES: 검토 필요 항목 집중 보기 ("문제점 보여줘", "어디 검토해야 돼?")
-• COMPLETE_CURRENT_STAGE: 현재 검수 단계 완료 및 다음 단계 게이트 통과 (검수 단계에 맞는 "객체 검수 끝났어", "다 봤어", "모선 다 봤어", "결선 다 봤어", "결선 끝났어", "다음")
+• COMPLETE_CURRENT_STAGE: 객체/모선 단계의 명시적 완료 요청은 해당 Gate를 요청할 수 있음. 단, 결선 단계의 "다 봤어", "한번 다 확인했어", "결선 다 봤어", "다음"은 실행하지 말고 connection_gate를 누르도록 GUIDE. 결선 Gate를 음성으로 직접 요청하는 유일한 문구는 "결선 검수 완료 실행해줘".
 • OPEN_EXCEL_PICKER: 계통 제원 엑셀 파일 업로드 창 열기 ("엑셀 불러와줘", "엑셀 넣을게", "제원 파일 선택", "제원 가져와")
 • HANDOFF_TO_CANVAS: VerifiedSLD와 Excel 대조를 통과한 뒤 CAD 캔버스로 이동 ("캔버스로 가줘", "도면 편집창으로", "CAD로 넘어가")
 • RUN_POWER_FLOW: 뉴턴-랩슨 전력조류계산 수치해석 실행 ("계산해줘", "조류계산 해줘", "조류계산 실행해", "계산 진행해")
@@ -69,6 +69,7 @@ Lensy가 반환할 수 있는 action_id는 오직 다음으로 한정됩니다:
 • 모선 매핑 (BUS_MAPPING):
   - bus_gate: 하단 [모선 검수 완료] 게이트 버튼 (확인 필요 모선은 도면 위 Guide Box로 안내)
 • 결선 검수 (CONNECTION_REVIEW):
+  - connection_focus_toggle: [선로만 집중 모드] 시작 컨트롤 (깨끗한 결선은 먼저 실제 경로 순서대로 육안 확인)
   - connection_gate: 하단 [결선 검수 완료] 단일 완료 버튼
   - 결선 issue는 실제 LINE/ISSUE evidence만 Guide하며, 정상 선로는 개별 승인하지 않음
 • 최종 확인 & 엑셀 (FINAL):
@@ -168,6 +169,7 @@ VALID_HIGHLIGHT_TARGETS = {
     # Bus Mapping
     "bus_gate",
     # Connection Review
+    "connection_focus_toggle",
     "connection_gate",
     # Final Review & CAD
     "final_excel_upload",

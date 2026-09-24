@@ -439,9 +439,9 @@ void main() {
       },
     );
 
-    // TEST K: focus_targets OBJECT valid Bus -> Guide.
+    // A backend focus target is never enough to retain a resolved Bus guide.
     test(
-      'TEST K: Canonical focus target type OBJECT for valid bus adds to guide',
+      'TEST K: Stale focus target for a clean Bus does not keep a guide',
       () {
         final focusTargets = [
           {'type': 'OBJECT', 'id': 'bus_1', 'label': '모선 1'},
@@ -451,7 +451,20 @@ void main() {
           focusTargets: focusTargets,
         );
 
-        expect(guideIds, contains('bus_1'));
+        expect(guideIds, isEmpty);
+
+        final unresolved = makeBus(
+          id: 'bus_unresolved',
+          busNumber: null,
+          busNumberStatus: 'UNCERTAIN',
+        );
+        final activeIssueGuide = BusReviewGateEvaluator.computeGuideBusIds(
+          workingNodes: [unresolved],
+          focusTargets: const [
+            {'type': 'OBJECT', 'id': 'bus_unresolved'},
+          ],
+        );
+        expect(activeIssueGuide, {'bus_unresolved'});
       },
     );
 

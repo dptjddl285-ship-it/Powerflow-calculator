@@ -498,7 +498,8 @@ class BusReviewGateEvaluator {
           final node = nodeMap[id];
           if (node != null &&
               node.className.toLowerCase() == 'bus' &&
-              node.reviewStatus != 'REJECTED') {
+              node.reviewStatus != 'REJECTED' &&
+              ids.contains(id)) {
             ids.add(id);
           }
         }
@@ -657,16 +658,13 @@ class BusReviewUiPolicy {
 /// line is usable without an individual approval action. Only actual
 /// exceptions or authoritative topology errors are returned as blockers.
 class ConnectionReviewGateEvaluator {
-  static const noActiveLineMessage =
-      '유효한 결선 선로가 없습니다. 결선 검출을 확인해주세요.';
+  static const noActiveLineMessage = '유효한 결선 선로가 없습니다. 결선 검출을 확인해주세요.';
   static const primaryActionLabel = '결선 검수 완료';
   static const filterAll = 'ALL';
   static const filterNeedsReview = 'NEEDS_REVIEW';
   static const filterCrossing = 'CROSSING';
 
-  static List<ReviewLineItem> activeLines(
-    Iterable<ReviewLineItem> lines,
-  ) {
+  static List<ReviewLineItem> activeLines(Iterable<ReviewLineItem> lines) {
     return lines
         .where((line) => line.reviewStatus.toUpperCase() != 'REJECTED')
         .toList();
@@ -778,9 +776,7 @@ class ConnectionReviewGateEvaluator {
     final identities = <String>{};
     for (final line in activeLines(workingLines)) {
       for (final issue in _lineIssues(line).where(isCriticalIssue)) {
-        identities.add(
-          _criticalIssueIdentity(issue, fallback: line.lineId),
-        );
+        identities.add(_criticalIssueIdentity(issue, fallback: line.lineId));
       }
     }
     for (final issue in topologyIssues.where(isCriticalIssue)) {
@@ -830,7 +826,8 @@ class ConnectionReviewGateEvaluator {
 
     if (inspectMap(line.evidence)) return true;
     return _lineIssues(line).any(
-      (issue) => inspectMap(issue) ||
+      (issue) =>
+          inspectMap(issue) ||
           (_containsCrossingKey(issue['code']?.toString() ?? '') &&
               _evidenceValueExists(issue['message'])),
     );
@@ -869,8 +866,7 @@ class ConnectionReviewGateEvaluator {
       blockers.add('확인이 필요한 결선 $ambiguousCount건이 남아 있습니다.');
     }
 
-    final crossingCount =
-        active.where(isUnresolvedCrossing).length;
+    final crossingCount = active.where(isUnresolvedCrossing).length;
     if (crossingCount > 0) {
       blockers.add('교차 여부 확인이 필요한 결선 $crossingCount건이 남아 있습니다.');
     }
@@ -880,9 +876,7 @@ class ConnectionReviewGateEvaluator {
       topologyIssues: topologyIssues,
     );
     if (criticalErrorCountValue > 0) {
-      blockers.add(
-        '전기적 연결 오류 $criticalErrorCountValue건을 해결해야 합니다.',
-      );
+      blockers.add('전기적 연결 오류 $criticalErrorCountValue건을 해결해야 합니다.');
     }
     return blockers;
   }
@@ -966,7 +960,9 @@ class ConnectionReviewGateEvaluator {
       }.whereType<String>().toSet();
       ids.addAll(
         focusTargets
-            .where((target) => target['type']?.toString().toUpperCase() == 'ISSUE')
+            .where(
+              (target) => target['type']?.toString().toUpperCase() == 'ISSUE',
+            )
             .map((target) => target['id']?.toString())
             .whereType<String>()
             .where(validIds.contains),
@@ -984,10 +980,7 @@ class ConnectionReviewGateEvaluator {
     return 'AI 확인 · 정상 연결';
   }
 
-  static ReviewLineItem reassignTarget(
-    ReviewLineItem line,
-    String targetId,
-  ) {
+  static ReviewLineItem reassignTarget(ReviewLineItem line, String targetId) {
     final endpoints = List<String>.from(line.connectedTo);
     if (endpoints.isEmpty) return line;
     if (endpoints.length == 1) {

@@ -423,12 +423,26 @@ def sanitize_and_validate_agent_response(
         if critical_count:
             res["summary_text"] += f"\n전기 오류: **{critical_count}건**"
     elif _is_connection_review_stage(stage) and not connection_blocked and not user_message:
-        # Proactive clean summaries must not look like a human approval queue.
+        # Clean guidance points to the next explicit UI step and never executes it.
         res["decision"] = "PROCEED"
-        res["action_mode"] = "NONE"
         res["action_id"] = None
-        res["highlight_target"] = None
-        res["focus_targets"] = []
+        if res.get("highlight_target") in ("connection_focus_toggle", "connection_gate"):
+            res["action_mode"] = "GUIDE"
+            res["focus_targets"] = [
+                {
+                    "type": "UI",
+                    "id": res["highlight_target"],
+                    "reason": "현재 검수 단계 안내 대상",
+                    "severity": "INFO",
+                }
+            ]
+        elif str(res.get("action_mode") or "").upper() == "GUIDE":
+            res["action_mode"] = "GUIDE"
+            res["focus_targets"] = []
+        else:
+            res["action_mode"] = "NONE"
+            res["highlight_target"] = None
+            res["focus_targets"] = []
     if bus_blocked:
         # An empty active Bus set is a hard workflow blocker, not a clean
         # review. Keep the response safe even when an LLM returned PROCEED.
@@ -767,10 +781,33 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                     v2_lines.append(f"  {idx + 1}) **{item['display_label']}** - {item['reason']}")
             else:
                 decision = "PROCEED"
-                action_mode = "NONE"
-                target = None
-                reply_ko = "정상 연결된 선로는 AI가 확인했습니다. 전체 도면을 확인한 뒤 [결선 검수 완료]를 눌러주세요."
-                v2_lines.append("\n✓ 정상 결선은 자동으로 확인되었습니다. 전체 도면을 확인한 뒤 `[결선 검수 완료]`를 눌러주세요.")
+                sweep = app_context or {}
+                sweep_started = bool(sweep.get("connection_visual_sweep_started"))
+                sweep_complete = bool(sweep.get("connection_visual_sweep_complete"))
+                action_mode = "GUIDE"
+                target = (
+                    "connection_gate"
+                    if sweep_started and sweep_complete
+                    else "connection_focus_toggle"
+                    if not sweep_started
+                    else None
+                )
+                if sweep_started and sweep_complete:
+                    reply_ko = "최종 육안 확인을 마쳤어요. 선로 상태는 변경하지 않았습니다. 하단 [결선 검수 완료]를 눌러주세요."
+                    v2_lines.append("\n✓ 최종 육안 확인이 끝났습니다. 하단 `[결선 검수 완료]`를 눌러주세요.")
+                elif sweep_started:
+                    reply_ko = "최종 육안 확인을 이어가세요. 선택된 선로 경로와 양 끝점을 확인한 뒤 → 키를 누르면 됩니다."
+                    v2_lines.append("\n→ 선택된 선로를 확인하고 방향키로 육안 확인을 이어가세요.")
+                else:
+                    reply_ko = "정상 연결된 선로는 AI가 확인했습니다. [선로만 집중 모드]를 누르거나 → 키로 전체 선로를 실제 경로 순서대로 육안 확인해주세요."
+                    v2_lines.append("\n✓ 정상 연결은 AI가 확인했습니다. `[선로만 집중 모드]` 또는 → 키로 최종 육안 확인을 시작하세요.")
+                if target:
+                    focus_targets.append({
+                        "type": "UI",
+                        "id": target,
+                        "reason": "현재 검수 단계의 다음 명시적 안내 대상",
+                        "severity": "INFO",
+                    })
             summary_text = "\n".join(v2_lines)
 
         elif stage_upper in ("FINAL_REVIEW", "FINAL", "VERIFIED_FINAL"):
@@ -915,10 +952,36 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
             "LINE_REVIEW": ["결선검수완료", "결선확인완료", "결선끝", "결선다봤"],
         }
         stage_completion_terms = completion_terms_by_stage.get(stage_upper)
+        is_connection_stage = stage_upper in ("CONNECTION_REVIEW", "LINE_REVIEW")
+        if is_connection_stage and msg_norm == "결선검수완료실행해줘":
+            res = {
+                "reply_ko": "결선 검수 완료 버튼과 같은 결정적 Gate 검증을 요청합니다.",
+                "decision": "PROCEED",
+                "intent": "COMPLETE_CURRENT_STAGE",
+                "action_mode": "EXECUTE",
+                "action_id": "COMPLETE_CURRENT_STAGE",
+                "agent_status": "LOCAL_DETERMINISTIC",
+            }
+            return sanitize_and_validate_agent_response(
+                res, message, w_nodes, w_lines, cands, issues, stage
+            )
         if stage_completion_terms is not None and (
             any(term in msg_norm for term in stage_completion_terms)
             or msg_norm in {"다봤", "다봤어", "다음", "다음단계", "검수완료해"}
+            or (is_connection_stage and msg_norm == "한번다확인했어")
         ):
+            if is_connection_stage:
+                res = {
+                    "reply_ko": "마지막으로 선로를 눈으로 확인한 뒤 하단 [결선 검수 완료]를 눌러주세요. 제가 Gate를 대신 실행하지 않았어요.",
+                    "decision": "PROCEED",
+                    "intent": "GUIDE_CONNECTION_GATE",
+                    "action_mode": "GUIDE",
+                    "highlight_target": "connection_gate",
+                    "agent_status": "LOCAL_DETERMINISTIC",
+                }
+                return sanitize_and_validate_agent_response(
+                    res, message, w_nodes, w_lines, cands, issues, stage
+                )
             res = {
                 "reply_ko": "현재 검수 단계 완료 버튼과 같은 Gate 검증을 요청합니다.",
                 "decision": "PROCEED",
@@ -1251,9 +1314,9 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                 reply += "3. 표시된 예외의 endpoint, traced path, validation evidence만 확인하거나 수정해주세요."
             else:
                 dec = "PROCEED"
-                target = None
+                target = "connection_focus_toggle"
                 reply += "✓ 정상 연결된 선로는 AI가 확인했습니다.\n"
-                reply += "• 전체 도면을 확인한 뒤 하단 **[결선 검수 완료]**를 눌러주세요."
+                reply += "• **[선로만 집중 모드]**를 누르거나 → 키로 각 선로 경로와 끝점을 육안 확인한 뒤 하단 **[결선 검수 완료]**를 눌러주세요."
         elif stage_upper in ("FINAL_REVIEW", "FINAL", "VERIFIED_FINAL"):
             target = "final_excel_upload"
             reply = (

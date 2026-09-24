@@ -37,7 +37,9 @@ class _GlowingTargetWrapperState extends State<GlowingTargetWrapper>
       duration: const Duration(milliseconds: 1000),
     );
     _checkHighlight();
-    PowerLensAIService.instance.activeHighlightTarget.addListener(_onHighlightChanged);
+    PowerLensAIService.instance.activeHighlightTarget.addListener(
+      _onHighlightChanged,
+    );
   }
 
   @override
@@ -72,7 +74,9 @@ class _GlowingTargetWrapperState extends State<GlowingTargetWrapper>
 
   @override
   void dispose() {
-    PowerLensAIService.instance.activeHighlightTarget.removeListener(_onHighlightChanged);
+    PowerLensAIService.instance.activeHighlightTarget.removeListener(
+      _onHighlightChanged,
+    );
     _animController.dispose();
     super.dispose();
   }
@@ -86,7 +90,9 @@ class _GlowingTargetWrapperState extends State<GlowingTargetWrapper>
       animation: _animController,
       builder: (context, _) {
         final t = _animController.value;
-        final pulse = _isHighlighted ? (0.5 + 0.5 * math.sin(t * math.pi)) : 0.0;
+        final pulse = _isHighlighted
+            ? (0.5 + 0.5 * math.sin(t * math.pi))
+            : 0.0;
 
         return Stack(
           fit: StackFit.passthrough,
@@ -101,17 +107,17 @@ class _GlowingTargetWrapperState extends State<GlowingTargetWrapper>
                       ? [
                           // Outer radiant aura
                           BoxShadow(
-                            color: const Color(0xFFF59E0B).withValues(
-                              alpha: 0.35 + 0.35 * pulse,
-                            ),
+                            color: const Color(
+                              0xFF06B6D4,
+                            ).withValues(alpha: 0.35 + 0.35 * pulse),
                             blurRadius: 12 + 10 * pulse,
                             spreadRadius: 2 + 4 * pulse,
                           ),
                           // Inner bright glow
                           BoxShadow(
-                            color: const Color(0xFF38BDF8).withValues(
-                              alpha: 0.25 + 0.30 * pulse,
-                            ),
+                            color: const Color(
+                              0xFF14B8A6,
+                            ).withValues(alpha: 0.25 + 0.30 * pulse),
                             blurRadius: 20 + 8 * pulse,
                             spreadRadius: 1 + 2 * pulse,
                           ),
@@ -125,8 +131,8 @@ class _GlowingTargetWrapperState extends State<GlowingTargetWrapper>
                     border: _isHighlighted
                         ? Border.all(
                             color: Color.lerp(
-                              const Color(0xFFF59E0B),
-                              const Color(0xFF38BDF8),
+                              const Color(0xFF06B6D4),
+                              const Color(0xFF14B8A6),
                               pulse,
                             )!.withValues(alpha: 0.85 + 0.15 * pulse),
                             width: 2.5,
@@ -143,15 +149,18 @@ class _GlowingTargetWrapperState extends State<GlowingTargetWrapper>
                 right: 6,
                 child: IgnorePointer(
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
                     decoration: BoxDecoration(
                       gradient: const LinearGradient(
-                        colors: [Color(0xFFF59E0B), Color(0xFFD97706)],
+                        colors: [Color(0xFF0891B2), Color(0xFF0F766E)],
                       ),
                       borderRadius: BorderRadius.circular(12),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.amber.withValues(alpha: 0.6),
+                          color: const Color(0xFF06B6D4).withValues(alpha: 0.6),
                           blurRadius: 8,
                           offset: const Offset(0, 2),
                         ),

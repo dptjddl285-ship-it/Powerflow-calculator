@@ -115,7 +115,8 @@ void main() {
       expect(service.resolveIntentActions('전체 다 봐줘', context), isEmpty);
       expect(service.resolveIntentActions('선로만 집중해줘', context), isEmpty);
       expect(service.resolveIntentActions('다음 선 보여줘', context), isEmpty);
-      expect(service.resolveIntentActions('결선 다 봤어', context), [
+      expect(service.resolveIntentActions('결선 다 봤어', context), isEmpty);
+      expect(service.resolveIntentActions('결선 검수 완료 실행해줘', context), [
         PowerLensAppAction.goToNextStage,
       ]);
     });
