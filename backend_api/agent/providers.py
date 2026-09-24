@@ -114,14 +114,15 @@ def is_circuit_mutation_request(user_message: str) -> bool:
     and a mutation verb (e.g. 추가, 변경, 수정, 삭제, 지워).
     Requests for safe external resources (e.g. 엑셀, 도면, 샘플) are excluded.
     """
-    msg = (user_message or "").strip().lower()
+    msg = (user_message or "").strip().lower().replace("캔버스", "")
     safe_resources = ["엑셀", "excel", "xlsx", "샘플", "sample", "도면", "사진", "이미지", "파일"]
     circuit_nouns = [
         "객체", "모선", "선로", "결선", "클래스", "종류", "타입", "심볼", "번호", "노드", "라인", "버스",
         "발전기", "부하", "변압기", "설비", "generator", "load", "bus", "line", "transformer"
     ]
     mutation_verbs = [
-        "바꿔", "변경", "수정", "삭제", "지워", "제외", "추가", "바꿈", "바꾸"
+        "바꿔", "변경", "수정", "삭제", "지워", "제외", "추가", "바꿈", "바꾸",
+        "입력", "설정", "지정", "연결해", "분리해", "이동해", "옮겨"
     ]
 
     has_safe_resource = any(r in msg for r in safe_resources)
@@ -890,8 +891,59 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
         err_cnt = len(issues)
 
         # 1. Action Intent Routing
+        # Common voice commands map onto the same allow-listed UI actions as
+        # their visible buttons. The frontend still applies each screen's Gate.
+        if any(k in msg_norm for k in [
+            "도면불러", "도면올려", "도면업로드", "이미지불러", "사진올려", "opendiagrampicker"
+        ]):
+            res = {
+                "reply_ko": "도면 파일 선택 창을 엽니다.",
+                "decision": "PROCEED",
+                "intent": "OPEN_DIAGRAM_PICKER",
+                "action_mode": "EXECUTE",
+                "action_id": "OPEN_DIAGRAM_PICKER",
+                "highlight_target": "home_upload",
+                "agent_status": "LOCAL_DETERMINISTIC",
+            }
+            return sanitize_and_validate_agent_response(res, message, w_nodes, w_lines, cands, issues, stage)
+
+        completion_terms_by_stage = {
+            "OBJECT_REVIEW": ["객체검수완료", "객체검수끝", "객체확인완료", "객체확인끝"],
+            "BUS_MAPPING": ["모선검수완료", "모선확인완료", "모선검수끝", "모선확인끝", "모선다봤", "버스번호확인끝"],
+            "BUS_MAPPING_REVIEW": ["모선검수완료", "모선확인완료", "모선검수끝", "모선확인끝", "모선다봤", "버스번호확인끝"],
+            "CONNECTION_REVIEW": ["결선검수완료", "결선확인완료", "결선끝", "결선다봤"],
+            "LINE_REVIEW": ["결선검수완료", "결선확인완료", "결선끝", "결선다봤"],
+        }
+        stage_completion_terms = completion_terms_by_stage.get(stage_upper)
+        if stage_completion_terms is not None and (
+            any(term in msg_norm for term in stage_completion_terms)
+            or any(term in msg_norm for term in ["다봤", "다음", "다음단계", "검수완료해"])
+        ):
+            res = {
+                "reply_ko": "현재 검수 단계 완료 버튼과 같은 Gate 검증을 요청합니다.",
+                "decision": "PROCEED",
+                "intent": "COMPLETE_CURRENT_STAGE",
+                "action_mode": "EXECUTE",
+                "action_id": "COMPLETE_CURRENT_STAGE",
+                "agent_status": "LOCAL_DETERMINISTIC",
+            }
+            return sanitize_and_validate_agent_response(res, message, w_nodes, w_lines, cands, issues, stage)
+
+        if any(k in msg_norm for k in ["cad로넘어가", "cad로이동", "캔버스로이동", "캔버스편집", "도면편집화면"]):
+            res = {
+                "reply_ko": "검증된 계통의 CAD 화면으로 이동을 요청합니다.",
+                "decision": "PROCEED",
+                "intent": "HANDOFF_TO_CANVAS",
+                "action_mode": "EXECUTE",
+                "action_id": "HANDOFF_TO_CANVAS",
+                "agent_status": "LOCAL_DETERMINISTIC",
+            }
+            return sanitize_and_validate_agent_response(res, message, w_nodes, w_lines, cands, issues, stage)
+
         # Power flow execution vs guidance
-        if any(k in msg_norm for k in ["조류계산", "계산해", "계산진행", "runpowerflow"]):
+        if any(k in msg_norm for k in [
+            "조류계산", "계산실행", "계산진행", "계산해줘", "계산해주세요", "runpowerflow"
+        ]):
             is_where = any(k in msg_norm for k in ["어디", "어떻게", "뭐눌러", "위치", "어느버튼", "버튼어디", "어디야", "어디서"])
             if is_where:
                 res = {
@@ -1002,7 +1054,7 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
             return sanitize_and_validate_agent_response(res, message, w_nodes, w_lines, cands, issues, stage)
 
         # Safe Resource Request: Excel file picker / upload
-        if any(k in msg_norm for k in ["엑셀추가", "엑셀파일", "엑셀불러", "엑셀가져", "엑셀열어", "엑셀업로드", "openexcel", "importexcel"]) or ("엑셀" in msg and any(v in msg for v in ["추가", "열어", "가져", "불러", "선택"])):
+        if any(k in msg_norm for k in ["엑셀추가", "엑셀파일", "엑셀불러", "엑셀가져", "엑셀열어", "엑셀업로드", "엑셀넣", "제원가져", "제원불러", "openexcel", "importexcel"]) or ("엑셀" in msg and any(v in msg for v in ["추가", "열어", "가져", "불러", "선택", "넣"])):
             res = {
                 "reply_ko": "계통 제원 엑셀(.xlsx) 파일을 선택할 수 있는 파일 선택창을 엽니다.",
                 "decision": "PROCEED",

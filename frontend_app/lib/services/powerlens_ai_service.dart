@@ -289,14 +289,18 @@ class PowerLensAIService extends ChangeNotifier {
   }
 
   Future<bool> dispatchAction(
-    PowerLensAppAction action, [
+    PowerLensAppAction action, {
     Map<String, dynamic>? params,
-  ]) async {
+    PowerLensAssistantContext? context,
+  }) async {
     // Iterate from the visible/top-most screen to the root canvas. A handler
     // may return false when an action is not applicable to its current stage.
-    for (final handler in List<PowerLensActionHandler>.from(
+    final handlers = List<PowerLensActionHandler>.from(
       _actionHandlers.reversed,
-    )) {
+    );
+    final visibleReviewPage =
+        context?.currentScreen.toUpperCase() == 'REVIEW_PAGE';
+    for (final handler in visibleReviewPage ? handlers.take(1) : handlers) {
       try {
         if (await handler(action, params)) return true;
       } catch (_) {
@@ -350,6 +354,7 @@ class PowerLensAIService extends ChangeNotifier {
     required String? actionId,
     Map<String, dynamic>? actionParams,
     String? highlightTarget,
+    PowerLensAssistantContext? context,
   }) async {
     if (highlightTarget != null &&
         highlightTarget.isNotEmpty &&
@@ -365,7 +370,11 @@ class PowerLensAIService extends ChangeNotifier {
     final appAction = mapBackendActionId(actionId);
     if (appAction == null) return false;
 
-    return await dispatchAction(appAction, actionParams);
+    return await dispatchAction(
+      appAction,
+      params: actionParams,
+      context: context,
+    );
   }
 
   String _normalizeQuery(String text) {
@@ -408,6 +417,62 @@ class PowerLensAIService extends ChangeNotifier {
         context?.currentScreen.toUpperCase() == 'REVIEW_PAGE';
   }
 
+  bool _isReviewCompletionStage(PowerLensAssistantContext? context) {
+    final stage = context?.workflowStage.toUpperCase();
+    return stage == 'OBJECT_REVIEW' ||
+        stage == 'BUS_MAPPING' ||
+        stage == 'BUS_MAPPING_REVIEW' ||
+        stage == 'CONNECTION_REVIEW' ||
+        stage == 'LINE_REVIEW';
+  }
+
+  bool requiresCircuitMutationConfirmation(String text) {
+    final query = _normalizeQuery(text).replaceAll('캔버스', '');
+    const circuitNouns = [
+      '객체',
+      '모선',
+      '선로',
+      '결선',
+      '클래스',
+      '종류',
+      '타입',
+      '심볼',
+      '번호',
+      '노드',
+      '라인',
+      '버스',
+      '발전기',
+      '부하',
+      '변압기',
+      '설비',
+      'generator',
+      'load',
+      'bus',
+      'line',
+      'transformer',
+    ];
+    const mutationVerbs = [
+      '바꿔',
+      '변경',
+      '수정',
+      '삭제',
+      '지워',
+      '제외',
+      '추가',
+      '바꿈',
+      '바꾸',
+      '입력',
+      '설정',
+      '지정',
+      '연결해',
+      '분리해',
+      '이동해',
+      '옮겨',
+    ];
+    return _containsAny(query, circuitNouns) &&
+        _containsAny(query, mutationVerbs);
+  }
+
   bool _isConnectionReviewStage(PowerLensAssistantContext? context) {
     final stage = context?.workflowStage.toUpperCase();
     return stage == 'CONNECTION_REVIEW' || stage == 'LINE_REVIEW';
@@ -425,6 +490,7 @@ class PowerLensAIService extends ChangeNotifier {
   ]) {
     final q = _normalizeQuery(text);
     if (q.isEmpty) return const [];
+    if (requiresCircuitMutationConfirmation(q)) return const [];
 
     // If the user is asking a question (where to click, how to do, what button to press),
     // provide guidance and trigger glowing highlights instead of silently executing actions!
@@ -488,6 +554,7 @@ class PowerLensAIService extends ChangeNotifier {
       '엑셀',
       'xlsx',
       'xls',
+      '제원',
       '계통제원',
       '계통데이터',
     ]);
@@ -564,6 +631,8 @@ class PowerLensAIService extends ChangeNotifier {
     }
 
     if (_containsAny(q, const [
+      '계산해줘',
+      '계산해주세요',
       '조류계산',
       '조류계산해',
       '파워플로우',
@@ -699,20 +768,32 @@ class PowerLensAIService extends ChangeNotifier {
     if (_containsAny(q, const ['이전', '전단계', '뒤로', '돌아가'])) {
       return const [PowerLensAppAction.goToPreviousStage];
     }
-    if (_containsAny(q, const [
-      '객체검수완료',
-      '객체확인완료',
-      '검수완료해',
-      '모선검수완료',
-      '모선확인완료',
-      '모선검수끝',
-      '모선확인끝',
-      '모선다봤',
-      '버스번호확인끝',
-    ])) {
-      return const [PowerLensAppAction.goToNextStage];
-    }
-    if (_containsAny(q, const ['다음', '넘어가', '계속', '진행하', '다음거', '다음단계'])) {
+    final stage = context?.workflowStage.toUpperCase();
+    final stageCompletionTerms = switch (stage) {
+      'OBJECT_REVIEW' => const ['객체검수완료', '객체검수끝', '객체확인완료', '객체확인끝', '검수완료해'],
+      'BUS_MAPPING' || 'BUS_MAPPING_REVIEW' => const [
+        '모선검수완료',
+        '모선확인완료',
+        '모선검수끝',
+        '모선확인끝',
+        '모선다봤',
+        '버스번호확인끝',
+      ],
+      'CONNECTION_REVIEW' ||
+      'LINE_REVIEW' => const ['결선검수완료', '결선확인완료', '결선끝', '결선다봤'],
+      _ => const <String>[],
+    };
+    if (_isReviewCompletionStage(context) &&
+        (_containsAny(q, stageCompletionTerms) ||
+            _containsAny(q, const [
+              '다봤',
+              '다음',
+              '다음거',
+              '다음단계',
+              '넘어가',
+              '계속',
+              '진행하',
+            ]))) {
       return const [PowerLensAppAction.goToNextStage];
     }
 
@@ -1026,6 +1107,7 @@ class PowerLensAIService extends ChangeNotifier {
             actionParams: actionParams,
             highlightTarget:
                 null, // Avoid duplicate trigger; already highlighted above
+            context: context,
           );
         }
 
@@ -1127,6 +1209,21 @@ class PowerLensAIService extends ChangeNotifier {
     _geminiStatus = 'LOCAL_FALLBACK';
     _lastFailedQuery = trimmed;
 
+    if (requiresCircuitMutationConfirmation(trimmed)) {
+      _messages.add(
+        PowerLensAIMessageItem(
+          id: 'ai_confirm_${DateTime.now().millisecondsSinceEpoch}',
+          sender: 'assistant',
+          text:
+              '회로 구조나 제원 변경은 안전을 위해 자동 실행하지 않아요. 변경할 대상을 화면에서 직접 선택하고 내용을 확인해주세요.',
+          stage: context.workflowStage,
+          suggestedActions: _getQuickActions(context.workflowStage, context),
+          agentStatus: 'LOCAL_CONFIRM_REQUIRED',
+        ),
+      );
+      return;
+    }
+
     final intentActions = resolveIntentActions(trimmed, context);
     final uiExecutableActions = intentActions
         .where((a) => a != PowerLensAppAction.explainCurrentStage)
@@ -1140,7 +1237,7 @@ class PowerLensAIService extends ChangeNotifier {
           _mascotState = 'speaking';
           notifyListeners();
         }
-        handledActions.add(await dispatchAction(action));
+        handledActions.add(await dispatchAction(action, context: context));
       }
       if (requestId != _requestSerial) return;
 
@@ -1761,9 +1858,9 @@ class PowerLensAIService extends ChangeNotifier {
               "제가 다시 확인할 모선은 이제 없어요. 전체 번호를 한번 확인한 뒤 **[모선 검수 완료]**를 눌러주세요.";
         }
         final count = ctx.unresolvedBusNumbers + ctx.duplicateBusNumbers;
-          final countStr = count > 0 ? " $count개" : "";
+        final countStr = count > 0 ? " $count개" : "";
         return "🔢 **모선 번호 확인 단계입니다.**\n"
-              "모선 번호를 전체 확인했어요. 다시 확인하면 좋은 모선이$countStr 있어요. 도면에 표시해둘게요.";
+            "모선 번호를 전체 확인했어요. 다시 확인하면 좋은 모선이$countStr 있어요. 도면에 표시해둘게요.";
       case 'CONNECTION_REVIEW':
         final connectionLines =
             ctx?.workingLines

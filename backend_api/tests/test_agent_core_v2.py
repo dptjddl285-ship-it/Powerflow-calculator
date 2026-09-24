@@ -191,6 +191,82 @@ class AgentCoreV2Test(unittest.TestCase):
         self.assertEqual(res2["action_mode"], "CONFIRM_REQUIRED")
         self.assertIsNone(res2["action_id"])
 
+        # Parameter and topology edits are also confirmation-required.
+        valid_nodes, valid_lines = _valid_final_gate_payload()
+        for message, stage in (
+            ("모선 번호를 5로 바꿔줘", "BUS_MAPPING"),
+            ("선로 2번을 모선 3번에 연결해줘", "CONNECTION_REVIEW"),
+        ):
+            gate_context = (
+                {
+                    "working_nodes": [
+                        {
+                            "id": "bus_1",
+                            "class": "bus",
+                            "review_status": "CONFIRMED",
+                            "bus_number": 1,
+                            "bus_number_status": "VERIFIED",
+                        }
+                    ]
+                }
+                if stage == "BUS_MAPPING"
+                else {"working_nodes": valid_nodes, "working_lines": valid_lines}
+            )
+            result = self.local_prov.answer_chat(
+                message=message,
+                document_id="doc_test",
+                stage=stage,
+                **gate_context,
+            )
+            self.assertEqual(result["action_mode"], "CONFIRM_REQUIRED", message)
+            self.assertIsNone(result["action_id"], message)
+
+    def test_phase4_voice_commands_route_to_button_actions(self):
+        cases = (
+            ("도면 불러올래", "HOME", "OPEN_DIAGRAM_PICKER"),
+            ("객체 검수 끝났어", "OBJECT_REVIEW", "COMPLETE_CURRENT_STAGE"),
+            ("다 봤어", "OBJECT_REVIEW", "COMPLETE_CURRENT_STAGE"),
+            ("다음", "OBJECT_REVIEW", "COMPLETE_CURRENT_STAGE"),
+            ("모선 다 봤어", "BUS_MAPPING", "COMPLETE_CURRENT_STAGE"),
+            ("다음", "BUS_MAPPING", "COMPLETE_CURRENT_STAGE"),
+            ("결선 다 봤어", "CONNECTION_REVIEW", "COMPLETE_CURRENT_STAGE"),
+            ("결선 끝났어", "CONNECTION_REVIEW", "COMPLETE_CURRENT_STAGE"),
+            ("다음", "CONNECTION_REVIEW", "COMPLETE_CURRENT_STAGE"),
+            ("엑셀 넣을게", "FINAL", "OPEN_EXCEL_PICKER"),
+            ("제원 가져와", "FINAL", "OPEN_EXCEL_PICKER"),
+            ("CAD로 넘어가", "FINAL", "HANDOFF_TO_CANVAS"),
+            ("캔버스로 이동해줘", "FINAL", "HANDOFF_TO_CANVAS"),
+            ("계산해줘", "POWERFLOW_READY", "RUN_POWER_FLOW"),
+            ("조류계산 해줘", "POWERFLOW_READY", "RUN_POWER_FLOW"),
+            ("결과 보여줘", "POWERFLOW_CONVERGED", "SHOW_POWER_FLOW_RESULTS"),
+        )
+        clean_nodes, clean_lines = _valid_final_gate_payload()
+        clean_bus = [
+            {
+                "id": "bus_1",
+                "class": "bus",
+                "review_status": "CONFIRMED",
+                "bus_number": 1,
+                "bus_number_status": "VERIFIED",
+            }
+        ]
+        for message, stage, expected_action in cases:
+            with self.subTest(message=message, stage=stage):
+                gate_context = {}
+                if stage == "BUS_MAPPING":
+                    gate_context["working_nodes"] = clean_bus
+                elif stage in ("OBJECT_REVIEW", "CONNECTION_REVIEW"):
+                    gate_context["working_nodes"] = clean_nodes
+                    gate_context["working_lines"] = clean_lines
+                result = self.local_prov.answer_chat(
+                    message=message,
+                    document_id="doc_test",
+                    stage=stage,
+                    **gate_context,
+                )
+                self.assertEqual(result["action_mode"], "EXECUTE", result)
+                self.assertEqual(result["action_id"], expected_action, result)
+
     def test_05_fabricated_target_filtering(self):
         """TEST 5: Fabricated target prevention (fabricated targets dropped)."""
         raw = {
