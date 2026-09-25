@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import '../models/review_models.dart';
+import '../models/object_visual_sweep.dart';
 
 class ReviewOverlayView extends StatefulWidget {
   final Uint8List? imageBytes;
@@ -12,7 +13,8 @@ class ReviewOverlayView extends StatefulWidget {
   final ReviewNodeItem? selectedNode;
   final String? currentObjectReviewId;
   final bool objectReviewTargetActive;
-  final Set<String> visitedObjectIds;
+  final ObjectCategory? activeObjectCategory;
+  final bool categoryReviewActive;
 
   /// Optional key attached to the selected node's rendered bounding box so a
   /// coaching companion can follow the actual on-screen target.
@@ -62,7 +64,8 @@ class ReviewOverlayView extends StatefulWidget {
     required this.selectedNode,
     this.currentObjectReviewId,
     this.objectReviewTargetActive = false,
-    this.visitedObjectIds = const {},
+    this.activeObjectCategory,
+    this.categoryReviewActive = false,
     this.focusTargetKey,
     required this.onSelectNode,
     this.onNodeOffsetChanged,
@@ -540,10 +543,13 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                         final bool isCurrentObjectTarget =
                             widget.objectReviewTargetActive &&
                             widget.currentObjectReviewId == node.id;
-                        final bool isVisitedObject =
-                            widget.objectReviewTargetActive &&
-                            widget.visitedObjectIds.contains(node.id) &&
-                            !isCurrentObjectTarget;
+                        final bool isCurrentCategoryObject =
+                            widget.categoryReviewActive &&
+                            widget.activeObjectCategory != null &&
+                            widget.activeObjectCategory!.matches(
+                              node.className,
+                            ) &&
+                            node.reviewStatus.toUpperCase() != 'REJECTED';
                         final bool isSelectedForNodeStyle =
                             widget.objectReviewTargetActive
                             ? isCurrentObjectTarget
@@ -574,7 +580,11 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                         final double guideW = renderW + 2 * padX;
                         final double guideH = renderH + 2 * padY;
 
-                        final double nodeDimOpacity = (widget.linesOnlyMode)
+                        final double nodeDimOpacity =
+                            widget.categoryReviewActive &&
+                                widget.activeObjectCategory != null
+                            ? (isCurrentCategoryObject ? 1.0 : 0.28)
+                            : (widget.linesOnlyMode)
                             ? (isBus ? 0.12 : 0.025)
                             : (widget.busFocusOnly && !isBus)
                             ? 0.02
@@ -767,12 +777,11 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                                   0.2 *
                                                                       pulseVal,
                                                             )
-                                                      : (isVisitedObject
-                                                            ? const Color(
-                                                                0xFFF59E0B,
-                                                              ).withValues(
-                                                                alpha: 0.08,
-                                                              )
+                                                      : (isCurrentCategoryObject
+                                                            ? classColor
+                                                                  .withValues(
+                                                                    alpha: 0.18,
+                                                                  )
                                                             : classColor
                                                                   .withValues(
                                                                     alpha: 0.08,
@@ -786,15 +795,11 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                         ? Colors.cyanAccent
                                                         : (isRejected
                                                               ? Colors.redAccent
-                                                              : (isVisitedObject
-                                                                    ? const Color(
-                                                                        0xFFF59E0B,
-                                                                      )
-                                                                    : classColor)))),
+                                                              : classColor))),
                                         width: isSelectedForNodeStyle
                                             ? (2.0 + 1.2 * pulseVal)
-                                            : (isVisitedObject
-                                                  ? 1.5
+                                            : (isCurrentCategoryObject
+                                                  ? 2.0
                                                   : (isViolation
                                                         ? (2.2 + 1.5 * pulseVal)
                                                         : (isEndpointOfSelectedLine

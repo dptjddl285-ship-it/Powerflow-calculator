@@ -2,95 +2,134 @@ import 'review_models.dart';
 
 enum ObjectReviewFlowStage {
   exceptionReview,
-  visualSweep,
-  waitingHumanComplete,
+  categorySweep,
+  finalAgentCheck,
   readyToComplete,
 }
 
 extension ObjectReviewFlowStageName on ObjectReviewFlowStage {
   String get wireName => switch (this) {
     ObjectReviewFlowStage.exceptionReview => 'EXCEPTION_REVIEW',
-    ObjectReviewFlowStage.visualSweep => 'VISUAL_SWEEP',
-    ObjectReviewFlowStage.waitingHumanComplete => 'WAITING_HUMAN_COMPLETE',
+    ObjectReviewFlowStage.categorySweep => 'CATEGORY_SWEEP',
+    ObjectReviewFlowStage.finalAgentCheck => 'FINAL_AGENT_CHECK',
     ObjectReviewFlowStage.readyToComplete => 'READY_TO_COMPLETE',
   };
 }
 
-/// Tracks the ordered visual pass without changing object classification.
-/// Suspicious objects count as visited only after an explicit resolution.
-class ObjectVisualSweepState {
-  final Set<String> visitedObjectIds = <String>{};
-  bool humanCompleteConfirmed = false;
-  bool hasResolvedExceptions = false;
+enum ObjectCategory { bus, load, generator, transformer }
 
-  List<ReviewNodeItem> orderedTargets(Iterable<ReviewNodeItem> nodes) {
-    final targets = nodes
-        .where((node) => node.reviewStatus.toUpperCase() != 'REJECTED')
-        .toList();
-    targets.sort((a, b) {
-      final yOrder = _coordinate(a, 1).compareTo(_coordinate(b, 1));
-      if (yOrder != 0) return yOrder;
-      final xOrder = _coordinate(a, 0).compareTo(_coordinate(b, 0));
-      if (xOrder != 0) return xOrder;
-      return a.id.compareTo(b.id);
-    });
-    return targets;
+extension ObjectCategoryDetails on ObjectCategory {
+  String get className => switch (this) {
+    ObjectCategory.bus => 'bus',
+    ObjectCategory.load => 'load',
+    ObjectCategory.generator => 'generator',
+    ObjectCategory.transformer => 'transformer',
+  };
+
+  String get label => switch (this) {
+    ObjectCategory.bus => 'Bus',
+    ObjectCategory.load => 'Load',
+    ObjectCategory.generator => 'Generator',
+    ObjectCategory.transformer => 'Transformer',
+  };
+
+  bool matches(String rawClassName) {
+    final value = rawClassName.toLowerCase();
+    return switch (this) {
+      ObjectCategory.bus => value == 'bus',
+      ObjectCategory.load => value.contains('load'),
+      ObjectCategory.generator => value.contains('gen'),
+      ObjectCategory.transformer => value.contains('trans'),
+    };
   }
 
-  List<ReviewNodeItem> unresolvedExceptions(Iterable<ReviewNodeItem> nodes) =>
-      orderedTargets(
-        nodes.where((node) => node.reviewStatus.toUpperCase() == 'SUSPICIOUS'),
-      );
-
-  ReviewNodeItem? currentTarget(
-    Iterable<ReviewNodeItem> nodes, {
-    bool hasOpenMissingCandidates = false,
-  }) {
-    final exceptions = unresolvedExceptions(nodes);
-    if (exceptions.isNotEmpty) return exceptions.first;
-    if (hasOpenMissingCandidates) return null;
-    for (final node in orderedTargets(nodes)) {
-      if (!visitedObjectIds.contains(node.id)) return node;
+  static ObjectCategory? fromClassName(String rawClassName) {
+    for (final category in ObjectCategory.values) {
+      if (category.matches(rawClassName)) return category;
     }
     return null;
   }
+}
 
-  bool visitCurrentTarget(
-    String objectId,
-    Iterable<ReviewNodeItem> nodes, {
-    bool hasOpenMissingCandidates = false,
-  }) {
-    final target = currentTarget(
-      nodes,
-      hasOpenMissingCandidates: hasOpenMissingCandidates,
-    );
-    if (target == null ||
-        target.id != objectId ||
-        target.reviewStatus.toUpperCase() == 'SUSPICIOUS') {
-      return false;
-    }
-    final changed = visitedObjectIds.add(objectId);
-    if (changed) humanCompleteConfirmed = false;
-    return changed;
+/// Tracks exception-by-object review followed by one explicit pass per class.
+/// Normal objects never enter an individual visited queue.
+class ObjectVisualSweepState {
+  final Set<ObjectCategory> reviewedCategories = <ObjectCategory>{};
+  ObjectCategory? activeCategory;
+  bool finalCheckInFlight = false;
+  bool finalCheckPassed = false;
+  bool hasResolvedExceptions = false;
+
+  List<ReviewNodeItem> unresolvedExceptions(Iterable<ReviewNodeItem> nodes) {
+    final exceptions = nodes
+        .where((node) => node.reviewStatus.toUpperCase() == 'SUSPICIOUS')
+        .toList();
+    exceptions.sort((a, b) {
+      final yOrder = _coordinate(a, 1).compareTo(_coordinate(b, 1));
+      if (yOrder != 0) return yOrder;
+      final xOrder = _coordinate(a, 0).compareTo(_coordinate(b, 0));
+      return xOrder != 0 ? xOrder : a.id.compareTo(b.id);
+    });
+    return exceptions;
   }
 
-  void markExceptionResolved(String objectId, {bool wasException = true}) {
-    visitedObjectIds.add(objectId);
-    hasResolvedExceptions = hasResolvedExceptions || wasException;
-    humanCompleteConfirmed = false;
+  ReviewNodeItem? currentException(Iterable<ReviewNodeItem> nodes) {
+    final exceptions = unresolvedExceptions(nodes);
+    return exceptions.isEmpty ? null : exceptions.first;
   }
 
-  bool isComplete(
+  bool selectCategory(
+    ObjectCategory category,
     Iterable<ReviewNodeItem> nodes, {
     bool hasOpenMissingCandidates = false,
   }) {
     if (hasOpenMissingCandidates || unresolvedExceptions(nodes).isNotEmpty) {
       return false;
     }
-    final targets = orderedTargets(nodes);
-    return targets.isNotEmpty &&
-        targets.every((node) => visitedObjectIds.contains(node.id));
+    activeCategory = category;
+    reviewedCategories.add(category);
+    return true;
   }
+
+  bool selectAdjacentCategory(
+    int delta,
+    Iterable<ReviewNodeItem> nodes, {
+    bool hasOpenMissingCandidates = false,
+  }) {
+    if (delta == 0 ||
+        hasOpenMissingCandidates ||
+        unresolvedExceptions(nodes).isNotEmpty) {
+      return false;
+    }
+
+    final currentIndex = activeCategory == null
+        ? -1
+        : ObjectCategory.values.indexOf(activeCategory!);
+    final nextIndex = activeCategory == null && delta > 0
+        ? 0
+        : currentIndex + delta;
+    if (nextIndex < 0 || nextIndex >= ObjectCategory.values.length) {
+      return false;
+    }
+    return selectCategory(
+      ObjectCategory.values[nextIndex],
+      nodes,
+      hasOpenMissingCandidates: hasOpenMissingCandidates,
+    );
+  }
+
+  void markExceptionResolved({bool wasException = true}) {
+    hasResolvedExceptions = hasResolvedExceptions || wasException;
+    invalidateFinalCheck();
+  }
+
+  bool isComplete(
+    Iterable<ReviewNodeItem> nodes, {
+    bool hasOpenMissingCandidates = false,
+  }) =>
+      !hasOpenMissingCandidates &&
+      unresolvedExceptions(nodes).isEmpty &&
+      reviewedCategories.length == ObjectCategory.values.length;
 
   ObjectReviewFlowStage stage(
     Iterable<ReviewNodeItem> nodes, {
@@ -99,14 +138,32 @@ class ObjectVisualSweepState {
     if (hasOpenMissingCandidates || unresolvedExceptions(nodes).isNotEmpty) {
       return ObjectReviewFlowStage.exceptionReview;
     }
-    if (currentTarget(nodes) != null) return ObjectReviewFlowStage.visualSweep;
-    if (!isComplete(nodes)) return ObjectReviewFlowStage.visualSweep;
-    return humanCompleteConfirmed
-        ? ObjectReviewFlowStage.readyToComplete
-        : ObjectReviewFlowStage.waitingHumanComplete;
+    if (reviewedCategories.length < ObjectCategory.values.length) {
+      return ObjectReviewFlowStage.categorySweep;
+    }
+    if (finalCheckPassed) return ObjectReviewFlowStage.readyToComplete;
+    return finalCheckInFlight
+        ? ObjectReviewFlowStage.finalAgentCheck
+        : ObjectReviewFlowStage.categorySweep;
   }
 
-  bool confirmHumanComplete(
+  bool beginFinalCheck(
+    Iterable<ReviewNodeItem> nodes, {
+    bool hasOpenMissingCandidates = false,
+  }) {
+    if (!isComplete(
+          nodes,
+          hasOpenMissingCandidates: hasOpenMissingCandidates,
+        ) ||
+        finalCheckPassed ||
+        finalCheckInFlight) {
+      return false;
+    }
+    finalCheckInFlight = true;
+    return true;
+  }
+
+  bool confirmFinalCheck(
     Iterable<ReviewNodeItem> nodes, {
     bool hasOpenMissingCandidates = false,
   }) {
@@ -114,21 +171,37 @@ class ObjectVisualSweepState {
       nodes,
       hasOpenMissingCandidates: hasOpenMissingCandidates,
     )) {
+      finalCheckInFlight = false;
       return false;
     }
-    humanCompleteConfirmed = true;
+    finalCheckInFlight = false;
+    finalCheckPassed = true;
     return true;
   }
 
-  int visitedCount(Iterable<ReviewNodeItem> nodes) => orderedTargets(
-    nodes,
-  ).where((node) => visitedObjectIds.contains(node.id)).length;
+  void failFinalCheck() {
+    finalCheckInFlight = false;
+    finalCheckPassed = false;
+  }
 
-  void invalidateHumanComplete() => humanCompleteConfirmed = false;
+  int get reviewedCategoryCount => reviewedCategories.length;
+
+  void invalidateCategory(ObjectCategory? category) {
+    if (category == null) return;
+    reviewedCategories.remove(category);
+    invalidateFinalCheck();
+  }
+
+  void invalidateFinalCheck() {
+    finalCheckInFlight = false;
+    finalCheckPassed = false;
+  }
 
   void reset() {
-    visitedObjectIds.clear();
-    humanCompleteConfirmed = false;
+    reviewedCategories.clear();
+    activeCategory = null;
+    finalCheckInFlight = false;
+    finalCheckPassed = false;
     hasResolvedExceptions = false;
   }
 

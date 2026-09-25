@@ -50,14 +50,6 @@ class ReviewCoachPolicy {
   static ReviewCoachDecision _objectDecision(
     PowerLensAssistantContext context,
   ) {
-    if (context.unresolvedMissingCandidates > 0) {
-      return const ReviewCoachDecision(
-        coachTarget: 'missing_candidates',
-        coachMessage: '도면에서 누락 후보를 확인하고 실제 설비인지 검토해주세요.',
-        coachMode: 'GUIDE',
-        highlightTarget: 'missing_candidates',
-      );
-    }
     final suspicious = context.workingNodes
         .where(
           (node) =>
@@ -77,10 +69,18 @@ class ReviewCoachPolicy {
       return ReviewCoachDecision(
         coachTarget: 'object_bbox',
         coachMessage:
-            'AI가 확인이 필요한 객체 ${suspicious.length > 0 ? suspicious.length : context.suspiciousObjects}개를 찾았습니다. 먼저 반짝이는 객체부터 확인해 주세요.',
+            'AI가 확인이 필요한 객체 ${suspicious.isNotEmpty ? suspicious.length : context.suspiciousObjects}개를 찾았습니다. 먼저 반짝이는 객체부터 확인해 주세요.',
         coachMode: 'GUIDE',
         highlightTarget: null,
         focusNodeId: context.objectVisualSweepCurrentId ?? id,
+      );
+    }
+    if (context.unresolvedMissingCandidates > 0) {
+      return const ReviewCoachDecision(
+        coachTarget: 'missing_candidates',
+        coachMessage: '도면에서 누락 후보를 확인하고 실제 설비인지 검토해주세요.',
+        coachMode: 'GUIDE',
+        highlightTarget: 'missing_candidates',
       );
     }
     if (!context.hasDiagram &&
@@ -93,10 +93,6 @@ class ReviewCoachPolicy {
         highlightTarget: 'home_upload',
       );
     }
-    final legacySummaryContext =
-        context.totalObjects == 0 &&
-        context.selectedNode == null &&
-        context.workingNodes.isNotEmpty;
     if (context.objectHumanCompletenessConfirmed &&
         context.currentBlockers.isNotEmpty) {
       return ReviewCoachDecision(
@@ -107,36 +103,72 @@ class ReviewCoachPolicy {
         highlightTarget: null,
       );
     }
-    if (context.objectHumanCompletenessConfirmed || legacySummaryContext) {
+    if (context.objectReviewStage == 'FINAL_AGENT_CHECK') {
+      return const ReviewCoachDecision(
+        coachTarget: 'object_final_check',
+        coachMessage: 'Lensy가 마지막 객체 상태를 확인하고 있어요. 잠시만 기다려 주세요.',
+        coachMode: 'PROCESSING',
+        highlightTarget: null,
+      );
+    }
+    if (context.objectReviewStage == 'READY_TO_COMPLETE' &&
+        context.objectHumanCompletenessConfirmed) {
       return const ReviewCoachDecision(
         coachTarget: 'object_gate',
-        coachMessage: '주요 객체 확인이 끝났어요. [객체 검수 완료]를 눌러 모선 번호 확인으로 넘어가세요.',
+        coachMessage: '객체 검수가 모두 완료됐습니다. 아래 [객체 검수 완료]를 눌러주세요.',
         coachMode: 'GATE',
         highlightTarget: 'object_gate',
       );
     }
-    if (context.objectReviewStage == 'WAITING_HUMAN_COMPLETE') {
-      return const ReviewCoachDecision(
-        coachTarget: 'object_human_confirmation',
-        coachMessage: '검출된 객체를 모두 확인했습니다. 문제가 없다면 “확인했어”라고 말씀해 주세요.',
-        coachMode: 'GUIDE',
-        highlightTarget: null,
-      );
-    }
-    final selectedId =
-        context.objectVisualSweepCurrentId ??
-        context.selectedNode?['id']?.toString();
-    final progress = context.objectVisualSweepTotal > 0
-        ? ' (${context.objectVisualSweepVisited + 1}/${context.objectVisualSweepTotal})'
-        : '';
+    final category = context.objectActiveCategory?.toLowerCase();
+    final message = switch (category) {
+      'bus' =>
+        'Bus 객체 ${_categoryCount(context, 'bus')}개를 표시했어요. 모선이 빠짐없이 표시됐는지 확인해 주세요. 확인했으면 오른쪽 화살표로 다음 종류를 보세요.',
+      'load' =>
+        '이번에는 Load 객체 ${_categoryCount(context, 'load')}개를 표시했어요. 부하 기호가 올바르게 검출됐는지 확인해주세요.',
+      'generator' =>
+        'Generator 객체 ${_categoryCount(context, 'generator')}개를 표시했어요. 발전기 기호를 확인해주세요.',
+      'transformer' =>
+        '마지막으로 Transformer 객체 ${_categoryCount(context, 'transformer')}개를 표시했어요. 변압기 기호를 확인해주세요.',
+      _ =>
+        'AI 1차 검수에서 의심 객체는 없습니다. 이제 객체 종류별로 전체 도면을 한 번 확인해 주세요. Bus부터 시작해서 Load, Generator, Transformer 순서로 볼 수 있어요.',
+    };
     return ReviewCoachDecision(
-      coachTarget: 'object_bbox',
-      coachMessage:
-          'AI 1차 검수에서는 의심 객체가 없습니다. 마지막으로 검출된 객체를 하나씩 빠르게 확인해 주세요.$progress',
+      coachTarget: 'object_category_bar',
+      coachMessage: message,
       coachMode: 'GUIDE',
-      highlightTarget: null,
-      focusNodeId: selectedId,
+      highlightTarget: 'object_category_bar',
     );
+  }
+
+  static int _categoryCount(
+    PowerLensAssistantContext context,
+    String className,
+  ) {
+    if (context.workingNodes.isEmpty) {
+      return className == 'bus' ? context.totalBuses : 0;
+    }
+    return context.workingNodes.where((node) {
+      final nodeClass =
+          (node['class'] ?? node['class_name'] ?? node['className'] ?? '')
+              .toString()
+              .toLowerCase();
+      final status =
+          (node['review_status'] ??
+                  node['reviewStatus'] ??
+                  node['status'] ??
+                  '')
+              .toString()
+              .toUpperCase();
+      if (status == 'REJECTED') return false;
+      return switch (className) {
+        'bus' => nodeClass == 'bus',
+        'load' => nodeClass.contains('load'),
+        'generator' => nodeClass.contains('gen'),
+        'transformer' => nodeClass.contains('trans'),
+        _ => false,
+      };
+    }).length;
   }
 
   static ReviewCoachDecision _busDecision(PowerLensAssistantContext context) {

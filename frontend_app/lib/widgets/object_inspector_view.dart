@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../models/review_models.dart';
 
@@ -54,6 +55,33 @@ class ObjectInspectorView extends StatelessWidget {
     }
   }
 
+  String _humanObjectTitle() {
+    final label = node.displayLabel?.trim();
+    if (label != null && label.isNotEmpty) {
+      final match = RegExp(
+        r'^(bus|load|gen(?:erator)?|transformer)[_-](\d+)$',
+        caseSensitive: false,
+      ).firstMatch(label);
+      if (match != null) {
+        final prefix = switch (match.group(1)!.toLowerCase()) {
+          'bus' => 'Bus',
+          'load' => '부하',
+          'gen' || 'generator' => '발전기',
+          _ => '변압기',
+        };
+        return '$prefix ${match.group(2)}';
+      }
+      return label.replaceAll('_', ' ');
+    }
+    if (node.busNumber != null) {
+      return '${classNameKo(node.className)} ${node.busNumber}';
+    }
+    if (node.displayNumber != null) {
+      return '${classNameKo(node.className)} ${node.displayNumber}';
+    }
+    return classNameKo(node.className);
+  }
+
   static String recommendedActionKo(String? action) {
     if (action == null) return '';
     switch (action.toLowerCase()) {
@@ -63,9 +91,111 @@ class ObjectInspectorView extends StatelessWidget {
         return '종류 변경 권장';
       case 'reject':
         return '객체 제외 권장';
+      case 'ask_user':
+        return '사람 확인 필요';
       default:
-        return action;
+        return '추가 검토 권장';
     }
+  }
+
+  Object? _evidenceValue(Iterable<String> keys) {
+    for (final key in keys) {
+      if (node.evidence.containsKey(key)) return node.evidence[key];
+      if (node.metadata.containsKey(key)) return node.metadata[key];
+    }
+    return null;
+  }
+
+  String? _humanSourceLabel() {
+    final source = node.source.toLowerCase();
+    if (source == 'cv_primary') return 'OpenCV 기반 1차 검출';
+    if (source.startsWith('cv')) return 'OpenCV 보조 검출';
+    if (source.contains('yolo')) return 'YOLO 기반 검출';
+    if (source.contains('human')) return '사용자 확인 또는 수정';
+    if (source == 'unknown' || source.isEmpty) return null;
+    return null;
+  }
+
+  String _formatPercent(num raw, {bool wholeNumber = false}) {
+    final value = raw.abs() <= 1 ? raw * 100 : raw;
+    if (wholeNumber) return '${value.floor()}%';
+    final formatted = value.toStringAsFixed(1);
+    return '${formatted.endsWith('.0') ? formatted.substring(0, formatted.length - 2) : formatted}%';
+  }
+
+  List<MapEntry<String, String>> _humanEvidenceRows() {
+    final rows = <MapEntry<String, String>>[
+      MapEntry('인식 객체', classNameKo(node.className)),
+    ];
+    if (node.confidence > 0) {
+      rows.add(
+        MapEntry(
+          '최종 인식 신뢰도',
+          _formatPercent(node.confidence, wholeNumber: true),
+        ),
+      );
+    }
+
+    final policy = _evidenceValue([
+      'policy_decision',
+    ])?.toString().toUpperCase();
+    final sourceLabel = _humanSourceLabel();
+    if (sourceLabel != null) {
+      final value =
+          node.source.toLowerCase() == 'cv_primary' && policy == 'ACCEPT'
+          ? '정상 검출'
+          : sourceLabel;
+      final label = node.source.toLowerCase().startsWith('cv')
+          ? 'OpenCV 검출'
+          : '검출 방식';
+      rows.add(MapEntry(label, value));
+    }
+
+    final yoloSupport = _evidenceValue(['yolo_support']);
+    if (yoloSupport is num && yoloSupport > 0) {
+      rows.add(MapEntry('YOLO 보조 확인', _formatPercent(yoloSupport)));
+    }
+
+    final geometry = _evidenceValue(['geometry_evidence']);
+    if (geometry is Map && geometry['has_cv_lead'] == true) {
+      rows.add(MapEntry('OpenCV 보조 확인', '검출 근거 있음'));
+    }
+
+    final policyLabel = switch (policy) {
+      'ACCEPT' => '정상 객체',
+      'REVIEW' => '추가 확인 필요',
+      'RESCUE' => '보완 검출 후보',
+      'REJECT' => '제외 대상',
+      _ => null,
+    };
+    if (policyLabel != null) {
+      rows.add(MapEntry('교차 검증 결과', policyLabel));
+    }
+
+    final suspicious = _evidenceValue(['is_suspicious']);
+    if (suspicious is bool ||
+        node.reviewStatus.toUpperCase() == 'SUSPICIOUS' ||
+        node.reviewStatus.toUpperCase() == 'DETECTED' ||
+        node.reviewStatus.toUpperCase() == 'CONFIRMED') {
+      final needsReview = suspicious is bool
+          ? suspicious
+          : node.reviewStatus.toUpperCase() == 'SUSPICIOUS';
+      rows.add(MapEntry('추가 확인 필요', needsReview ? '있음' : '없음'));
+    }
+    return rows;
+  }
+
+  String _humanReason(String reason) {
+    final value = reason.trim();
+    if (value.startsWith('Low confidence')) return 'AI 신뢰도가 기준보다 낮습니다.';
+    if (value.startsWith('Rescued candidate')) {
+      return '보완 검출 규칙으로 추가된 후보입니다.';
+    }
+    if (value.startsWith('Overlap with')) return '다른 객체와 검출 영역이 겹칩니다.';
+    if (RegExp(r'^[a-z0-9_]+$', caseSensitive: false).hasMatch(value)) {
+      return '기술 검토 사유가 기록되어 있습니다. 상세 내용은 기술 정보에서 확인할 수 있습니다.';
+    }
+    return value;
   }
 
   @override
@@ -89,33 +219,34 @@ class ObjectInspectorView extends StatelessWidget {
     }
 
     // Determine evidence text
-    final List<String> reasons = node.reviewReasons
-        .where((r) => r.trim().isNotEmpty)
+    final rawReasons = node.reviewReasons.isNotEmpty
+        ? node.reviewReasons
+        : (_evidenceValue(['suspicious_reasons', 'policy_reasons']) is List
+              ? (_evidenceValue(['suspicious_reasons', 'policy_reasons'])
+                        as List)
+                    .map((reason) => reason.toString())
+                    .toList()
+              : const <String>[]);
+    final reasons = rawReasons
+        .where((reason) => reason.trim().isNotEmpty)
+        .map(_humanReason)
         .toList();
     final String? explanation =
         (node.agentExplanation != null &&
             node.agentExplanation!.trim().isNotEmpty)
         ? node.agentExplanation
         : null;
-    String evidenceKey(String key) {
-      const labels = {
-        'detector': '검출기',
-        'model': '모델',
-        'validation': '검증',
-        'topology': '토폴로지',
-        'reason': '사유',
-        'source': '출처',
-        'confidence': '신뢰도',
-      };
-      return labels[key.toLowerCase()] ?? key;
-    }
-
-    final evidenceRows = <MapEntry<String, String>>[];
-    for (final entry in {...node.evidence, ...node.metadata}.entries) {
-      final value = entry.value;
-      if (value == null || value.toString().trim().isEmpty) continue;
-      evidenceRows.add(MapEntry(evidenceKey(entry.key), value.toString()));
-    }
+    final evidenceRows = _humanEvidenceRows();
+    final rawDetails = const JsonEncoder.withIndent('  ').convert({
+      'node_id': node.id,
+      'class': node.className,
+      'bbox': node.bbox,
+      'confidence': node.confidence,
+      'source': node.source,
+      'review_status': node.reviewStatus,
+      'evidence': node.evidence,
+      'metadata': node.metadata,
+    });
     return Column(
       key: const ValueKey('ObjectInspector'),
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -135,7 +266,7 @@ class ObjectInspectorView extends StatelessWidget {
                   const SizedBox(width: 6),
                   Flexible(
                     child: Text(
-                      node.effectiveDisplayLabel,
+                      _humanObjectTitle(),
                       style: const TextStyle(
                         color: Color(0xFF0F172A),
                         fontWeight: FontWeight.bold,
@@ -176,10 +307,6 @@ class ObjectInspectorView extends StatelessWidget {
           ],
         ),
         const SizedBox(height: 4),
-        Text(
-          "객체 종류: ${classNameKo(node.className)}  ·  AI 모델 인식 신뢰도: ${(node.confidence * 100).toInt()}%",
-          style: const TextStyle(color: Color(0xFF64748B), fontSize: 11),
-        ),
         const SizedBox(height: 12),
 
         // Evidence section
@@ -253,7 +380,7 @@ class ObjectInspectorView extends StatelessWidget {
                   ),
                   SizedBox(width: 6),
                   Text(
-                    "AI 판단 근거",
+                    "AI 판단 결과",
                     style: TextStyle(
                       color: Color(0xFF1D4ED8),
                       fontWeight: FontWeight.bold,
@@ -263,32 +390,41 @@ class ObjectInspectorView extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 8),
-              if (explanation != null)
-                Text(
-                  explanation,
-                  style: const TextStyle(
-                    color: Color(0xFF1E293B),
-                    fontSize: 12,
-                    height: 1.4,
-                  ),
-                )
-              else if (evidenceRows.isNotEmpty)
+              if (evidenceRows.isNotEmpty)
                 ...evidenceRows.map(
                   (entry) => Padding(
-                    padding: const EdgeInsets.only(bottom: 4),
-                    child: Text(
-                      '${entry.key}: ${entry.value}',
-                      style: const TextStyle(
-                        color: Color(0xFF334155),
-                        fontSize: 11,
-                        height: 1.35,
-                      ),
+                    padding: const EdgeInsets.only(bottom: 5),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(
+                          width: 132,
+                          child: Text(
+                            entry.key,
+                            style: const TextStyle(
+                              color: Color(0xFF64748B),
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        Expanded(
+                          child: Text(
+                            entry.value,
+                            style: const TextStyle(
+                              color: Color(0xFF1E293B),
+                              fontSize: 11.5,
+                              height: 1.35,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 )
               else
                 const Text(
-                  "추가 판정 근거가 기록되지 않았습니다.",
+                  "확인할 수 있는 구조화 검증 정보가 없습니다.",
                   style: TextStyle(
                     color: Color(0xFF94A3B8),
                     fontSize: 12,
@@ -296,6 +432,17 @@ class ObjectInspectorView extends StatelessWidget {
                     fontStyle: FontStyle.italic,
                   ),
                 ),
+              if (explanation != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  explanation,
+                  style: const TextStyle(
+                    color: Color(0xFF1E293B),
+                    fontSize: 12,
+                    height: 1.4,
+                  ),
+                ),
+              ],
               if (node.recommendedAction != null) ...[
                 const SizedBox(height: 8),
                 Text(
@@ -309,6 +456,36 @@ class ObjectInspectorView extends StatelessWidget {
               ],
             ],
           ),
+        ),
+        ExpansionTile(
+          key: const ValueKey('ObjectTechnicalDetails'),
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: const EdgeInsets.only(bottom: 8),
+          title: const Text(
+            '기술 상세 정보 펼치기',
+            style: TextStyle(color: Color(0xFF64748B), fontSize: 11),
+          ),
+          children: [
+            Container(
+              width: double.infinity,
+              constraints: const BoxConstraints(maxHeight: 220),
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF1F5F9),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: SingleChildScrollView(
+                child: SelectableText(
+                  rawDetails,
+                  style: const TextStyle(
+                    color: Color(0xFF334155),
+                    fontSize: 10,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 14),
 
@@ -444,7 +621,8 @@ class ObjectInspectorView extends StatelessWidget {
             ),
           ],
         ] else ...[
-          // Clean normal object: Information only, no approval required
+          // A selected normal object remains informational; category review
+          // still provides the final human visual pass for the whole drawing.
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
@@ -463,7 +641,7 @@ class ObjectInspectorView extends StatelessWidget {
                 SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    "AI가 확인한 정상 객체입니다. (승인 불필요)",
+                    "AI 검출에서 추가 검토 사유가 없습니다. 전체 도면은 종류별 검수에서 확인해주세요.",
                     style: TextStyle(
                       color: Color(0xFF15803D),
                       fontSize: 12,

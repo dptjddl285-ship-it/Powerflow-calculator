@@ -72,7 +72,10 @@ void main() {
             {'id': 'B1', 'status': 'CONFIRMED'},
           ],
         );
-        expect(service.determineTargetForContext(objDoneCtx), 'object_gate');
+        expect(
+          service.determineTargetForContext(objDoneCtx),
+          'object_category_bar',
+        );
 
         // Bus Mapping with unapproved bus
         const busCtx = PowerLensAssistantContext(
@@ -136,7 +139,10 @@ void main() {
             {'id': 'B1', 'status': 'CONFIRMED'},
           ],
         );
-        expect(service.determineTargetForContext(objUpperCtx), 'object_gate');
+        expect(
+          service.determineTargetForContext(objUpperCtx),
+          'object_category_bar',
+        );
 
         const busUpperCtx = PowerLensAssistantContext(
           currentScreen: 'REVIEW_PAGE',
@@ -166,7 +172,7 @@ void main() {
           'final_excel_upload',
         );
 
-        // Clean objects (0 suspicious, unreviewed nodes exist) guides user to batch approve
+        // Clean objects start the four-category visual review.
         const cleanObjCtx = PowerLensAssistantContext(
           currentScreen: 'REVIEW_PAGE',
           workflowStage: 'object_review',
@@ -177,7 +183,10 @@ void main() {
             {'id': 'G1', 'status': 'DETECTED'},
           ],
         );
-        expect(service.determineTargetForContext(cleanObjCtx), 'object_gate');
+        expect(
+          service.determineTargetForContext(cleanObjCtx),
+          'object_category_bar',
+        );
       },
     );
 
@@ -472,7 +481,7 @@ void main() {
     testWidgets(
       'PowerLensAIPanel shows dynamic action chip based on issue counts',
       (tester) async {
-        // 1. When 0 issues exist in object review: chip says '객체 검수 완료하기'
+        // 1. Clean Object Review offers category-review guidance.
         const zeroIssueCtx = PowerLensAssistantContext(
           currentScreen: 'REVIEW_PAGE',
           workflowStage: 'OBJECT_REVIEW',
@@ -492,7 +501,7 @@ void main() {
           ),
         );
 
-        expect(find.text('객체 검수 완료하기'), findsAtLeastNWidgets(1));
+        expect(find.text('객체 종류별 확인 방법'), findsAtLeastNWidgets(1));
         expect(find.textContaining('검토 필요 항목'), findsNothing);
 
         // 2. When issues exist in object review: chip says '검토 필요 항목'
@@ -856,7 +865,10 @@ void main() {
             {'id': 'B1', 'status': 'CONFIRMED'},
           ],
         );
-        expect(service.determineTargetForContext(resolvedCtx), 'object_gate');
+        expect(
+          service.determineTargetForContext(resolvedCtx),
+          'object_category_bar',
+        );
       },
     );
 
@@ -901,7 +913,7 @@ void main() {
     );
 
     test(
-      'AI companion provides explicit object completion guidance when objects are clean',
+      'AI companion guides clean Object Review to the category sweep',
       () async {
         const cleanCtx = PowerLensAssistantContext(
           currentScreen: 'REVIEW_PAGE',
@@ -916,12 +928,13 @@ void main() {
 
         await service.sendMessage('다 잘됐을경우 뭐 눌러?', cleanCtx);
         final lastMsg = service.messages.last.text;
-        expect(lastMsg, contains('객체 검수 완료'));
+        expect(lastMsg, contains('Bus부터 시작해서 Load'));
         expect(lastMsg.contains('정상 객체 일괄 승인'), isFalse);
 
-        // In Object Review V2, quick actions suggest object completion instead of batch approval
+        // The normal review action is category-by-category visual confirmation.
         final quickActions = service.messages.last.suggestedActions;
-        expect(quickActions, contains('객체 검수 완료하기'));
+        expect(quickActions, contains('객체 종류별 확인 방법'));
+        expect(quickActions, isNot(contains('확인했어')));
         expect(quickActions.contains('정상 객체 일괄 승인'), isFalse);
       },
     );
