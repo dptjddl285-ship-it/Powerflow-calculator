@@ -1082,6 +1082,7 @@ void main() {
                   onSelectNode: (_) {},
                   onSelectLine: (_) {},
                   busFocusOnly: true,
+                  busMappingReview: true,
                 ),
               ),
             ),
@@ -1104,6 +1105,20 @@ void main() {
           const Color(0xFF2563EB),
         );
         expect(decoration.boxShadow, isEmpty);
+        expect(
+          BusMappingLeaderStyle.shouldDrawLeader(
+            node: horizontalBus,
+            busMappingReview: true,
+          ),
+          isTrue,
+        );
+        expect(
+          BusMappingLeaderStyle.shouldDrawLeader(
+            node: horizontalBus,
+            busMappingReview: false,
+          ),
+          isFalse,
+        );
       },
     );
   });

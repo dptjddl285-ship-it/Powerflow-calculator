@@ -1,8 +1,10 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:circuit_solver/models/powerlens_assistant_context.dart';
 import 'package:circuit_solver/models/review_models.dart';
 import 'package:circuit_solver/services/powerlens_ai_service.dart';
+import 'package:circuit_solver/widgets/review_overlay.dart';
 
 ReviewLineItem makeConnectionLine({
   String id = 'line_1',
@@ -29,6 +31,44 @@ ReviewLineItem makeConnectionLine({
 }
 
 void main() {
+  test(
+    'Connection overlay palette separates line, Bus, and equipment roles',
+    () {
+      expect(ConnectionReviewVisualColors.currentLine, Colors.cyanAccent);
+      expect(
+        ConnectionReviewVisualColors.forEndpointClass('bus'),
+        ConnectionReviewVisualColors.busEndpoint,
+      );
+      expect(
+        ConnectionReviewVisualColors.forEndpointClass('generator'),
+        ConnectionReviewVisualColors.equipmentEndpoint,
+      );
+      expect(
+        ConnectionReviewVisualColors.forEndpointClass('transformer'),
+        ConnectionReviewVisualColors.equipmentEndpoint,
+      );
+      expect(ConnectionReviewVisualColors.visitedLineOpacity, lessThan(1));
+      expect(
+        ConnectionReviewVisualColors.visitedLineStrokeWidth,
+        lessThan(4.2),
+      );
+      expect(
+        ConnectionReviewVisualColors.isVisitedLine(
+          visitedBefore: true,
+          isCurrent: true,
+        ),
+        isFalse,
+      );
+      expect(
+        ConnectionReviewVisualColors.isVisitedLine(
+          visitedBefore: true,
+          isCurrent: false,
+        ),
+        isTrue,
+      );
+    },
+  );
+
   group('Connection Review V2 production evaluator', () {
     test(
       'AA-AE: production filters preserve empty results and clear stale selection',

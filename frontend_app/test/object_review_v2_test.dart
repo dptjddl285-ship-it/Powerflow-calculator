@@ -246,7 +246,7 @@ void main() {
         );
 
         final target = service.determineTargetForContext(suspiciousContext);
-        expect(target, 'object_match_button');
+        expect(target, 'object_review_card');
         expect(target, isNot('object_approve'));
         expect(target, isNot('object_batch_approve'));
 
@@ -810,6 +810,9 @@ void main() {
     testWidgets(
       'TEST I: ObjectInspectorView with SUSPICIOUS node shows [맞음] and [수정] action buttons',
       (tester) async {
+        final service = PowerLensAIService.instance;
+        service.clearHighlight();
+        service.setStageHighlightTarget('object_review_card');
         bool matched = false;
         bool editToggled = false;
 
@@ -851,14 +854,28 @@ void main() {
         final matchBtn = find.byKey(const ValueKey('ObjectMatchButton'));
         expect(matchBtn, findsOneWidget);
         expect(find.text("맞음"), findsOneWidget);
-        final matchButtonGlow = tester.widget<GlowingTargetWrapper>(
+        final inspectorCardGlow = tester.widget<GlowingTargetWrapper>(
           find.ancestor(
             of: matchBtn,
             matching: find.byType(GlowingTargetWrapper),
           ),
         );
-        expect(matchButtonGlow.targetId, 'object_match_button');
-        expect(matchButtonGlow.highlightColor, const Color(0xFF16A34A));
+        expect(inspectorCardGlow.targetId, 'object_review_card');
+        expect(inspectorCardGlow.highlightColor, const Color(0xFF16A34A));
+        for (final content in [
+          find.text('AI 판단 근거'),
+          find.text('검토 필요 사유:'),
+          find.byKey(const ValueKey('ObjectTechnicalDetails')),
+          find.byKey(const ValueKey('ObjectEditButton')),
+        ]) {
+          expect(
+            find.ancestor(
+              of: content,
+              matching: find.byType(GlowingTargetWrapper),
+            ),
+            findsOneWidget,
+          );
+        }
         await tester.tap(matchBtn);
         expect(matched, isTrue);
 
@@ -868,6 +885,7 @@ void main() {
         expect(find.text("수정"), findsOneWidget);
         await tester.tap(editBtn);
         expect(editToggled, isTrue);
+        service.clearHighlight();
       },
     );
 

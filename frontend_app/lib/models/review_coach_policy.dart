@@ -72,7 +72,7 @@ class ReviewCoachPolicy {
           suspicious.isNotEmpty ? suspicious.length : context.suspiciousObjects,
         ),
         coachMode: 'GUIDE',
-        highlightTarget: 'object_match_button',
+        highlightTarget: 'object_review_card',
         focusNodeId: context.objectVisualSweepCurrentId ?? id,
       );
     }
@@ -406,7 +406,8 @@ class ReviewCoachPolicy {
 class ObjectReviewGuidanceMessages {
   static String suspiciousObjects(int count) =>
       '검토가 필요한 객체 ${count}개를 찾았습니다.\n'
-      '현재 강조된 객체를 확인한 뒤 맞게 인식됐다면 [맞음], 아니라면 [수정]을 눌러주세요.';
+      '현재 강조된 검토 카드를 확인해 주세요.\n'
+      '인식 결과가 맞으면 [맞음], 잘못됐다면 [수정]을 눌러주세요.';
 
   static const String missingCandidates = '도면에서 누락 후보를 확인하고 실제 설비인지 검토해주세요.';
 

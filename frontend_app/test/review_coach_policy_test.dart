@@ -134,7 +134,7 @@ void main() {
 
         expect(decision.coachMessage, contains('[맞음]'));
         expect(decision.coachMessage, contains('[수정]'));
-        expect(decision.highlightTarget, 'object_match_button');
+        expect(decision.highlightTarget, 'object_review_card');
         expect(decision.focusNodeId, 'object_1');
       },
     );

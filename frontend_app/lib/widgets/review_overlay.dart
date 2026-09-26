@@ -4,6 +4,33 @@ import 'package:flutter/material.dart';
 import '../models/object_visual_sweep.dart';
 import '../models/review_models.dart';
 
+class BusMappingLeaderStyle {
+  static bool shouldDrawLeader({
+    required ReviewNodeItem node,
+    required bool busMappingReview,
+  }) => busMappingReview && node.className.trim().toLowerCase() == 'bus';
+
+  static double strokeWidth({required bool emphasized}) =>
+      emphasized ? 2.0 : 1.5;
+}
+
+class ConnectionReviewVisualColors {
+  static const currentLine = Colors.cyanAccent;
+  static const visitedLine = Color(0xFF67E8F9);
+  static const visitedLineOpacity = 0.78;
+  static const visitedLineStrokeWidth = 2.4;
+  static const busEndpoint = Color(0xFF2563EB);
+  static const equipmentEndpoint = Color(0xFFEAB308);
+
+  static bool isVisitedLine({
+    required bool visitedBefore,
+    required bool isCurrent,
+  }) => visitedBefore && !isCurrent;
+
+  static Color forEndpointClass(String className) =>
+      className.trim().toLowerCase() == 'bus' ? busEndpoint : equipmentEndpoint;
+}
+
 class ReviewOverlayView extends StatefulWidget {
   final Uint8List? imageBytes;
   final String? imageUrl;
@@ -345,6 +372,8 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                             scaleX: scaleX,
                             scaleY: scaleY,
                             busMappingReview: widget.busMappingReview,
+                            selectedBusId: widget.selectedNode?.id,
+                            currentCoachNodeId: widget.currentCoachNodeId,
                             lineFocusOnly: widget.lineFocusOnly,
                             linesOnlyMode: widget.linesOnlyMode,
                             selectedLineId: widget.selectedLine?.lineId,
@@ -358,6 +387,7 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                         Positioned.fill(
                           child: CustomPaint(
                             painter: _ConnectionOverlayPainter(
+                              nodes: widget.nodes,
                               lines: widget.lines,
                               selectedLine: widget.selectedLine,
                               scaleX: scaleX,
@@ -559,6 +589,8 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                         final Color selectionColor =
                             widget.objectReviewTargetActive
                             ? Colors.cyanAccent
+                            : node.className.trim().toLowerCase() == 'bus'
+                            ? ConnectionReviewVisualColors.busEndpoint
                             : Colors.yellowAccent;
                         final bool isEndpointOfSelectedLine =
                             lineEndpointNodeIds.contains(node.id);
@@ -566,6 +598,16 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                             .contains(node.id);
                         final bool isBus =
                             node.className.toLowerCase() == 'bus';
+                        final Color endpointHighlightColor =
+                            ConnectionReviewVisualColors.forEndpointClass(
+                              node.className,
+                            );
+                        final Color nodeLabelForeground =
+                            isBus && (isSelected || isEndpointOfSelectedLine)
+                            ? Colors.white
+                            : (isSelected || isEndpointOfSelectedLine)
+                            ? Colors.black87
+                            : Colors.white;
                         final bool isCurrentCategory =
                             widget.isObjectCategorySweepActive &&
                             widget.currentCategoryHighlightKey != null &&
@@ -884,14 +926,13 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                                       pulseVal,
                                                             )
                                                       : (isEndpointOfSelectedLine
-                                                            ? const Color(
-                                                                0xFFFFB300,
-                                                              ).withValues(
-                                                                alpha:
-                                                                    0.25 +
-                                                                    0.2 *
-                                                                        pulseVal,
-                                                              )
+                                                            ? endpointHighlightColor
+                                                                  .withValues(
+                                                                    alpha:
+                                                                        0.25 +
+                                                                        0.2 *
+                                                                            pulseVal,
+                                                                  )
                                                             : (isVisitedObject
                                                                   ? const Color(
                                                                       0xFFF59E0B,
@@ -932,9 +973,7 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                                     ? Colors
                                                                           .redAccent
                                                                     : (isEndpointOfSelectedLine
-                                                                          ? const Color(
-                                                                              0xFFFFB300,
-                                                                            )
+                                                                          ? endpointHighlightColor
                                                                           : (isRejected
                                                                                 ? Colors.redAccent
                                                                                 : (isVisitedObject
@@ -1009,10 +1048,8 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                       : (isEndpointOfSelectedLine
                                                             ? [
                                                                 BoxShadow(
-                                                                  color:
-                                                                      const Color(
-                                                                        0xFFFFB300,
-                                                                      ).withValues(
+                                                                  color: endpointHighlightColor
+                                                                      .withValues(
                                                                         alpha:
                                                                             0.6 +
                                                                             0.35 *
@@ -1082,9 +1119,7 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                     : (isViolation
                                                           ? Colors.redAccent
                                                           : (isEndpointOfSelectedLine
-                                                                ? const Color(
-                                                                    0xFFFFB300,
-                                                                  )
+                                                                ? endpointHighlightColor
                                                                 : classColor
                                                                       .withValues(
                                                                         alpha:
@@ -1131,9 +1166,7 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                               (isViolation
                                                                       ? Colors
                                                                             .redAccent
-                                                                      : const Color(
-                                                                          0xFFFFB300,
-                                                                        ))
+                                                                      : endpointHighlightColor)
                                                                   .withValues(
                                                                     alpha:
                                                                         0.6 *
@@ -1157,15 +1190,7 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                       isSelected)
                                                   ? 12.0
                                                   : 8.0,
-                                              color:
-                                                  (widget.busFocusOnly &&
-                                                      isBus &&
-                                                      isSelected)
-                                                  ? Colors.white
-                                                  : ((isSelected ||
-                                                            isEndpointOfSelectedLine)
-                                                        ? Colors.black87
-                                                        : Colors.white),
+                                              color: nodeLabelForeground,
                                             ),
                                             const SizedBox(width: 2.0),
                                             Text(
@@ -1175,15 +1200,7 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                   ? "Bus #${node.busNumber ?? node.id}"
                                                   : node.effectiveDisplayLabel,
                                               style: TextStyle(
-                                                color:
-                                                    (widget.busFocusOnly &&
-                                                        isBus &&
-                                                        isSelected)
-                                                    ? Colors.white
-                                                    : ((isSelected ||
-                                                              isEndpointOfSelectedLine)
-                                                          ? Colors.black87
-                                                          : Colors.white),
+                                                color: nodeLabelForeground,
                                                 fontSize:
                                                     (widget.busFocusOnly &&
                                                         isBus &&
@@ -1294,6 +1311,8 @@ class _LeaderLinePainter extends CustomPainter {
   final double scaleX;
   final double scaleY;
   final bool busMappingReview;
+  final String? selectedBusId;
+  final String? currentCoachNodeId;
   final bool lineFocusOnly;
   final bool linesOnlyMode;
   final String? selectedLineId;
@@ -1305,6 +1324,8 @@ class _LeaderLinePainter extends CustomPainter {
     required this.scaleX,
     required this.scaleY,
     this.busMappingReview = false,
+    this.selectedBusId,
+    this.currentCoachNodeId,
     this.lineFocusOnly = false,
     this.linesOnlyMode = false,
     this.selectedLineId,
@@ -1332,53 +1353,62 @@ class _LeaderLinePainter extends CustomPainter {
           !endpointNodeIds.contains(node.id)) {
         continue;
       }
-      if (node.labelOffsetDx.abs() > 6 || node.labelOffsetDy.abs() > 6) {
-        final bbox = node.bbox;
-        if (bbox.length < 4) continue;
-        final double cx = bbox[0] * scaleX;
-        final double cy = bbox[1] * scaleY;
-        final double renderLeft = (bbox[0] - bbox[2] / 2.0) * scaleX;
-        final double renderTop = (bbox[1] - bbox[3] / 2.0) * scaleY;
+      final bbox = node.bbox;
+      if (bbox.length < 4) continue;
+      final double cx = bbox[0] * scaleX;
+      final double cy = bbox[1] * scaleY;
+      final double renderLeft = (bbox[0] - bbox[2] / 2.0) * scaleX;
+      final double renderTop = (bbox[1] - bbox[3] / 2.0) * scaleY;
 
-        if (busMappingReview && isBus) {
-          const labelWidth = 112.0;
-          var labelX = renderLeft + bbox[2] * scaleX + 8 + node.labelOffsetDx;
-          final labelOnLeft = labelX + labelWidth > size.width;
-          if (labelOnLeft) {
-            labelX = renderLeft - labelWidth + node.labelOffsetDx;
-          }
-          labelX = labelX
-              .clamp(2.0, math.max(2.0, size.width - labelWidth))
-              .toDouble();
-          final labelY =
-              (renderTop + bbox[3] * scaleY / 2 - 8 + node.labelOffsetDy)
-                  .clamp(2.0, math.max(2.0, size.height - 22))
-                  .toDouble();
-          final labelAnchor = Offset(
-            labelOnLeft ? labelX + labelWidth : labelX,
-            labelY + 8,
-          );
-          _drawBusMappingLeader(canvas, Offset(cx, cy), labelAnchor);
-          canvas.drawCircle(
-            Offset(cx, cy),
-            3.2,
-            Paint()
-              ..color = Colors.white
-              ..style = PaintingStyle.fill,
-          );
-          canvas.drawCircle(
-            Offset(cx, cy),
-            2.0,
-            Paint()
-              ..color = Colors.black
-              ..style = PaintingStyle.fill,
-          );
-        } else {
-          final double labelX = renderLeft + node.labelOffsetDx + 12;
-          final double labelY = renderTop - 12 + node.labelOffsetDy;
-          canvas.drawCircle(Offset(cx, cy), 2.5, dotPaint);
-          canvas.drawLine(Offset(cx, cy), Offset(labelX, labelY), leaderPaint);
+      if (BusMappingLeaderStyle.shouldDrawLeader(
+        node: node,
+        busMappingReview: busMappingReview,
+      )) {
+        const labelWidth = 112.0;
+        final renderWidth = math.max(6.0, bbox[2] * scaleX);
+        final renderHeight = math.max(6.0, bbox[3] * scaleY);
+        var labelX = renderLeft + renderWidth + 8 + node.labelOffsetDx;
+        final labelOnLeft = labelX + labelWidth > size.width;
+        if (labelOnLeft) {
+          labelX = renderLeft - labelWidth + node.labelOffsetDx;
         }
+        labelX = labelX
+            .clamp(2.0, math.max(2.0, size.width - labelWidth))
+            .toDouble();
+        final labelY = (renderTop + renderHeight / 2 - 8 + node.labelOffsetDy)
+            .clamp(2.0, math.max(2.0, size.height - 22))
+            .toDouble();
+        final labelAnchor = Offset(
+          labelOnLeft ? labelX + labelWidth : labelX,
+          labelY + 8,
+        );
+        final emphasized =
+            node.id == selectedBusId || node.id == currentCoachNodeId;
+        _drawBusMappingLeader(
+          canvas,
+          Offset(cx, cy),
+          labelAnchor,
+          emphasized: emphasized,
+        );
+        canvas.drawCircle(
+          Offset(cx, cy),
+          3.2,
+          Paint()
+            ..color = Colors.white
+            ..style = PaintingStyle.fill,
+        );
+        canvas.drawCircle(
+          Offset(cx, cy),
+          2.0,
+          Paint()
+            ..color = Colors.black
+            ..style = PaintingStyle.fill,
+        );
+      } else if (node.labelOffsetDx.abs() > 6 || node.labelOffsetDy.abs() > 6) {
+        final double labelX = renderLeft + node.labelOffsetDx + 12;
+        final double labelY = renderTop - 12 + node.labelOffsetDy;
+        canvas.drawCircle(Offset(cx, cy), 2.5, dotPaint);
+        canvas.drawLine(Offset(cx, cy), Offset(labelX, labelY), leaderPaint);
       }
     }
 
@@ -1410,7 +1440,12 @@ class _LeaderLinePainter extends CustomPainter {
     }
   }
 
-  void _drawBusMappingLeader(Canvas canvas, Offset start, Offset end) {
+  void _drawBusMappingLeader(
+    Canvas canvas,
+    Offset start,
+    Offset end, {
+    required bool emphasized,
+  }) {
     final delta = end - start;
     final distance = delta.distance;
     if (distance == 0) return;
@@ -1434,14 +1469,17 @@ class _LeaderLinePainter extends CustomPainter {
       dashedPath,
       Paint()
         ..color = Colors.white.withValues(alpha: 0.9)
-        ..strokeWidth = 3.2
+        ..strokeWidth =
+            BusMappingLeaderStyle.strokeWidth(emphasized: emphasized) + 1.7
         ..style = PaintingStyle.stroke,
     );
     canvas.drawPath(
       dashedPath,
       Paint()
         ..color = Colors.black
-        ..strokeWidth = 1.5
+        ..strokeWidth = BusMappingLeaderStyle.strokeWidth(
+          emphasized: emphasized,
+        )
         ..strokeCap = StrokeCap.round
         ..style = PaintingStyle.stroke,
     );
@@ -1452,8 +1490,7 @@ class _LeaderLinePainter extends CustomPainter {
 }
 
 class _ConnectionOverlayPainter extends CustomPainter {
-  static const Color _endpointHighlightColor = Color(0xFFFFB300);
-
+  final List<ReviewNodeItem> nodes;
   final List<ReviewLineItem> lines;
   final ReviewLineItem? selectedLine;
   final double scaleX;
@@ -1463,6 +1500,7 @@ class _ConnectionOverlayPainter extends CustomPainter {
   final Set<String> visitedLineIds;
 
   _ConnectionOverlayPainter({
+    required this.nodes,
     required this.lines,
     required this.selectedLine,
     required this.scaleX,
@@ -1478,19 +1516,23 @@ class _ConnectionOverlayPainter extends CustomPainter {
       if (line.path.length < 2) continue;
 
       final bool isSelected = selectedLine?.lineId == line.lineId;
-      final bool isVisited =
-          visitedLineIds.contains(line.lineId) && !isSelected;
+      final bool isVisited = ConnectionReviewVisualColors.isVisitedLine(
+        visitedBefore: visitedLineIds.contains(line.lineId),
+        isCurrent: isSelected,
+      );
       final status = line.reviewStatus.toUpperCase();
 
       Color strokeColor;
       double strokeWidth;
 
       if (isSelected) {
-        strokeColor = Colors.cyanAccent;
+        strokeColor = ConnectionReviewVisualColors.currentLine;
         strokeWidth = 4.2 + pulseValue * 1.5;
       } else if (isVisited) {
-        strokeColor = const Color(0xFFF59E0B);
-        strokeWidth = 3.2;
+        strokeColor = ConnectionReviewVisualColors.visitedLine.withValues(
+          alpha: ConnectionReviewVisualColors.visitedLineOpacity,
+        );
+        strokeWidth = ConnectionReviewVisualColors.visitedLineStrokeWidth;
       } else if (ConnectionReviewGateEvaluator.lineHasCriticalIssue(line)) {
         strokeColor = const Color(0xFFDC2626); // critical electrical error
         strokeWidth = isSelected ? 4.2 + pulseValue * 1.5 : 3.2;
@@ -1523,7 +1565,9 @@ class _ConnectionOverlayPainter extends CustomPainter {
       // Glow effect for selected line with Pulse
       if (isSelected) {
         final glowPaint = Paint()
-          ..color = Colors.cyanAccent.withValues(alpha: 0.3 + pulseValue * 0.4)
+          ..color = ConnectionReviewVisualColors.currentLine.withValues(
+            alpha: 0.3 + pulseValue * 0.4,
+          )
           ..strokeWidth = 8.0 + pulseValue * 6.0
           ..style = PaintingStyle.stroke
           ..strokeCap = StrokeCap.round;
@@ -1558,10 +1602,14 @@ class _ConnectionOverlayPainter extends CustomPainter {
         final endpointRingPaint = Paint()
           ..color = Colors.white
           ..style = PaintingStyle.fill;
-        final endpointFillPaint = Paint()
-          ..color = _endpointHighlightColor
-          ..style = PaintingStyle.fill;
-        for (final point in [startPt, endPt]) {
+        for (final entry in [
+          (point: startPt, color: _endpointColor(line, 0)),
+          (point: endPt, color: _endpointColor(line, 1)),
+        ]) {
+          final endpointFillPaint = Paint()
+            ..color = entry.color
+            ..style = PaintingStyle.fill;
+          final point = entry.point;
           canvas.drawCircle(point, endpointRadius + 1.8, endpointRingPaint);
           canvas.drawCircle(point, endpointRadius, endpointFillPaint);
         }
@@ -1573,6 +1621,19 @@ class _ConnectionOverlayPainter extends CustomPainter {
         canvas.drawCircle(endPt, 3.0, dotPaint);
       }
     }
+  }
+
+  Color _endpointColor(ReviewLineItem line, int endpointIndex) {
+    if (endpointIndex >= line.connectedTo.length) {
+      return ConnectionReviewVisualColors.equipmentEndpoint;
+    }
+    final endpointId = line.connectedTo[endpointIndex];
+    for (final node in nodes) {
+      if (node.id == endpointId) {
+        return ConnectionReviewVisualColors.forEndpointClass(node.className);
+      }
+    }
+    return ConnectionReviewVisualColors.equipmentEndpoint;
   }
 
   @override

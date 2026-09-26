@@ -139,7 +139,7 @@ class ObjectInspectorView extends StatelessWidget {
       'source': node.source,
       ...technicalEvidence,
     };
-    return Column(
+    final inspectorCard = Column(
       key: const ValueKey('ObjectInspector'),
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -373,29 +373,20 @@ class ObjectInspectorView extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: GlowingTargetWrapper(
-                  targetId: 'object_match_button',
-                  guideLabel: '맞게 인식됐다면 [맞음]을 눌러주세요',
-                  highlightColor: const Color(0xFF16A34A),
-                  borderRadius: BorderRadius.circular(8),
-                  child: ElevatedButton.icon(
-                    key: const ValueKey('ObjectMatchButton'),
-                    onPressed: onMatch,
-                    icon: const Icon(Icons.check, size: 16),
-                    label: const Text(
-                      "맞음",
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
-                      ),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF16A34A),
-                      foregroundColor: Colors.white,
-                      minimumSize: const Size(0, 40),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
+                child: ElevatedButton.icon(
+                  key: const ValueKey('ObjectMatchButton'),
+                  onPressed: onMatch,
+                  icon: const Icon(Icons.check, size: 16),
+                  label: const Text(
+                    "맞음",
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF16A34A),
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size(0, 40),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
                     ),
                   ),
                 ),
@@ -599,6 +590,15 @@ class ObjectInspectorView extends StatelessWidget {
           ),
         ],
       ],
+    );
+    if (!isSuspicious) return inspectorCard;
+    return GlowingTargetWrapper(
+      targetId: 'object_review_card',
+      guideLabel: '현재 강조된 검토 카드를 확인해 주세요',
+      highlightColor: const Color(0xFF16A34A),
+      borderRadius: BorderRadius.circular(10),
+      padding: const EdgeInsets.all(3),
+      child: inspectorCard,
     );
   }
 }
