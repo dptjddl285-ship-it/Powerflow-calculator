@@ -826,24 +826,16 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   void _selectObjectReviewCategory(String categoryKey) {
     final key = categoryKey.trim().toLowerCase();
     if (!_objectSweep.reviewCategoryKeys(_workingNodes).contains(key)) return;
-    final categoryNodes = _workingNodes
-        .where(
-          (node) =>
-              node.className.trim().toLowerCase() == key &&
-              node.reviewStatus.toUpperCase() != 'REJECTED',
-        )
-        .toList();
     setState(() {
       _objectSweep.selectCategory(key, _workingNodes);
       _objFilterStatus = 'ALL';
       _objFilterClass = key;
       _nodePage = 0;
-      _selectedNode = categoryNodes.isEmpty ? null : categoryNodes.first;
+      _selectedNode = null;
       _stageGateMessage =
-          '${_objectCategoryLabel(key)} 객체를 다시 보여드릴게요.\n'
-          '필요한 부분을 다시 확인해주세요.\n'
-          '확인이 끝나면 [확인 후 다음 >]을 눌러 계속 진행할 수 있어요.';
+          ObjectReviewGuidanceMessages.revisit(_objectCategoryLabel(key));
     });
+    PowerLensAIService.instance.syncObjectReviewGuidance(_stageGateMessage!);
     _announceReviewStage();
   }
 
@@ -855,50 +847,29 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       _objFilterStatus = 'ALL';
       _objFilterClass = nextKey;
       _nodePage = 0;
-      final nextNodes = _workingNodes
-          .where(
-            (node) =>
-                node.className.trim().toLowerCase() == nextKey &&
-                node.reviewStatus.toUpperCase() != 'REJECTED',
-          )
-          .toList();
-      _selectedNode = nextNodes.isNotEmpty ? nextNodes.first : null;
+      _selectedNode = null;
 
       if (advanced) {
         final count = _objectCategoryCount(nextKey);
         if (currentKey == 'bus' && nextKey == 'load') {
-          _stageGateMessage =
-              'Bus 확인을 마쳤어요.\n'
-              '이번에는 Load ${count}개를 표시했습니다.\n'
-              '부하 심볼이 빠짐없이 잡혔는지 확인한 뒤\n'
-              '[확인 후 다음 >]을 눌러주세요.';
+          _stageGateMessage = ObjectReviewGuidanceMessages.load(count);
         } else if (currentKey == 'load' && nextKey == 'generator') {
-          _stageGateMessage =
-              'Load 확인을 마쳤어요.\n'
-              '이번에는 Generator ${count}개를 표시했습니다.\n'
-              '발전기 심볼이 올바르게 인식됐는지 확인한 뒤\n'
-              '[확인 후 다음 >]을 눌러주세요.';
+          _stageGateMessage = ObjectReviewGuidanceMessages.generator(count);
         } else if (currentKey == 'generator' && nextKey == 'transformer') {
-          _stageGateMessage =
-              'Generator 확인을 마쳤어요.\n'
-              '마지막으로 Transformer ${count}개를 표시했습니다.\n'
-              '변압기 심볼이 빠짐없이 잡혔는지 확인한 뒤\n'
-              '[확인 후 다음 >]을 눌러주세요.';
+          _stageGateMessage = ObjectReviewGuidanceMessages.transformer(count);
         } else {
           _stageGateMessage =
-              '${_objectCategoryLabel(currentKey)} 확인을 마쳤어요.\n'
-              '이번에는 ${_objectCategoryLabel(nextKey)} ${count}개를 표시했습니다.\n'
-              '심볼이 올바르게 인식됐는지 확인한 뒤\n'
-              '[확인 후 다음 >]을 눌러주세요.';
+              '${_objectCategoryLabel(currentKey)} 확인을 마쳤어요.\n\n'
+              '이번에는 ${_objectCategoryLabel(nextKey)} ${count}개를 확인해 주세요.\n'
+              '도면에서 ${_objectCategoryLabel(nextKey)}들이 빠지거나 잘못 인식된 곳이 없는지 살펴본 뒤,\n'
+              '오른쪽 위 파란색 [확인 후 다음 >] 버튼을 눌러주세요.';
         }
       } else {
         // Last category (Transformer) confirmed! 4/4 REVIEWED!
-        _stageGateMessage =
-            'Bus, Load, Generator, Transformer를 모두 확인했어요.\n'
-            '검사해 주셔서 감사합니다.\n'
-            '제가 마지막으로 상태를 한 번 더 확인할게요.';
+        _stageGateMessage = ObjectReviewGuidanceMessages.allReviewedBeforeCheck;
       }
     });
+    PowerLensAIService.instance.syncObjectReviewGuidance(_stageGateMessage!);
     _announceReviewStage();
 
     if (!_objectSweep.isAllCategoriesReviewed(_workingNodes)) {
@@ -920,20 +891,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _objFilterStatus = 'ALL';
         _objFilterClass = prevKey;
         _nodePage = 0;
-        final prevNodes = _workingNodes
-            .where(
-              (node) =>
-                  node.className.trim().toLowerCase() == prevKey &&
-                  node.reviewStatus.toUpperCase() != 'REJECTED',
-            )
-            .toList();
-        _selectedNode = prevNodes.isNotEmpty ? prevNodes.first : null;
+        _selectedNode = null;
         _stageGateMessage =
-            '${_objectCategoryLabel(prevKey)} 객체를 다시 보여드릴게요.\n'
-            '필요한 부분을 다시 확인해주세요.\n'
-            '확인이 끝나면 [확인 후 다음 >]을 눌러 계속 진행할 수 있어요.';
+            ObjectReviewGuidanceMessages.revisit(_objectCategoryLabel(prevKey));
       }
     });
+    if (_stageGateMessage != null) {
+      PowerLensAIService.instance.syncObjectReviewGuidance(_stageGateMessage!);
+    }
     _announceReviewStage();
   }
 
@@ -942,6 +907,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       _objFilterStatus = 'ALL';
       _objFilterClass = 'ALL';
       _nodePage = 0;
+      _selectedNode = null;
       _stageGateMessage = '전체 도면의 객체를 보고 있어요.';
     });
     _announceReviewStage();
@@ -961,10 +927,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         validNodes.isNotEmpty) {
       _objectSweep.confirmHumanComplete(_workingNodes);
       setState(() {
-        _stageGateMessage = '객체 검수가 모두 완료됐습니다.\n아래 [객체 검수 완료]를 눌러주세요.';
+        _stageGateMessage = ObjectReviewGuidanceMessages.allReviewedCompletePass;
       });
-      PowerLensAIService.instance
-          .setStageHighlightTarget('object_gate');
+      PowerLensAIService.instance.syncObjectReviewGuidance(
+        ObjectReviewGuidanceMessages.allReviewedCompletePass,
+      );
+      PowerLensAIService.instance.setStageHighlightTarget('object_gate');
     } else {
       setState(() {
         if (suspicious.isNotEmpty) {
@@ -1247,6 +1215,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       busModelUsed: _busModelUsed,
       busFallbackUsed: _busFallbackUsed,
       busFailureCode: _busHttpCode?.toString(),
+      objectWorkflowMessage: _getReviewStageSpeechBubbleText(),
     );
   }
 
@@ -1308,28 +1277,17 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         if (suspiciousNodes.isEmpty) {
           _objectSweep.selectCategory('bus', _workingNodes);
           _objFilterClass = 'bus';
-          final busNodes = _workingNodes
-              .where(
-                (n) =>
-                    n.className.trim().toLowerCase() == 'bus' &&
-                    n.reviewStatus.toUpperCase() != 'REJECTED',
-              )
-              .toList();
-          _selectedNode = busNodes.isNotEmpty ? busNodes.first : null;
+          _selectedNode = null;
           final busCount = _objectCategoryCount('bus');
-          _stageGateMessage =
-              'AI 1차 검사에서는 확인이 필요한 객체가 없어요.\n'
-              '이제 설비 종류별로 한 번씩 확인해 주세요.\n'
-              '먼저 Bus ${busCount}개를 청록색으로 표시했습니다.\n'
-              '빠지거나 잘못 인식된 Bus가 없는지 확인한 뒤\n'
-              '오른쪽의 [확인 후 다음 >]을 눌러주세요.';
+          _stageGateMessage = ObjectReviewGuidanceMessages.initialBus(busCount);
+          PowerLensAIService.instance.syncObjectReviewGuidance(_stageGateMessage!);
         }
         _isLoading = false;
 
         // Greeting and Proactive Summary in Chat
         final suspiciousCount = suspiciousNodes.length;
         final summaryMsg = suspiciousCount == 0
-            ? 'AI 1차 검수에서 확인이 필요한 객체는 모두 정리됐어요. 이제 객체 종류별로 전체 도면을 한 번 확인해 주세요. 먼저 Bus 객체부터 확인하겠습니다. 모선이 빠짐없이 잡혔는지 확인한 뒤 오른쪽 화살표를 눌러주세요.'
+            ? _stageGateMessage!
             : 'AI가 확인이 필요한 객체 ${suspiciousCount}개를 찾았습니다. 먼저 반짝이는 객체부터 확인해 주세요.';
 
         _chatHistory.add(

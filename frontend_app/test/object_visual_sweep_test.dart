@@ -260,5 +260,47 @@ void main() {
       expect(state.getCategoryState('transformer', nodes), ObjectCategoryState.reviewed);
       expect(state.isComplete(nodes), isTrue);
     });
+
+    test('ObjectReviewGuidanceMessages generates exact user-specified strings dynamically', () {
+      // 1. Initial Bus entry
+      final busMsg = ObjectReviewGuidanceMessages.initialBus(24);
+      expect(busMsg, contains('AI 1차 검사에서는 확인이 필요한 객체가 없어요.'));
+      expect(busMsg, contains('이제 설비 종류별로 한 번씩 확인해 주세요.'));
+      expect(busMsg, contains('먼저 Bus 24개를 청록색으로 표시했습니다.'));
+      expect(busMsg, contains('빠지거나 잘못 인식된 Bus가 없는지 확인한 뒤'));
+      expect(busMsg, contains('오른쪽의 [확인 후 다음 >]을 눌러주세요.'));
+
+      // 2. Transition to Load
+      final loadMsg = ObjectReviewGuidanceMessages.load(17);
+      expect(loadMsg, contains('Bus 확인을 마쳤어요.'));
+      expect(loadMsg, contains('이번에는 Load 17개를 표시했습니다.'));
+      expect(loadMsg, contains('부하 심볼이 빠짐없이 잡혔는지 확인한 뒤'));
+      expect(loadMsg, contains('[확인 후 다음 >]을 눌러주세요.'));
+
+      // 3. Transition to Generator
+      final genMsg = ObjectReviewGuidanceMessages.generator(10);
+      expect(genMsg, contains('Load 확인을 마쳤어요.'));
+      expect(genMsg, contains('이번에는 Generator 10개를 표시했습니다.'));
+      expect(genMsg, contains('발전기 심볼이 올바르게 인식됐는지 확인한 뒤'));
+      expect(genMsg, contains('[확인 후 다음 >]을 눌러주세요.'));
+
+      // 4. Transition to Transformer
+      final transMsg = ObjectReviewGuidanceMessages.transformer(3);
+      expect(transMsg, contains('Generator 확인을 마쳤어요.'));
+      expect(transMsg, contains('마지막으로 Transformer 3개를 표시했습니다.'));
+      expect(transMsg, contains('변압기 심볼이 빠짐없이 잡혔는지 확인한 뒤'));
+      expect(transMsg, contains('[확인 후 다음 >]을 눌러주세요.'));
+
+      // 5. Previous or Direct Badge Select
+      final revisitMsg = ObjectReviewGuidanceMessages.revisit('Bus');
+      expect(revisitMsg, contains('Bus 객체를 다시 보여드릴게요.'));
+      expect(revisitMsg, contains('필요한 부분을 다시 확인해주세요.'));
+      expect(revisitMsg, contains('확인이 끝나면 [확인 후 다음 >]을 눌러 계속 진행할 수 있어요.'));
+
+      // 6. Complete and Gate pass
+      expect(ObjectReviewGuidanceMessages.allReviewedBeforeCheck, contains('Bus, Load, Generator, Transformer를 모두 확인했어요.'));
+      expect(ObjectReviewGuidanceMessages.allReviewedCompletePass, contains('객체 검수가 모두 완료됐습니다.'));
+      expect(ObjectReviewGuidanceMessages.allReviewedCompletePass, contains('아래 [객체 검수 완료]를 눌러주세요.'));
+    });
   });
 }

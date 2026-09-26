@@ -49,12 +49,19 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
     super.initState();
     _panelOffset = _aiService.panelOffset;
     _aiService.refreshProviderStatus();
-    _aiService.ensureInitialGreeting(
-      widget.assistantContext.workflowStage,
-      widget.assistantContext,
-    );
-    _aiService.refreshContextGuidance(widget.assistantContext);
-    _aiService.notifyStageChange(widget.assistantContext);
+    if (widget.assistantContext.objectWorkflowMessage != null &&
+        widget.assistantContext.objectWorkflowMessage!.isNotEmpty) {
+      _aiService.syncObjectReviewGuidance(
+        widget.assistantContext.objectWorkflowMessage!,
+      );
+    } else {
+      _aiService.ensureInitialGreeting(
+        widget.assistantContext.workflowStage,
+        widget.assistantContext,
+      );
+      _aiService.refreshContextGuidance(widget.assistantContext);
+      _aiService.notifyStageChange(widget.assistantContext);
+    }
   }
 
   void _updatePanelOffset(
@@ -84,7 +91,13 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
   @override
   void didUpdateWidget(covariant PowerLensAIPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.assistantContext.workflowStage !=
+    if (widget.assistantContext.objectWorkflowMessage != null &&
+        widget.assistantContext.objectWorkflowMessage !=
+            oldWidget.assistantContext.objectWorkflowMessage) {
+      _aiService.syncObjectReviewGuidance(
+        widget.assistantContext.objectWorkflowMessage!,
+      );
+    } else if (oldWidget.assistantContext.workflowStage !=
         widget.assistantContext.workflowStage) {
       _aiService.notifyStageChange(widget.assistantContext);
     } else if (_readinessContextChanged(

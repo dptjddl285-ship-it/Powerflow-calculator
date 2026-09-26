@@ -55,10 +55,12 @@ class PowerLensAssistantContext {
   final String? busModelUsed;
   final bool busFallbackUsed;
   final String? busFailureCode;
+  final String? objectWorkflowMessage;
 
   const PowerLensAssistantContext({
     this.currentScreen = 'HOME',
     this.workflowStage = 'HOME',
+    this.objectWorkflowMessage,
     this.documentId = '',
     this.hasDiagram = false,
     this.analysisRunning = false,
@@ -143,11 +145,14 @@ class PowerLensAssistantContext {
     if (busModelUsed != null) 'bus_model_used': busModelUsed,
     'bus_fallback_used': busFallbackUsed,
     if (busFailureCode != null) 'bus_failure_code': busFailureCode,
+    if (objectWorkflowMessage != null)
+      'object_workflow_message': objectWorkflowMessage,
   };
 
   PowerLensAssistantContext copyWith({
     String? currentScreen,
     String? workflowStage,
+    String? objectWorkflowMessage,
     String? documentId,
     bool? hasDiagram,
     bool? analysisRunning,
@@ -191,6 +196,8 @@ class PowerLensAssistantContext {
     return PowerLensAssistantContext(
       currentScreen: currentScreen ?? this.currentScreen,
       workflowStage: workflowStage ?? this.workflowStage,
+      objectWorkflowMessage:
+          objectWorkflowMessage ?? this.objectWorkflowMessage,
       documentId: documentId ?? this.documentId,
       hasDiagram: hasDiagram ?? this.hasDiagram,
       analysisRunning: analysisRunning ?? this.analysisRunning,

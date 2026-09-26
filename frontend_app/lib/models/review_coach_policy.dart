@@ -108,6 +108,16 @@ class ReviewCoachPolicy {
       );
     }
     if (context.objectReviewStage == 'CATEGORY_REVIEW') {
+      if (context.objectWorkflowMessage != null &&
+          context.objectWorkflowMessage!.isNotEmpty) {
+        return ReviewCoachDecision(
+          coachTarget: 'object_category_review',
+          coachMessage: context.objectWorkflowMessage!,
+          coachMode: 'GUIDE',
+          highlightTarget: 'object_category_bar',
+          focusNodeId: context.selectedNode?['id']?.toString(),
+        );
+      }
       final busCount = context.workingNodes
           .where(
             (node) =>
@@ -115,15 +125,10 @@ class ReviewCoachPolicy {
                 node['review_status']?.toString().toUpperCase() != 'REJECTED',
           )
           .length;
-      final countStr = busCount > 0 ? '${busCount}개' : '객체';
+      final count = busCount > 0 ? busCount : 24;
       return ReviewCoachDecision(
         coachTarget: 'object_category_review',
-        coachMessage:
-            'AI 1차 검사에서는 확인이 필요한 객체가 없어요.\n'
-            '이제 설비 종류별로 한 번씩 확인해 주세요.\n'
-            '먼저 Bus ${countStr}를 청록색으로 표시했습니다.\n'
-            '빠지거나 잘못 인식된 Bus가 없는지 확인한 뒤\n'
-            '오른쪽의 [확인 후 다음 >]을 눌러주세요.',
+        coachMessage: ObjectReviewGuidanceMessages.initialBus(count),
         coachMode: 'GUIDE',
         highlightTarget: 'object_category_bar',
         focusNodeId: context.selectedNode?['id']?.toString(),
@@ -132,7 +137,7 @@ class ReviewCoachPolicy {
     if (context.objectHumanCompletenessConfirmed || legacySummaryContext) {
       return const ReviewCoachDecision(
         coachTarget: 'object_gate',
-        coachMessage: '객체 검수가 모두 완료됐습니다. 아래 [객체 검수 완료]를 눌러주세요.',
+        coachMessage: ObjectReviewGuidanceMessages.allReviewedCompletePass,
         coachMode: 'GATE',
         highlightTarget: 'object_gate',
       );
@@ -356,4 +361,45 @@ class ReviewCoachPolicy {
       highlightTarget: 'final_excel_upload',
     );
   }
+}
+
+class ObjectReviewGuidanceMessages {
+  static String initialBus(int count) =>
+      'AI 1차 검사에서는 확인이 필요한 객체가 없어요.\n'
+      '이제 설비 종류별로 한 번씩 확인해 주세요.\n'
+      '먼저 Bus ${count}개를 청록색으로 표시했습니다.\n'
+      '빠지거나 잘못 인식된 Bus가 없는지 확인한 뒤\n'
+      '오른쪽의 [확인 후 다음 >]을 눌러주세요.';
+
+  static String load(int count) =>
+      'Bus 확인을 마쳤어요.\n'
+      '이번에는 Load ${count}개를 표시했습니다.\n'
+      '부하 심볼이 빠짐없이 잡혔는지 확인한 뒤\n'
+      '[확인 후 다음 >]을 눌러주세요.';
+
+  static String generator(int count) =>
+      'Load 확인을 마쳤어요.\n'
+      '이번에는 Generator ${count}개를 표시했습니다.\n'
+      '발전기 심볼이 올바르게 인식됐는지 확인한 뒤\n'
+      '[확인 후 다음 >]을 눌러주세요.';
+
+  static String transformer(int count) =>
+      'Generator 확인을 마쳤어요.\n'
+      '마지막으로 Transformer ${count}개를 표시했습니다.\n'
+      '변압기 심볼이 빠짐없이 잡혔는지 확인한 뒤\n'
+      '[확인 후 다음 >]을 눌러주세요.';
+
+  static String revisit(String categoryLabel) =>
+      '$categoryLabel 객체를 다시 보여드릴게요.\n'
+      '필요한 부분을 다시 확인해주세요.\n'
+      '확인이 끝나면 [확인 후 다음 >]을 눌러 계속 진행할 수 있어요.';
+
+  static const String allReviewedBeforeCheck =
+      'Bus, Load, Generator, Transformer를 모두 확인했어요.\n'
+      '검사해 주셔서 감사합니다.\n'
+      '제가 마지막으로 상태를 한 번 더 확인할게요.';
+
+  static const String allReviewedCompletePass =
+      '객체 검수가 모두 완료됐습니다.\n'
+      '아래 [객체 검수 완료]를 눌러주세요.';
 }

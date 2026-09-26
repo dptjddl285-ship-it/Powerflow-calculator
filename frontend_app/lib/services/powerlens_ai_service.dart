@@ -901,10 +901,51 @@ class PowerLensAIService extends ChangeNotifier {
     return actions.isEmpty ? null : actions.first;
   }
 
+  void syncObjectReviewGuidance(String canonicalMessage, {String? target}) {
+    _upsertWorkflowGuidance(canonicalMessage, stage: 'OBJECT_REVIEW', target: target);
+    notifyListeners();
+  }
+
+  void _upsertWorkflowGuidance(
+    String message, {
+    String stage = 'OBJECT_REVIEW',
+    String? target,
+  }) {
+    if (message.trim().isEmpty) return;
+
+    final idx = _messages.indexWhere(
+      (m) =>
+          m.id == 'msg_welcome' ||
+          m.id.startsWith('workflow_guidance') ||
+          (m.sender == 'assistant' &&
+              (m.stage == stage || m.id.startsWith('proactive_'))),
+    );
+
+    final actions = _getQuickActions(stage, null);
+    final newItem = PowerLensAIMessageItem(
+      id: 'workflow_guidance_${stage.toLowerCase()}',
+      sender: 'assistant',
+      text: message,
+      stage: stage,
+      suggestedActions: actions,
+      agentStatus: _geminiStatus,
+    );
+
+    if (idx >= 0) {
+      _messages[idx] = newItem;
+    } else {
+      _messages.insert(0, newItem);
+    }
+  }
+
   void ensureInitialGreeting(
     String stage, [
     PowerLensAssistantContext? context,
   ]) {
+    if (stage == 'OBJECT_REVIEW' && context?.objectWorkflowMessage != null) {
+      syncObjectReviewGuidance(context!.objectWorkflowMessage!);
+      return;
+    }
     if (_messages.isNotEmpty) return;
 
     final greeting = _getStageGreeting(stage, context);
@@ -923,6 +964,10 @@ class PowerLensAIService extends ChangeNotifier {
   }
 
   Future<void> notifyStageChange(PowerLensAssistantContext context) async {
+    if (context.workflowStage == 'OBJECT_REVIEW' &&
+        context.objectWorkflowMessage != null) {
+      syncObjectReviewGuidance(context.objectWorkflowMessage!);
+    }
     await _requestProactiveForContext(context.workflowStage, context);
   }
 
@@ -930,6 +975,9 @@ class PowerLensAIService extends ChangeNotifier {
     String stage, [
     PowerLensAssistantContext? context,
   ]) async {
+    if (stage == 'OBJECT_REVIEW' && context?.objectWorkflowMessage != null) {
+      syncObjectReviewGuidance(context!.objectWorkflowMessage!);
+    }
     await _requestProactiveForContext(stage, context);
   }
 
@@ -937,6 +985,9 @@ class PowerLensAIService extends ChangeNotifier {
     String stage, [
     PowerLensAssistantContext? context,
   ]) async {
+    if (stage == 'OBJECT_REVIEW' && context?.objectWorkflowMessage != null) {
+      syncObjectReviewGuidance(context!.objectWorkflowMessage!);
+    }
     if (!shouldRequestProactive(context?.documentId, stage)) return;
     _lastNotifiedStage = stage;
 
@@ -2138,6 +2189,10 @@ class PowerLensAIService extends ChangeNotifier {
   }
 
   String _getStageGreeting(String stage, [PowerLensAssistantContext? ctx]) {
+    if (ctx?.objectWorkflowMessage != null &&
+        ctx!.objectWorkflowMessage!.isNotEmpty) {
+      return ctx.objectWorkflowMessage!;
+    }
     if (ctx?.currentScreen.toUpperCase() == 'REVIEW_PAGE') {
       return ReviewCoachPolicy.resolve(ctx!).coachMessage;
     }
