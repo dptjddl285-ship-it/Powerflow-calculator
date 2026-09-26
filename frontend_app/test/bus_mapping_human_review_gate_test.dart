@@ -226,7 +226,7 @@ void main() {
       '10. Opened Lensy canonical guidance renders at the conversation tail',
       (tester) async {
         const guidance =
-            '모선 번호 자동 판독을 마쳤어요. 24개의 모선 번호를 모두 읽었고, 현재 확인이 필요한 번호는 없습니다.\n\n제가 먼저 확인했으니, 이번에는 도면의 모선 번호가 실제 도면과 맞는지 직접 한 번 더 확인해 주세요.\n\n확인이 끝나면 저에게 \'다 했어\' 또는 \'확인했어\'라고 말씀하시거나, 아래에서 깜박이고 있는 [모선 검수 완료] 버튼을 눌러주세요.';
+            '모선 번호 자동 판독을 마쳤어요.\n24개의 모선 번호를 모두 확인했습니다.\n\n제가 먼저 확인했으니,\n이번에는 도면의 모선 번호가 실제 번호와 맞는지\n직접 한 번 더 눈으로 확인해 주세요.\n\n모두 맞다면 저에게\n\'다 했어\' 또는 \'확인했어\'라고 말씀하시거나,\n아래에서 깜박이고 있는\n[모선 검수 완료] 버튼을 눌러주세요.';
         service.syncBusMappingGuidance(guidance);
 
         const context = PowerLensAssistantContext(
@@ -274,7 +274,7 @@ void main() {
       '11. Closed bubble, opened tail, and help share exact guidance once',
       (tester) async {
         const guidance =
-            '모선 번호 자동 판독을 마쳤어요. 24개의 모선 번호를 모두 읽었고, 현재 확인이 필요한 번호는 없습니다.\n\n제가 먼저 확인했으니, 이번에는 도면의 모선 번호가 실제 도면과 맞는지 직접 한 번 더 확인해 주세요.\n\n확인이 끝나면 저에게 \'다 했어\' 또는 \'확인했어\'라고 말씀하시거나, 아래에서 깜박이고 있는 [모선 검수 완료] 버튼을 눌러주세요.';
+            '모선 번호 자동 판독을 마쳤어요.\n24개의 모선 번호를 모두 확인했습니다.\n\n제가 먼저 확인했으니,\n이번에는 도면의 모선 번호가 실제 번호와 맞는지\n직접 한 번 더 눈으로 확인해 주세요.\n\n모두 맞다면 저에게\n\'다 했어\' 또는 \'확인했어\'라고 말씀하시거나,\n아래에서 깜박이고 있는\n[모선 검수 완료] 버튼을 눌러주세요.';
         service.syncBusMappingGuidance(guidance);
 
         const context = PowerLensAssistantContext(
@@ -389,6 +389,82 @@ void main() {
       },
     );
 
+    testWidgets(
+      'ready Connection Review guidance renders as the final conversation bubble',
+      (tester) async {
+        final line = ReviewLineItem(
+          lineId: 'line_clean',
+          connectedTo: const ['bus_1', 'load_1'],
+          path: const [
+            [1, 1],
+            [2, 2],
+          ],
+          reviewStatus: 'DETECTED',
+        );
+        final context = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'CONNECTION_REVIEW',
+          connectionVisualSweepStarted: true,
+          connectionVisualSweepComplete: true,
+          selectedLine: line.toJson(),
+          workingLines: [line.toJson()],
+        );
+        final inProgressContext = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'CONNECTION_REVIEW',
+          connectionVisualSweepStarted: true,
+          selectedLine: line.toJson(),
+          workingLines: [line.toJson()],
+        );
+        expect(
+          ReviewCoachPolicy.resolve(context).coachTarget,
+          'connection_gate',
+        );
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: PowerLensAIPanel(
+                assistantContext: inProgressContext,
+                onClose: _noop,
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: PowerLensAIPanel(assistantContext: context, onClose: _noop),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        const expected =
+            '결선 검수를 모두 확인했어요.\n'
+            '현재 확인이 필요한 결선은 없습니다.\n\n'
+            '전체 네트워크를 마지막으로 한 번 확인해 주세요.\n\n'
+            '문제가 없다면 아래에서 깜박이고 있는\n'
+            '[결선 검수 완료] 버튼을 눌러\n'
+            '다음 단계로 이동해 주세요.';
+        final tail = find.byKey(
+          const ValueKey('currentWorkflowGuidanceBubble'),
+        );
+        expect(find.text('대화 기록'), findsOneWidget);
+        expect(find.text(expected), findsOneWidget);
+        expect(tail, findsOneWidget);
+        expect(
+          tester.widget<PowerLensAIMessageBubble>(tail).message.text,
+          expected,
+        );
+        expect(
+          find.descendant(of: find.byType(ListView), matching: tail),
+          findsOneWidget,
+        );
+      },
+    );
+
     test('Bus deterministic guidance bypasses proactive requests', () async {
       final originalBaseUrl = PowerLensAIService.baseUrl;
       var proactiveRequests = 0;
@@ -485,8 +561,8 @@ void main() {
             workingNodes: completeBuses.map((bus) => bus.toJson()).toList(),
           ),
         );
-        expect(complete.coachMessage, contains('24개의 모선 번호를 모두 읽었고'));
-        expect(complete.coachMessage, contains('직접 한 번 더 확인'));
+        expect(complete.coachMessage, contains('24개의 모선 번호를 모두 확인했습니다'));
+        expect(complete.coachMessage, contains('직접 한 번 더 눈으로 확인'));
         expect(complete.coachMessage, contains('[모선 검수 완료]'));
         expect(complete.coachMessage, isNot(contains('자동으로 읽고 있어요')));
         expect(complete.coachMessage, isNot(contains('잠시만 기다려')));

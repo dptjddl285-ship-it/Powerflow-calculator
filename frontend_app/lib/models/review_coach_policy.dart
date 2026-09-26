@@ -201,15 +201,18 @@ class ReviewCoachPolicy {
           : _firstBusIssue(nodes, issueIds);
       final total = activeBuses.length;
       final verified = activeBuses
-          .where((n) =>
-              n.busNumber != null &&
-              n.busNumberStatus?.toUpperCase() == 'VERIFIED' &&
-              !issueIds.contains(n.id))
+          .where(
+            (n) =>
+                n.busNumber != null &&
+                n.busNumberStatus?.toUpperCase() == 'VERIFIED' &&
+                !issueIds.contains(n.id),
+          )
           .length;
       final uncertain = issueIds.length;
       return ReviewCoachDecision(
         coachTarget: 'bus_bbox',
-        coachMessage: '자동 판독을 마쳤어요.\n'
+        coachMessage:
+            '자동 판독을 마쳤어요.\n'
             '전체 $total개 중 $verified개는 확인했고,\n'
             '$uncertain개는 번호를 명확하게 읽지 못했습니다.\n\n'
             '먼저 표시된 모선 번호를 직접 확인하거나 수정해 주세요.\n'
@@ -233,13 +236,13 @@ class ReviewCoachPolicy {
     final total = activeBuses.length;
     return ReviewCoachDecision(
       coachTarget: 'bus_gate',
-      coachMessage: '모선 번호 자동 판독을 마쳤어요.\n'
-          '$total개의 모선 번호를 모두 읽었고,\n'
-          '현재 확인이 필요한 번호는 없습니다.\n\n'
+      coachMessage:
+          '모선 번호 자동 판독을 마쳤어요.\n'
+          '$total개의 모선 번호를 모두 확인했습니다.\n\n'
           '제가 먼저 확인했으니,\n'
-          '이번에는 도면의 모선 번호가 실제 도면과 맞는지\n'
-          '직접 한 번 더 확인해 주세요.\n\n'
-          '확인이 끝나면 저에게\n'
+          '이번에는 도면의 모선 번호가 실제 번호와 맞는지\n'
+          '직접 한 번 더 눈으로 확인해 주세요.\n\n'
+          '모두 맞다면 저에게\n'
           '\'다 했어\' 또는 \'확인했어\'라고 말씀하시거나,\n'
           '아래에서 깜박이고 있는\n'
           '[모선 검수 완료] 버튼을 눌러주세요.',
@@ -323,15 +326,18 @@ class ReviewCoachPolicy {
         context.selectedLine?['id']?.toString();
     final selectedIndex = ConnectionVisualSweep.indexOf(ordered, selectedId);
     final index = selectedIndex < 0 ? 0 : selectedIndex;
-    final complete =
-        context.connectionVisualSweepComplete ||
-        (ordered.isNotEmpty && index == ordered.length - 1);
+    final complete = context.connectionVisualSweepComplete;
     final current = ordered.isEmpty ? null : ordered[index];
     if (complete) {
       return ReviewCoachDecision(
         coachTarget: 'connection_gate',
         coachMessage:
-            '최종 육안 확인 ${ordered.length} / ${ordered.length} 완료예요. 선로 상태는 변경되지 않았어요. 하단 [결선 검수 완료]를 눌러주세요.',
+            '결선 검수를 모두 확인했어요.\n'
+            '현재 확인이 필요한 결선은 없습니다.\n\n'
+            '전체 네트워크를 마지막으로 한 번 확인해 주세요.\n\n'
+            '문제가 없다면 아래에서 깜박이고 있는\n'
+            '[결선 검수 완료] 버튼을 눌러\n'
+            '다음 단계로 이동해 주세요.',
         coachMode: 'GATE',
         highlightTarget: 'connection_gate',
         focusLineId: current?.lineId,

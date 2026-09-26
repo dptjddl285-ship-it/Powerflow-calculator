@@ -76,6 +76,21 @@ void main() {
         )?.lineId,
         'line_top_left',
       );
+      final visited = <String>{};
+      ConnectionVisualSweep.updateVisitedLineIds(
+        visited,
+        currentLineId: 'line_top_left',
+        nextLineId: 'line_top_right',
+        delta: 1,
+      );
+      expect(visited, {'line_top_left'});
+      ConnectionVisualSweep.updateVisitedLineIds(
+        visited,
+        currentLineId: 'line_top_right',
+        nextLineId: 'line_top_left',
+        delta: -1,
+      );
+      expect(visited, isEmpty);
       expect(lines.every((line) => line.reviewStatus == 'DETECTED'), isTrue);
     });
 
@@ -114,6 +129,17 @@ void main() {
         expect(inProgress.coachMessage, contains('최종 육안 확인 2 / 3'));
         expect(inProgress.coachMessage, isNot(contains('승인')));
 
+        final lastLineSelected = ReviewCoachPolicy.resolve(
+          PowerLensAssistantContext(
+            currentScreen: 'REVIEW_PAGE',
+            workflowStage: 'CONNECTION_REVIEW',
+            workingLines: lines.map((line) => line.toJson()).toList(),
+            selectedLine: ordered.last.toJson(),
+            connectionVisualSweepStarted: true,
+          ),
+        );
+        expect(lastLineSelected.coachTarget, 'connection_line_focus');
+
         final complete = ReviewCoachPolicy.resolve(
           PowerLensAssistantContext(
             currentScreen: 'REVIEW_PAGE',
@@ -127,7 +153,15 @@ void main() {
         expect(complete.coachTarget, 'connection_gate');
         expect(complete.highlightTarget, 'connection_gate');
         expect(complete.coachMode, 'GATE');
-        expect(complete.coachMessage, contains('최종 육안 확인 3 / 3'));
+        expect(
+          complete.coachMessage,
+          '결선 검수를 모두 확인했어요.\n'
+          '현재 확인이 필요한 결선은 없습니다.\n\n'
+          '전체 네트워크를 마지막으로 한 번 확인해 주세요.\n\n'
+          '문제가 없다면 아래에서 깜박이고 있는\n'
+          '[결선 검수 완료] 버튼을 눌러\n'
+          '다음 단계로 이동해 주세요.',
+        );
       },
     );
 

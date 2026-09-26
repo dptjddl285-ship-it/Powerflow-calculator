@@ -694,13 +694,14 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
       builder: (context, _) {
         final messages = _aiService.messages;
         final stageUpper = widget.assistantContext.workflowStage.toUpperCase();
+        final guidance = _currentWorkflowGuidance(stageUpper);
         final isGuidedReview =
             stageUpper == 'OBJECT_REVIEW' ||
             stageUpper == 'BUS_MAPPING' ||
-            stageUpper == 'BUS_MAPPING_REVIEW';
+            stageUpper == 'BUS_MAPPING_REVIEW' ||
+            (stageUpper == 'CONNECTION_REVIEW' && guidance != null);
         final isBusMapping =
             stageUpper == 'BUS_MAPPING' || stageUpper == 'BUS_MAPPING_REVIEW';
-        final guidance = _currentWorkflowGuidance(stageUpper);
         final isProcessing =
             isBusMapping && widget.assistantContext.busMappingAiReading;
         final lastMessageAlreadyShowsGuidance =
@@ -779,6 +780,14 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
       return assistantContext.busMappingMessage ??
           _aiService.currentBusMappingGuidance ??
           ReviewCoachPolicy.resolve(assistantContext).coachMessage;
+    }
+    if (stageUpper == 'CONNECTION_REVIEW' &&
+        assistantContext.connectionVisualSweepComplete &&
+        assistantContext.currentBlockers.isEmpty) {
+      final decision = ReviewCoachPolicy.resolve(assistantContext);
+      if (decision.coachTarget == 'connection_gate') {
+        return decision.coachMessage;
+      }
     }
     return null;
   }

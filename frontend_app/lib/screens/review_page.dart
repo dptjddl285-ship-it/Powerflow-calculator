@@ -428,6 +428,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   String? _stageGateMessage;
 
   String get _reviewLensyPresenceState {
+    if (_currentPhase == ReviewPhase.busMappingReview) {
+      return _isLinkingBusNumbers ? 'thinking' : 'idle';
+    }
     if (_stageGateMessage != null || _isLoading) return 'thinking';
     if (_isFinalVerified) return 'success';
     return 'idle';
@@ -1779,9 +1782,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     if (next == null) return;
     final index = ConnectionVisualSweep.indexOf(ordered, next.lineId);
     setState(() {
-      if (_selectedLine != null && _selectedLine!.lineId != next.lineId) {
-        _visitedConnectionLineIds.add(_selectedLine!.lineId);
-      }
+      ConnectionVisualSweep.updateVisitedLineIds(
+        _visitedConnectionLineIds,
+        currentLineId: _selectedLine?.lineId,
+        nextLineId: next.lineId,
+        delta: delta,
+      );
       _lineFocusOnly = true;
       _connFilterStatus = ConnectionReviewGateEvaluator.filterAll;
       _showAllLinesList = false;
@@ -7997,7 +8003,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     } finally {
       if (mounted) {
         setState(() => _isLinkingBusNumbers = false);
-        _announceReviewStage();
+        _syncBusMappingGuidanceFromCurrentState();
       }
     }
   }

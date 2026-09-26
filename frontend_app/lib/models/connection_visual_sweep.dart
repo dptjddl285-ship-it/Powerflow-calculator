@@ -42,6 +42,20 @@ class ConnectionVisualSweep {
   static int indexOf(List<ReviewLineItem> orderedLines, String? lineId) =>
       orderedLines.indexWhere((line) => line.lineId == lineId);
 
+  static void updateVisitedLineIds(
+    Set<String> visitedLineIds, {
+    required String? currentLineId,
+    required String nextLineId,
+    required int delta,
+  }) {
+    if (currentLineId == null || currentLineId == nextLineId) return;
+    if (delta > 0) {
+      visitedLineIds.add(currentLineId);
+    } else if (delta < 0) {
+      visitedLineIds.remove(nextLineId);
+    }
+  }
+
   static double _minCoordinate(ReviewLineItem line, {required int axis}) {
     final values = line.path
         .where((point) => point.length > axis)
