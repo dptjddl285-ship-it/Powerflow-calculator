@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:circuit_solver/models/powerlens_assistant_context.dart';
+import 'package:circuit_solver/models/review_coach_policy.dart';
 import 'package:circuit_solver/models/review_models.dart';
 import 'package:circuit_solver/services/powerlens_ai_service.dart';
 import 'package:circuit_solver/widgets/bus_inspector_view.dart';
@@ -267,8 +268,8 @@ void main() {
               body: BusInspectorView(
                 node: unBus,
                 allBuses: [unBus],
-                onApplyNumber: (num) {
-                  appliedNum = num;
+                onApplyNumber: (busNum) {
+                  appliedNum = busNum;
                 },
               ),
             ),
@@ -940,6 +941,88 @@ void main() {
         expect(aliasReply, baseReply);
         expect(aliasReply, contains('확인이 필요한 모선'));
         expect(aliasReply, isNot(contains('모선 번호 확인이 완료')));
+      },
+    );
+
+    test(
+      'TEST AG: Context building and coach decision in BUS_MAPPING never recurses or throws StackOverflowError',
+      () {
+        const busContext = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'BUS_MAPPING',
+          totalBuses: 24,
+          unresolvedBusNumbers: 2,
+          objectWorkflowMessage: null,
+        );
+
+        expect(
+          () => ReviewCoachPolicy.resolve(busContext),
+          returnsNormally,
+        );
+        final decision = ReviewCoachPolicy.resolve(busContext);
+        expect(decision.coachMessage, isNotEmpty);
+      },
+    );
+
+    testWidgets(
+      'TEST AH: Bus in busFocusOnly mode renders tight blue outline with transparent fill and no glow',
+      (tester) async {
+        final Uint8List testImageBytes = Uint8List.fromList([
+          0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+          0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+          0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+          0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+          0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41,
+          0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+          0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+          0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+          0x42, 0x60, 0x82,
+        ]);
+        final horizontalBus = makeBus(
+          id: 'h_bus',
+          bbox: const [0.2, 0.3, 0.4, 0.05],
+        );
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SizedBox(
+                width: 500,
+                height: 500,
+                child: ReviewOverlayView(
+                  imageBytes: testImageBytes,
+                  imageUrl: '',
+                  originalWidth: 500,
+                  originalHeight: 500,
+                  nodes: [horizontalBus],
+                  lines: const [],
+                  guideNodeIds: const {},
+                  selectedNode: null,
+                  selectedLine: null,
+                  onSelectNode: (_) {},
+                  onSelectLine: (_) {},
+                  busFocusOnly: true,
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        final tightBoxFinder =
+            find.byKey(const ValueKey('ObjectTightBox_h_bus'));
+        expect(tightBoxFinder, findsOneWidget);
+
+        final container = tester.widget<Container>(tightBoxFinder);
+        final decoration = container.decoration as BoxDecoration;
+
+        expect(decoration.color, Colors.transparent);
+        expect(decoration.border, isNotNull);
+        expect(
+          (decoration.border! as Border).top.color,
+          const Color(0xFF2563EB),
+        );
+        expect(decoration.boxShadow, isEmpty);
       },
     );
   });

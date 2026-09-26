@@ -586,6 +586,9 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                         if (isCurrentCategory) {
                           padX = (renderW * 0.18).clamp(8.0, 14.0);
                           padY = (renderH * 0.18).clamp(8.0, 14.0);
+                        } else if (isBus) {
+                          padX = 0.0;
+                          padY = 0.0;
                         } else {
                           padX = math.max(6.0, renderW * 0.15);
                           padY = math.max(6.0, renderH * 0.15);
@@ -722,32 +725,34 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                       : Container(
                                           decoration: BoxDecoration(
                                             borderRadius:
-                                                BorderRadius.circular(5),
+                                                BorderRadius.circular(2),
                                             border: Border.all(
                                               color: (isCurrentObjectTarget ||
                                                       isCurrentBusGuide)
                                                   ? const Color(0xFF06B6D4)
                                                   : isBus
-                                                  ? const Color(0xFFA855F7)
+                                                  ? (widget.busFocusOnly
+                                                      ? Colors.transparent
+                                                      : const Color(0xFF2563EB))
                                                   : Colors.amberAccent,
-                                              width: 1.6,
+                                              width: isBus ? 1.4 : 1.6,
                                             ),
-                                            boxShadow: [
-                                              BoxShadow(
-                                                color: (isCurrentObjectTarget ||
-                                                            isCurrentBusGuide
-                                                        ? const Color(0xFF06B6D4)
-                                                        : isBus
-                                                        ? const Color(0xFFA855F7)
-                                                        : Colors.amberAccent)
-                                                    .withValues(
-                                                      alpha: 0.3 +
-                                                          0.35 * pulseVal,
+                                            boxShadow: isBus
+                                                ? const <BoxShadow>[]
+                                                : [
+                                                    BoxShadow(
+                                                      color: (isCurrentObjectTarget ||
+                                                                  isCurrentBusGuide
+                                                              ? const Color(0xFF06B6D4)
+                                                              : Colors.amberAccent)
+                                                          .withValues(
+                                                            alpha: 0.3 +
+                                                                0.35 * pulseVal,
+                                                          ),
+                                                      blurRadius: 6.0 + 4.0 * pulseVal,
+                                                      spreadRadius: 1.5,
                                                     ),
-                                                blurRadius: 6.0 + 4.0 * pulseVal,
-                                                spreadRadius: 1.5,
-                                              ),
-                                            ],
+                                                  ],
                                           ),
                                           child: Align(
                                             alignment: Alignment.topRight,
@@ -767,7 +772,7 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                     : isCurrentBusGuide
                                                     ? const Color(0xFF0891B2)
                                                     : isBus
-                                                    ? const Color(0xFF7E22CE)
+                                                    ? const Color(0xFF2563EB)
                                                     : const Color(0xFFD97706),
                                                 borderRadius:
                                                     BorderRadius.circular(2),
@@ -841,7 +846,8 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                     height: renderH,
                                     decoration: BoxDecoration(
                                       color: (widget.isObjectCategorySweepActive ||
-                                              isAllCategoryOverview)
+                                              isAllCategoryOverview ||
+                                              (widget.busFocusOnly && isBus))
                                           ? Colors.transparent
                                           : (isSelectedForNodeStyle
                                               ? selectionColor.withValues(
@@ -871,48 +877,53 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                                         alpha: 0.08,
                                                                       ))))),
                                       border: Border.all(
-                                        color: isAllCategoryOverview
-                                            ? classColor
-                                            : (widget.isObjectCategorySweepActive
-                                                ? (isCurrentCategory
-                                                      ? (isSelected
-                                                          ? objectCategoryColor(node.className)
-                                                          : objectCategoryColor(node.className).withValues(alpha: 0.4))
-                                                      : classColor.withValues(
-                                                          alpha: 0.25,
-                                                        ))
-                                                : (isSelectedForNodeStyle
-                                                      ? selectionColor
-                                                      : (isViolation
-                                                            ? Colors.redAccent
-                                                            : (isEndpointOfSelectedLine
-                                                                  ? Colors.cyanAccent
-                                                                  : (isRejected
-                                                                        ? Colors.redAccent
-                                                                        : (isVisitedObject
-                                                                              ? const Color(
-                                                                                  0xFFF59E0B,
-                                                                                )
-                                                                              : classColor)))))),
-                                        width: isAllCategoryOverview
-                                            ? 1.5
-                                            : (widget.isObjectCategorySweepActive
-                                                ? (isCurrentCategory ? 1.0 : 0.8)
-                                                : (isSelectedForNodeStyle
-                                                      ? (2.0 + 1.2 * pulseVal)
-                                                      : (isVisitedObject
-                                                            ? 1.5
-                                                            : (isViolation
-                                                                  ? (2.2 + 1.5 * pulseVal)
-                                                                  : (isEndpointOfSelectedLine
-                                                                        ? (2.2 +
-                                                                              1.8 *
-                                                                                  pulseVal)
-                                                                        : 1.2))))),
+                                        color: (widget.busFocusOnly && isBus)
+                                            ? const Color(0xFF2563EB)
+                                            : (isAllCategoryOverview
+                                                ? classColor
+                                                : (widget.isObjectCategorySweepActive
+                                                    ? (isCurrentCategory
+                                                          ? (isSelected
+                                                              ? objectCategoryColor(node.className)
+                                                              : objectCategoryColor(node.className).withValues(alpha: 0.4))
+                                                          : classColor.withValues(
+                                                              alpha: 0.25,
+                                                            ))
+                                                    : (isSelectedForNodeStyle
+                                                          ? selectionColor
+                                                          : (isViolation
+                                                                ? Colors.redAccent
+                                                                : (isEndpointOfSelectedLine
+                                                                      ? Colors.cyanAccent
+                                                                      : (isRejected
+                                                                            ? Colors.redAccent
+                                                                            : (isVisitedObject
+                                                                                  ? const Color(
+                                                                                      0xFFF59E0B,
+                                                                                    )
+                                                                                  : classColor))))))),
+                                        width: (widget.busFocusOnly && isBus)
+                                            ? (isSelected ? 2.2 : 1.4)
+                                            : (isAllCategoryOverview
+                                                ? 1.5
+                                                : (widget.isObjectCategorySweepActive
+                                                    ? (isCurrentCategory ? 1.0 : 0.8)
+                                                    : (isSelectedForNodeStyle
+                                                          ? (2.0 + 1.2 * pulseVal)
+                                                          : (isVisitedObject
+                                                                ? 1.5
+                                                                : (isViolation
+                                                                      ? (2.2 + 1.5 * pulseVal)
+                                                                      : (isEndpointOfSelectedLine
+                                                                            ? (2.2 +
+                                                                                  1.8 *
+                                                                                      pulseVal)
+                                                                            : 1.2)))))),
                                       ),
                                       borderRadius: BorderRadius.circular(2),
                                       boxShadow: (widget.isObjectCategorySweepActive ||
-                                              isAllCategoryOverview)
+                                              isAllCategoryOverview ||
+                                              (widget.busFocusOnly && isBus))
                                           ? const <BoxShadow>[]
                                           : (isSelectedForNodeStyle
                                               ? [
@@ -965,10 +976,10 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                             ]
                                                           : null))),
                                     ),
+                                  ),
                                 ),
                               ),
                             ),
-                             ),
 
                             // Draggable Label Badge
                             if (widget.showNodeLabels &&

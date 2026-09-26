@@ -1240,7 +1240,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       busModelUsed: _busModelUsed,
       busFallbackUsed: _busFallbackUsed,
       busFailureCode: _busHttpCode?.toString(),
-      objectWorkflowMessage: _getReviewStageSpeechBubbleText(),
+      objectWorkflowMessage: _objectWorkflowMessageForContext(),
     );
   }
 
@@ -1696,6 +1696,21 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       }
     }
     return loads;
+  }
+
+  String? _objectWorkflowMessageForContext() {
+    if (_currentPhase != ReviewPhase.objectReview) {
+      return null;
+    }
+    if (_stageGateMessage != null && _stageGateMessage!.isNotEmpty) {
+      return _stageGateMessage;
+    }
+    final canonical =
+        PowerLensAIService.instance.currentObjectWorkflowGuidance;
+    if (canonical != null && canonical.isNotEmpty) {
+      return canonical;
+    }
+    return null;
   }
 
   String _getReviewStageSpeechBubbleText() {
@@ -7812,7 +7827,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   int? _busHttpCode;
 
   Future<void> _triggerAiBusLinking() async {
-    if (_document == null) return;
+    if (_document == null || _isLinkingBusNumbers) return;
     var shouldAutoVerifyBusGate = false;
     setState(() {
       _isLinkingBusNumbers = true;
@@ -7880,13 +7895,16 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           _busModelUsed = feedback.modelUsed;
           _busFallbackUsed = feedback.fallbackUsed;
           _busHttpCode = feedback.httpCode;
-          for (
-            int i = 0;
-            i < rawNodes.length && i < _workingNodes.length;
-            i++
-          ) {
+          final byId = {
+            for (final node in _workingNodes) node.id: node,
+          };
+          for (int i = 0; i < rawNodes.length; i++) {
             final raw = rawNodes[i];
-            final node = _workingNodes[i];
+            if (raw is! Map) continue;
+            final id = raw['id']?.toString();
+            final node = (id != null ? byId[id] : null) ??
+                (i < _workingNodes.length ? _workingNodes[i] : null);
+            if (node == null) continue;
             node.busNumber = (raw['bus_number'] as num?)?.toInt();
             node.busNumberStatus =
                 raw['bus_number_status']?.toString() ?? 'UNCERTAIN';
