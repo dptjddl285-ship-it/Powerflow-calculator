@@ -68,5 +68,31 @@ void main() {
       expect(group.right, lessThanOrEqualTo(viewport.width - 12));
       expect(group.bottom, lessThanOrEqualTo(viewport.height - 12));
     });
+
+    test('moves Lensy away from bottom-right review gate actions', () {
+      const viewport = Size(929, 819);
+      const panelBounds = Size(620, 650);
+      const action = Rect.fromLTWH(600, 770, 320, 45);
+
+      for (final target in const [
+        'object_gate',
+        'bus_gate',
+        'connection_gate',
+      ]) {
+        final group = PowerLensCompanionLayout.groupRect(
+          viewport: viewport,
+          robotCenterAlignment:
+              PowerLensCompanionLayout.defaultAlignmentForCoachTarget(target),
+          panelOpen: false,
+          panelBounds: panelBounds,
+        );
+
+        expect(group.overlaps(action), isFalse, reason: target);
+      }
+      expect(
+        PowerLensCompanionLayout.defaultAlignmentForCoachTarget('object_gate'),
+        const Alignment(-0.86, 0.86),
+      );
+    });
   });
 }

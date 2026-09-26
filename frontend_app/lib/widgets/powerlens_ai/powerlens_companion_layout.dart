@@ -10,6 +10,11 @@ class PowerLensCompanionLayout {
   static const double closedGroupWidth = 420;
   static const double panelGap = 12;
 
+  static Alignment defaultAlignmentForCoachTarget(String target) =>
+      const {'object_gate', 'bus_gate', 'connection_gate'}.contains(target)
+      ? const Alignment(-0.86, 0.86)
+      : const Alignment(0.86, 0.86);
+
   static Rect groupRect({
     required Size viewport,
     required Alignment robotCenterAlignment,

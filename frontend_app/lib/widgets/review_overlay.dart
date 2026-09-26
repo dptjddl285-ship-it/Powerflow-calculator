@@ -2,7 +2,6 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import '../models/review_models.dart';
-import '../models/object_visual_sweep.dart';
 
 class ReviewOverlayView extends StatefulWidget {
   final Uint8List? imageBytes;
@@ -13,8 +12,7 @@ class ReviewOverlayView extends StatefulWidget {
   final ReviewNodeItem? selectedNode;
   final String? currentObjectReviewId;
   final bool objectReviewTargetActive;
-  final ObjectCategory? activeObjectCategory;
-  final bool categoryReviewActive;
+  final Set<String> visitedObjectIds;
 
   /// Optional key attached to the selected node's rendered bounding box so a
   /// coaching companion can follow the actual on-screen target.
@@ -53,6 +51,8 @@ class ReviewOverlayView extends StatefulWidget {
   final String? currentCoachNodeId;
   final List<MissingCandidateItem> openMissingCandidates;
   final Function(MissingCandidateItem)? onSelectCandidate;
+  final bool isObjectCategorySweepActive;
+  final String? currentCategoryHighlightKey;
 
   const ReviewOverlayView({
     super.key,
@@ -64,8 +64,7 @@ class ReviewOverlayView extends StatefulWidget {
     required this.selectedNode,
     this.currentObjectReviewId,
     this.objectReviewTargetActive = false,
-    this.activeObjectCategory,
-    this.categoryReviewActive = false,
+    this.visitedObjectIds = const {},
     this.focusTargetKey,
     required this.onSelectNode,
     this.onNodeOffsetChanged,
@@ -90,6 +89,8 @@ class ReviewOverlayView extends StatefulWidget {
     this.currentCoachNodeId,
     this.openMissingCandidates = const [],
     this.onSelectCandidate,
+    this.isObjectCategorySweepActive = false,
+    this.currentCategoryHighlightKey,
   });
 
   @override
@@ -543,13 +544,10 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                         final bool isCurrentObjectTarget =
                             widget.objectReviewTargetActive &&
                             widget.currentObjectReviewId == node.id;
-                        final bool isCurrentCategoryObject =
-                            widget.categoryReviewActive &&
-                            widget.activeObjectCategory != null &&
-                            widget.activeObjectCategory!.matches(
-                              node.className,
-                            ) &&
-                            node.reviewStatus.toUpperCase() != 'REJECTED';
+                        final bool isVisitedObject =
+                            widget.objectReviewTargetActive &&
+                            widget.visitedObjectIds.contains(node.id) &&
+                            !isCurrentObjectTarget;
                         final bool isSelectedForNodeStyle =
                             widget.objectReviewTargetActive
                             ? isCurrentObjectTarget
@@ -564,27 +562,46 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                             .contains(node.id);
                         final bool isBus =
                             node.className.toLowerCase() == 'bus';
-                        final bool isGuide = isBus
-                            ? (widget.guideNodeIds.contains(node.id) ||
-                                  isCurrentObjectTarget)
-                            : (widget.guideNodeIds.contains(node.id) ||
-                                  node.reviewStatus == 'SUSPICIOUS' ||
-                                  isCurrentObjectTarget);
+                        final bool isCurrentCategory =
+                            widget.isObjectCategorySweepActive &&
+                            widget.currentCategoryHighlightKey != null &&
+                            node.className.toLowerCase() ==
+                                widget.currentCategoryHighlightKey!.toLowerCase();
+                        final bool isGuide = isCurrentCategory ||
+                            (isBus
+                                ? (widget.guideNodeIds.contains(node.id) ||
+                                      isCurrentObjectTarget)
+                                : (widget.guideNodeIds.contains(node.id) ||
+                                      node.reviewStatus == 'SUSPICIOUS' ||
+                                      isCurrentObjectTarget));
                         final bool isCurrentBusGuide =
                             isBus && widget.currentCoachNodeId == node.id;
 
-                        final double padX = math.max(6.0, renderW * 0.15);
-                        final double padY = math.max(6.0, renderH * 0.15);
-                        final double guideLeft = renderLeft - padX;
-                        final double guideTop = renderTop - padY;
-                        final double guideW = renderW + 2 * padX;
-                        final double guideH = renderH + 2 * padY;
+                        double padX = math.max(6.0, renderW * 0.15);
+                        double padY = math.max(6.0, renderH * 0.15);
+                        if (isCurrentCategory) {
+                          padX = math.max(12.0, renderW * 0.35);
+                          padY = math.max(12.0, renderH * 0.35);
+                        }
+                        double guideLeft = renderLeft - padX;
+                        double guideTop = renderTop - padY;
+                        double guideW = renderW + 2 * padX;
+                        double guideH = renderH + 2 * padY;
 
-                        final double nodeDimOpacity =
-                            widget.categoryReviewActive &&
-                                widget.activeObjectCategory != null
-                            ? (isCurrentCategoryObject ? 1.0 : 0.28)
-                            : (widget.linesOnlyMode)
+                        if (isCurrentCategory) {
+                          if (guideW < 32.0) {
+                            final diff = 32.0 - guideW;
+                            guideW = 32.0;
+                            guideLeft -= diff / 2;
+                          }
+                          if (guideH < 32.0) {
+                            final diff = 32.0 - guideH;
+                            guideH = 32.0;
+                            guideTop -= diff / 2;
+                          }
+                        }
+
+                        final double nodeDimOpacity = (widget.linesOnlyMode)
                             ? (isBus ? 0.12 : 0.025)
                             : (widget.busFocusOnly && !isBus)
                             ? 0.02
@@ -593,6 +610,9 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                   !isEndpointOfSelectedLine &&
                                   !isSelected)
                             ? 0.0
+                            : (widget.isObjectCategorySweepActive &&
+                                  !isCurrentCategory)
+                            ? 0.38
                             : 1.0;
 
                         final Color classColor = _getClassColor(node.className);
@@ -607,9 +627,11 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                         double labelBaseY = isBusCallout
                             ? renderTop + renderH / 2 - 8 + node.labelOffsetDy
                             : renderTop -
-                                  (widget.busFocusOnly && isBus && isSelected
-                                      ? 20
-                                      : 12) +
+                                  (isCurrentCategory
+                                      ? (padY + 16)
+                                      : (widget.busFocusOnly && isBus && isSelected
+                                          ? 20
+                                          : 12)) +
                                   node.labelOffsetDy;
                         if (isBusCallout && labelBaseX + 112 > renderedW) {
                           labelBaseX = renderLeft - 112 + node.labelOffsetDx;
@@ -644,87 +666,130 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                   onTap: () => widget.onSelectNode(node),
                                   child: Container(
                                     decoration: BoxDecoration(
-                                      borderRadius: BorderRadius.circular(4),
+                                      borderRadius: BorderRadius.circular(5),
                                       border: Border.all(
-                                        color: isCurrentObjectTarget
-                                            ? const Color(0xFF06B6D4)
-                                            : isCurrentBusGuide
+                                        color: (isCurrentCategory ||
+                                                isCurrentObjectTarget ||
+                                                isCurrentBusGuide)
                                             ? const Color(0xFF06B6D4)
                                             : isBus
                                             ? const Color(0xFFA855F7)
                                             : Colors.amberAccent,
-                                        width: 1.6,
+                                        width: isCurrentCategory ? 2.2 : 1.6,
                                       ),
                                       boxShadow: [
                                         BoxShadow(
-                                          color:
-                                              (isCurrentObjectTarget ||
-                                                          isCurrentBusGuide
-                                                      ? const Color(0xFF06B6D4)
-                                                      : isBus
-                                                      ? const Color(0xFFA855F7)
-                                                      : Colors.amberAccent)
-                                                  .withValues(
-                                                    alpha: 0.3 + 0.3 * pulseVal,
-                                                  ),
-                                          blurRadius: 6.0 + 4.0 * pulseVal,
-                                          spreadRadius: 1.5,
+                                          color: (isCurrentCategory ||
+                                                      isCurrentObjectTarget ||
+                                                      isCurrentBusGuide
+                                                  ? const Color(0xFF06B6D4)
+                                                  : isBus
+                                                  ? const Color(0xFFA855F7)
+                                                  : Colors.amberAccent)
+                                              .withValues(
+                                                alpha: (isCurrentCategory
+                                                        ? 0.35
+                                                        : 0.3) +
+                                                    0.35 * pulseVal,
+                                              ),
+                                          blurRadius: (isCurrentCategory
+                                                  ? 8.0
+                                                  : 6.0) +
+                                              (isCurrentCategory ? 6.0 : 4.0) *
+                                                  pulseVal,
+                                          spreadRadius: (isCurrentCategory
+                                                  ? 2.0
+                                                  : 1.5) +
+                                              (isCurrentCategory
+                                                  ? 1.0 * pulseVal
+                                                  : 0),
                                         ),
                                       ],
                                     ),
-                                    child: Align(
-                                      alignment: Alignment.topRight,
-                                      child: Container(
-                                        margin: const EdgeInsets.only(
-                                          top: 1,
-                                          right: 2,
-                                        ),
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 3,
-                                          vertical: 0.5,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: isCurrentObjectTarget
-                                              ? const Color(0xFF0891B2)
-                                              : isCurrentBusGuide
-                                              ? const Color(0xFF0891B2)
-                                              : isBus
-                                              ? const Color(0xFF7E22CE)
-                                              : const Color(0xFFD97706),
-                                          borderRadius: BorderRadius.circular(
-                                            2,
-                                          ),
-                                        ),
-                                        child: FittedBox(
-                                          fit: BoxFit.scaleDown,
-                                          child: Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              const Icon(
-                                                Icons.help_outline,
-                                                size: 7.5,
-                                                color: Colors.white,
-                                              ),
-                                              const SizedBox(width: 1.5),
-                                              Text(
-                                                isCurrentObjectTarget
-                                                    ? '현재 확인할 객체'
-                                                    : isCurrentBusGuide
-                                                    ? 'Lensy가 가리키는 모선'
-                                                    : isBus
-                                                    ? '번호 확인 필요'
-                                                    : '확인 필요',
-                                                style: const TextStyle(
-                                                  color: Colors.white,
-                                                  fontSize: 6.8,
-                                                  fontWeight: FontWeight.bold,
+                                    child: isCurrentCategory
+                                        ? Align(
+                                            alignment: Alignment.topLeft,
+                                            child: Transform.translate(
+                                              offset: const Offset(2, -13),
+                                              child: Container(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      horizontal: 4,
+                                                      vertical: 1,
+                                                    ),
+                                                decoration: BoxDecoration(
+                                                  color: const Color(0xFF0891B2),
+                                                  borderRadius:
+                                                      BorderRadius.circular(3),
+                                                ),
+                                                child: Text(
+                                                  _categoryLabel(
+                                                    node.className,
+                                                  ),
+                                                  style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontSize: 7.2,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
                                                 ),
                                               ),
-                                            ],
+                                            ),
+                                          )
+                                        : Align(
+                                            alignment: Alignment.topRight,
+                                            child: Container(
+                                              margin: const EdgeInsets.only(
+                                                top: 1,
+                                                right: 2,
+                                              ),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 3,
+                                                    vertical: 0.5,
+                                                  ),
+                                              decoration: BoxDecoration(
+                                                color: isCurrentObjectTarget
+                                                    ? const Color(0xFF0891B2)
+                                                    : isCurrentBusGuide
+                                                    ? const Color(0xFF0891B2)
+                                                    : isBus
+                                                    ? const Color(0xFF7E22CE)
+                                                    : const Color(0xFFD97706),
+                                                borderRadius:
+                                                    BorderRadius.circular(2),
+                                              ),
+                                              child: FittedBox(
+                                                fit: BoxFit.scaleDown,
+                                                child: Row(
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    const Icon(
+                                                      Icons.help_outline,
+                                                      size: 7.5,
+                                                      color: Colors.white,
+                                                    ),
+                                                    const SizedBox(width: 1.5),
+                                                    Text(
+                                                      isCurrentObjectTarget
+                                                          ? '현재 확인할 객체'
+                                                          : isCurrentBusGuide
+                                                          ? 'Lensy가 가리키는 모선'
+                                                          : isBus
+                                                          ? '번호 확인 필요'
+                                                          : '확인 필요',
+                                                      style: const TextStyle(
+                                                        color: Colors.white,
+                                                        fontSize: 6.8,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
                                           ),
-                                        ),
-                                      ),
-                                    ),
                                   ),
                                 ),
                               ),
@@ -761,9 +826,11 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                     height: renderH,
                                     decoration: BoxDecoration(
                                       color: isSelectedForNodeStyle
-                                          ? selectionColor.withValues(
-                                              alpha: 0.2 + 0.15 * pulseVal,
-                                            )
+                                          ? (widget.isObjectCategorySweepActive
+                                              ? Colors.transparent
+                                              : selectionColor.withValues(
+                                                  alpha: 0.2 + 0.15 * pulseVal,
+                                                ))
                                           : (isViolation
                                                 ? Colors.redAccent.withValues(
                                                     alpha:
@@ -777,11 +844,12 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                                   0.2 *
                                                                       pulseVal,
                                                             )
-                                                      : (isCurrentCategoryObject
-                                                            ? classColor
-                                                                  .withValues(
-                                                                    alpha: 0.18,
-                                                                  )
+                                                      : (isVisitedObject
+                                                            ? const Color(
+                                                                0xFFF59E0B,
+                                                              ).withValues(
+                                                                alpha: 0.08,
+                                                              )
                                                             : classColor
                                                                   .withValues(
                                                                     alpha: 0.08,
@@ -795,11 +863,15 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                         ? Colors.cyanAccent
                                                         : (isRejected
                                                               ? Colors.redAccent
-                                                              : classColor))),
+                                                              : (isVisitedObject
+                                                                    ? const Color(
+                                                                        0xFFF59E0B,
+                                                                      )
+                                                                    : classColor)))),
                                         width: isSelectedForNodeStyle
                                             ? (2.0 + 1.2 * pulseVal)
-                                            : (isCurrentCategoryObject
-                                                  ? 2.0
+                                            : (isVisitedObject
+                                                  ? 1.5
                                                   : (isViolation
                                                         ? (2.2 + 1.5 * pulseVal)
                                                         : (isEndpointOfSelectedLine
@@ -1114,6 +1186,21 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
         );
       },
     );
+  }
+
+  String _categoryLabel(String className) {
+    switch (className.toLowerCase()) {
+      case 'bus':
+        return 'Bus';
+      case 'load':
+        return 'Load';
+      case 'generator':
+        return 'Gen';
+      case 'transformer':
+        return 'Trans';
+      default:
+        return className.toUpperCase();
+    }
   }
 }
 

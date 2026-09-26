@@ -332,23 +332,35 @@ void main() {
     );
 
     test(
-      'a generic acknowledgement is not a shortcut past category review',
-      () {
-        const context = PowerLensAssistantContext(
-          currentScreen: 'REVIEW_PAGE',
-          workflowStage: 'OBJECT_REVIEW',
-          hasDiagram: true,
-          totalObjects: 54,
-          objectReviewStage: 'CATEGORY_SWEEP',
-          objectVisualSweepVisited: 0,
-          objectVisualSweepTotal: 4,
-        );
+      'object completeness confirmation dispatches locally before backend routing',
+      () async {
+        final dispatched = <PowerLensAppAction>[];
+        Future<bool> handler(
+          PowerLensAppAction action,
+          Map<String, dynamic>? params,
+        ) async {
+          dispatched.add(action);
+          return true;
+        }
 
-        expect(service.resolveIntentActions('확인했어', context), isEmpty);
-        expect(
-          service.determineTargetForContext(context),
-          'object_category_bar',
-        );
+        service.registerActionHandler(handler);
+        try {
+          const context = PowerLensAssistantContext(
+            currentScreen: 'REVIEW_PAGE',
+            workflowStage: 'OBJECT_REVIEW',
+            objectReviewStage: 'WAITING_HUMAN_COMPLETE',
+            objectVisualSweepVisited: 1,
+            objectVisualSweepTotal: 1,
+          );
+
+          await service.sendMessage('확인했어', context);
+
+          expect(dispatched, [PowerLensAppAction.confirmObjectCompleteness]);
+          expect(service.messages.last.agentStatus, 'LOCAL_DETERMINISTIC');
+          expect(service.messages.last.text, contains('객체 검수 완료'));
+        } finally {
+          service.unregisterActionHandler(handler);
+        }
       },
     );
 
@@ -795,7 +807,7 @@ void main() {
     });
 
     test(
-      'TEST F: NONE + backend highlight null does NOT automatically turn on the category guide',
+      'TEST F: NONE + backend highlight null does NOT automatically turn on object_gate even if determineTargetForContext would suggest it',
       () async {
         final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
         final originalBaseUrl = PowerLensAIService.baseUrl;
@@ -829,7 +841,7 @@ void main() {
           service.clearHistory();
           service.clearHighlight();
 
-          // Under this context, the deterministic target is the category guide.
+          // Under this context, determineTargetForContext returns 'object_gate'
           const context = PowerLensAssistantContext(
             currentScreen: 'REVIEW_PAGE',
             workflowStage: 'OBJECT_REVIEW',
@@ -840,10 +852,7 @@ void main() {
               {'id': 'node_1', 'status': 'CONFIRMED'},
             ],
           );
-          expect(
-            service.determineTargetForContext(context),
-            'object_category_bar',
-          );
+          expect(service.determineTargetForContext(context), 'object_gate');
 
           await service.sendMessage('상태 알려줘', context);
 

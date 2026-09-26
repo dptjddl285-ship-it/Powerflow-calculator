@@ -136,11 +136,7 @@ class PowerLensAIService extends ChangeNotifier {
   );
   Timer? _highlightTimer;
   String? _stageHighlightTarget;
-  String? _persistentHighlightTarget;
   String? get stageHighlightTarget => _stageHighlightTarget;
-  bool get hasPersistentStageHighlight =>
-      _persistentHighlightTarget != null &&
-      _persistentHighlightTarget == _stageHighlightTarget;
 
   /// Focus targets received from the latest proactive summary or agent chat
   final ValueNotifier<List<Map<String, dynamic>>> focusTargetsNotifier =
@@ -177,34 +173,22 @@ class PowerLensAIService extends ChangeNotifier {
   void triggerHighlight(
     String target, {
     Duration duration = const Duration(seconds: 10),
-    bool persistent = false,
   }) {
-    final persistentTarget = _persistentHighlightTarget;
-    if (persistentTarget != null && target != persistentTarget) {
-      return;
-    }
     _highlightTimer?.cancel();
-    _highlightTimer = null;
     activeHighlightTarget.value = target;
-    if (persistent) {
-      _persistentHighlightTarget = target;
-      return;
-    }
     _highlightTimer = Timer(duration, () {
       if (activeHighlightTarget.value == target) {
-        activeHighlightTarget.value =
-            _persistentHighlightTarget ?? _stageHighlightTarget;
+        activeHighlightTarget.value = _stageHighlightTarget;
       }
     });
   }
 
   /// Keeps stage guidance active when a temporary response highlight expires.
-  void setStageHighlightTarget(String? target, {bool persistent = false}) {
+  void setStageHighlightTarget(String? target) {
     _stageHighlightTarget = target;
-    _persistentHighlightTarget = persistent ? target : null;
-    _highlightTimer?.cancel();
-    _highlightTimer = null;
     if (activeHighlightTarget.value != target) {
+      _highlightTimer?.cancel();
+      _highlightTimer = null;
       activeHighlightTarget.value = target;
     }
   }
@@ -213,7 +197,6 @@ class PowerLensAIService extends ChangeNotifier {
     _highlightTimer?.cancel();
     _highlightTimer = null;
     _stageHighlightTarget = null;
-    _persistentHighlightTarget = null;
     activeHighlightTarget.value = null;
   }
 
@@ -578,6 +561,10 @@ class PowerLensAIService extends ChangeNotifier {
           : const [PowerLensAppAction.confirmBusNumber];
     }
     final stage = context?.workflowStage.toUpperCase();
+    if (stage == 'OBJECT_REVIEW' &&
+        _containsAny(q, const ['확인했어', '주요객체확인', '객체확인끝'])) {
+      return const [PowerLensAppAction.confirmObjectCompleteness];
+    }
     if (requiresCircuitMutationConfirmation(q)) return const [];
 
     // If the user is asking a question (where to click, how to do, what button to press),
@@ -1647,7 +1634,20 @@ class PowerLensAIService extends ChangeNotifier {
     }
 
     if (stage == 'OBJECT_REVIEW') {
-      return ReviewCoachPolicy.resolve(context).coachMessage;
+      final susp = context.suspiciousObjects;
+      final missing = context.unresolvedMissingCandidates;
+
+      if (susp > 0) {
+        return '확인이 필요한 의심 객체 $susp건을 표시했어요. 도면에서 해당 객체를 클릭하여 AI 판단 근거를 확인하고 [맞음] 또는 [수정]을 진행해주세요.';
+      } else if (missing > 0) {
+        return '누락 후보 $missing건이 남아 있어요. 목록에서 확인 후 복구하거나 문제없음 처리해주세요.';
+      } else if (context.objectReviewStage == 'CATEGORY_REVIEW') {
+        return '의심 항목은 없어요. 설비 종류별 탭을 눌러 각 유형을 한 번씩 확인해 주세요. 정상 객체를 하나씩 클릭할 필요는 없습니다.';
+      } else if (context.objectReviewStage == 'WAITING_HUMAN_COMPLETE') {
+        return '설비 종류별 확인이 끝났어요. 도면에 문제가 없다면 [전체 확인했어요]를 눌러 검수를 마쳐주세요.';
+      } else {
+        return '현재 검토가 필요한 항목이 없습니다! 도면을 마지막으로 확인하신 후 아래의 [객체 검수 완료]를 눌러 다음 단계(모선 번호 매핑)로 진행하시면 됩니다.';
+      }
     } else if (stage == 'BUS_MAPPING' || stage == 'BUS_MAPPING_REVIEW') {
       final uncertain = context.unresolvedBusNumbers;
       final dups = context.duplicateBusNumbers;
@@ -1660,9 +1660,9 @@ class PowerLensAIService extends ChangeNotifier {
           if (uncertain > 0) '미지정 모선 $uncertain개',
           if (dups > 0) '중복 모선 $dups개',
         ];
-        return '확인이 필요한 모선(${parts.join(', ')})을 표시했어요. 도면 위 표시를 클릭해 번호를 수정한 뒤 [모선 검수 완료]를 눌러주세요.';
+        return '확인이 필요한 모선(${parts.join(', ')})을 표시했어요. 도면 위 표시를 눌러 번호를 확인하거나 수정해주세요. 문제가 모두 해결되면 Gate를 자동 검증하고 결선 검수로 이동합니다.';
       } else {
-        return '현재 검토가 필요한 모선 번호 오류가 없습니다! 전체 번호를 마지막으로 확인한 뒤 [모선 검수 완료]를 눌러 결선 검수로 넘어가시면 됩니다.';
+        return '모선 번호 오류가 없어 결정론적 Gate를 자동 확인하고 있어요. 별도 완료 버튼은 누르지 않아도 됩니다.';
       }
     } else if (stage == 'CONNECTION_REVIEW') {
       final lines = context.workingLines
@@ -1718,7 +1718,15 @@ class PowerLensAIService extends ChangeNotifier {
   String _getBlockedNextStageReply(PowerLensAssistantContext ctx) {
     switch (ctx.workflowStage) {
       case 'OBJECT_REVIEW':
-        return ReviewCoachPolicy.resolve(ctx).coachMessage;
+        if (ctx.suspiciousObjects > 0) {
+          return "⚠️ 검토가 필요한 객체가 **${ctx.suspiciousObjects}개** 남아 있어요. "
+              "먼저 해당 항목을 승인하거나 제외하면 모선 번호 확인으로 넘어갈 수 있습니다.";
+        }
+        if (ctx.unresolvedMissingCandidates > 0) {
+          return "⚠️ 누락 의심 설비(누락 후보)가 **${ctx.unresolvedMissingCandidates}개** 감지되어 게이트가 닫혀 있습니다.\n"
+              "단선도에 원래 해당 설비(예: 변압기 등)가 없는 계통이라면, 화면 상단의 보라색 [누락 후보] 배지나 좌측 카드의 **[문제 없음]** 버튼을 누르시면 즉시 해결되어 [객체 검수 완료] 버튼이 활성화됩니다!";
+        }
+        break;
       case 'BUS_MAPPING':
       case 'BUS_MAPPING_REVIEW':
         if (_activeBusCount(ctx) == 0) {
@@ -1790,16 +1798,19 @@ class PowerLensAIService extends ChangeNotifier {
               "• ${BusReviewUiState.noActiveBusMessage}\n"
               "• 객체 검수에서 모선 인식을 확인해주세요.";
         } else {
+          final hasBusIssues =
+              context.unresolvedBusNumbers > 0 ||
+              context.duplicateBusNumbers > 0;
           reply =
               "✨ **모선 번호 검수 안내:**\n"
               "• 정상 모선은 개별 또는 일괄 승인할 필요가 없습니다.\n"
-              "• 확인 필요로 표시된 모선만 번호를 확인하거나 수정한 뒤 [모선 검수 완료]를 눌러주세요.";
+              "• ${hasBusIssues ? '확인 필요 모선만 번호를 확인하거나 수정하세요. 마지막 문제가 해결되면 Gate가 자동 검증되고 결선 검수로 이동합니다.' : '모선 번호 오류가 없어 Gate를 자동 확인하고 있습니다. 통과하면 결선 검수로 이동합니다.'}";
         }
       } else if (stage == 'OBJECT_REVIEW') {
         reply =
             "✨ **객체 검수 안내:**\n"
-            "• 확인이 필요한 의심 객체와 누락 후보를 먼저 해결해주세요.\n"
-            "• 이후 Bus, Load, Generator, Transformer를 종류별로 한 번씩 확인한 다음 마지막 검수를 기다려주세요.";
+            "• 정상 객체는 일괄 승인할 필요가 없습니다. 도면에 확인 필요로 표시된 의심 객체나 누락 후보만 확인하시면 됩니다.\n"
+            "• 확인이 끝나면 하단의 [객체 검수 완료] 버튼을 눌러 다음 단계로 진행하세요.";
       } else if (stage == 'CONNECTION_REVIEW') {
         reply =
             "✨ **결선 검수 안내:**\n"
@@ -1903,7 +1914,7 @@ class PowerLensAIService extends ChangeNotifier {
       case 'HOME':
         return "🏠 **홈 (작업 시작 허브):**\n도면 사진을 업로드하거나 IEEE-24 샘플을 선택하여 분석을 시작하는 단계입니다.";
       case 'OBJECT_REVIEW':
-        return "🔍 **객체 검수 단계 (1단계):**\n확인이 필요한 의심 객체와 누락 후보를 먼저 해결한 뒤, Bus · Load · Generator · Transformer를 종류별로 한 번씩 확인하는 단계입니다.";
+        return "🔍 **객체 검수 단계 (1단계):**\nAI가 감지한 심볼 중 확인이 필요한 의심 객체나 누락 후보를 점검하고 [객체 검수 완료]를 눌러 다음 단계로 진행하는 단계입니다.";
       case 'BUS_MAPPING':
       case 'BUS_MAPPING_REVIEW':
         return "🔢 **모선 번호 확인 단계 (2단계):**\n도면의 모선 바(Bus Bar)들에 올바른 번호(1~24)를 부여하고 발전기/부하의 연결 모선을 확정하는 단계입니다.";
@@ -1919,15 +1930,17 @@ class PowerLensAIService extends ChangeNotifier {
 
   String _getReviewNeededSummary(PowerLensAssistantContext ctx) {
     if (ctx.workflowStage == 'OBJECT_REVIEW') {
-      return ReviewCoachPolicy.resolve(ctx).coachMessage;
+      return ctx.suspiciousObjects > 0
+          ? "⚠️ 검토가 필요한 객체가 **${ctx.suspiciousObjects}건** 남아 있습니다. 화면의 [맞음] 또는 [수정]을 눌러 완료해 주세요."
+          : "✅ 모든 객체가 정상 검수 완료되었습니다! 하단 [객체 검수 완료]를 눌러 모선 번호 확인으로 넘어가세요.";
     } else if (ctx.workflowStage == 'BUS_MAPPING' ||
         ctx.workflowStage == 'BUS_MAPPING_REVIEW') {
       if (_activeBusCount(ctx) == 0) {
         return BusReviewUiState.noActiveBusMessage;
       }
-      return ctx.unresolvedBusNumbers > 0
-          ? "⚠️ 아직 확인이 필요한 모선이 **${ctx.unresolvedBusNumbers}개** 있습니다. 번호를 확인하거나 수정한 뒤 [모선 검수 완료]를 눌러주세요."
-          : "✅ 모든 모선 번호 확인이 완료되었습니다. [모선 검수 완료]를 눌러주세요.";
+      return ctx.unresolvedBusNumbers > 0 || ctx.duplicateBusNumbers > 0
+          ? "⚠️ 확인이 필요한 모선이 남아 있습니다. 번호를 확인하거나 수정하면 Gate가 자동 검증되고, 통과 시 결선 검수로 이동합니다."
+          : "✅ 모선 번호 오류가 없어 결정론적 Gate를 자동 확인하고 있어요. 통과하면 결선 검수로 이동합니다.";
     } else if (ctx.workflowStage == 'CONNECTION_REVIEW') {
       final lines = ctx.workingLines
           .map((raw) => ReviewLineItem.fromJson(raw))
@@ -1977,7 +1990,7 @@ class PowerLensAIService extends ChangeNotifier {
               "• AI가 단선도 분석 중 설비 누락 가능성 **${ctx.unresolvedMissingCandidates}건**(예: 변압기 등)을 감지했습니다.\n"
               "• **실제 계통에 해당 설비가 없는 경우**: 화면 상단의 보라색 [누락 후보] 배지나 좌측 카드의 **[문제 없음]** 버튼을 누르시면 즉시 통과됩니다.\n"
               "• **실제 도면에 존재하는 경우**: **[수동 추가]**를 눌러 도면에서 직접 영역을 지정해 추가하세요.\n"
-              "• 누락 후보 처리 뒤 Bus, Load, Generator, Transformer를 종류별로 확인하면 마지막 검수 후 완료 버튼이 활성화됩니다.";
+              "• 누락 후보가 처리되면 하단의 **[객체 검수 완료]** 버튼이 활성화됩니다!";
         }
         final hasSuspicious =
             ctx.suspiciousObjects > 0 ||
@@ -1988,7 +2001,9 @@ class PowerLensAIService extends ChangeNotifier {
             );
 
         if (!hasSuspicious) {
-          return ReviewCoachPolicy.resolve(ctx).coachMessage;
+          return "💡 **다음 할 일 (객체 검수 완료):**\n"
+              "• AI가 확인한 의심 객체가 없습니다 (정상 통과)!\n"
+              "• 도면을 전체적으로 한 번 눈으로 대조 확인하신 후, 화면 하단의 파란색 **[객체 검수 완료]** 버튼을 눌러 바로 **모선 번호 매핑(2단계)**으로 넘어가시면 됩니다.";
         }
         if (selected != null && selected.isNotEmpty) {
           return "💡 **다음 할 일 (의심 객체 확인):**\n"
@@ -2006,21 +2021,20 @@ class PowerLensAIService extends ChangeNotifier {
               "• ${BusReviewUiState.noActiveBusMessage}\n"
               "• 객체 검수에서 모선 인식을 확인한 뒤 다시 시도해주세요.";
         }
-        if (selected != null && selected.isNotEmpty) {
-          return "💡 **다음 할 일 (모선 번호 확인):**\n"
-              "• 현재 **$selected**를 확인 중입니다.\n"
-              "• 번호가 틀리거나 비어 있으면 도면 위 표시를 클릭해 번호를 수정하세요.\n"
-              "• 전체 번호를 마지막으로 확인한 뒤 하단의 **[모선 검수 완료]**를 눌러주세요.";
-        }
         if (ctx.unresolvedBusNumbers > 0 || ctx.duplicateBusNumbers > 0) {
+          if (selected != null && selected.isNotEmpty) {
+            return "💡 **다음 할 일 (모선 번호 확인):**\n"
+                "• 현재 **$selected**를 확인 중입니다.\n"
+                "• 번호가 틀리거나 비어 있으면 도면 위 표시를 눌러 번호를 수정하세요.\n"
+                "• 마지막 문제가 해결되면 결정론적 Gate가 자동 검증되고 결선 검수로 이동합니다.";
+          }
           return "💡 **다음 할 일 (모선 번호 확인):**\n"
-              "• 미지정 모선 ${ctx.unresolvedBusNumbers}개가 남아 있습니다.\n"
-              "• 도면 위 확인 필요 표시를 눌러 번호를 수정한 뒤 [모선 검수 완료]를 눌러주세요.";
-        } else {
-          return "💡 **다음 할 일 (모선 번호 확인 완료):**\n"
-              "• 모든 모선 번호 확인이 끝났습니다!\n"
-              "• 하단 **[모선 검수 완료]** 버튼을 눌러주세요.";
+              "• 확인 필요 모선 ${ctx.unresolvedBusNumbers}개, 중복 번호 ${ctx.duplicateBusNumbers}개가 남아 있습니다.\n"
+              "• 도면 위 확인 필요 표시를 눌러 번호를 수정하세요. 문제가 해결되면 Gate가 자동 검증됩니다.";
         }
+        return "💡 **다음 할 일 (모선 번호 확인 완료):**\n"
+            "• 모선 번호 오류가 없어 결정론적 Gate를 자동 확인하고 있어요.\n"
+            "• 검증에 통과하면 별도 버튼 없이 결선 검수로 이동합니다.";
       case 'CONNECTION_REVIEW':
         final lines = ctx.workingLines
             .map((raw) => ReviewLineItem.fromJson(raw))
@@ -2138,7 +2152,7 @@ class PowerLensAIService extends ChangeNotifier {
             (ctx?.unresolvedMissingCandidates ?? 0) > 0;
         if (!hasIssues && ctx != null) {
           return "🔍 **객체 검수 단계입니다.**\n"
-              "AI 1차 검수에서 의심 객체는 발견되지 않았어요. Bus, Load, Generator, Transformer를 차례대로 확인해주세요.";
+              "AI 1차 검수에서 의심 객체는 발견되지 않았어요. 도면의 주요 객체를 한 번 확인한 뒤 **“확인했어”**라고 알려주세요.";
         }
         return "🔍 **객체 검수 단계입니다.**\n"
             "객체를 확인해봤어요. 제가 다시 봤으면 하는 의심 객체를 도면 위에 표시해둘게요. "
@@ -2228,7 +2242,13 @@ class PowerLensAIService extends ChangeNotifier {
             ctx.suspiciousObjects > 0 || ctx.unresolvedMissingCandidates > 0;
         return hasIssues
             ? "객체를 확인해봤어요. 다시 확인이 필요한 곳을 도면 위에 표시해둘게요."
-            : ReviewCoachPolicy.resolve(ctx).coachMessage;
+            : ctx.objectReviewStage == 'CATEGORY_REVIEW'
+            ? "의심 객체는 없습니다. 설비 종류별 탭을 눌러 각 유형을 확인해 주세요. 정상 객체를 하나씩 클릭할 필요는 없습니다."
+            : ctx.objectReviewStage == 'WAITING_HUMAN_COMPLETE'
+            ? "설비 종류별 확인이 끝났어요. 문제가 없다면 “확인했어”라고 알려주세요."
+            : (ctx.objectHumanCompletenessConfirmed
+                  ? "주요 객체 확인이 끝났어요. 객체 검수 완료 버튼이 활성화됐습니다."
+                  : "AI 1차 검수에서 의심 객체는 발견되지 않았어요. 주요 객체를 확인한 뒤 “확인했어”라고 알려주세요.");
       case 'BUS_MAPPING':
       case 'BUS_MAPPING_REVIEW':
         if (_activeBusCount(ctx) == 0) {
@@ -2308,10 +2328,13 @@ class PowerLensAIService extends ChangeNotifier {
         if (hasIssues) {
           return ['검토 필요 항목 보기', '다음에 뭐 해?', '누락 후보 확인'];
         }
-        if (ctx?.objectHumanCompletenessConfirmed == true) {
-          return ['객체 검수 완료 버튼 위치', '다음에 뭐 해?', '현재 상태 요약'];
+        if (ctx == null ||
+            (ctx.totalObjects == 0 && ctx.selectedNode == null)) {
+          return ['객체 검수 완료하기', '다음 단계로 이동', '다음에 뭐 해?'];
         }
-        return ['객체 종류별 확인 방법', '다음에 뭐 해?', '현재 상태 요약'];
+        return ctx?.objectHumanCompletenessConfirmed == true
+            ? ['객체 검수 완료하기', '다음에 뭐 해?', '현재 상태 요약']
+            : ['도면 주요 객체 확인', '확인했어', '다음에 뭐 해?'];
       case 'BUS_MAPPING':
       case 'BUS_MAPPING_REVIEW':
         if (ctx == null) {

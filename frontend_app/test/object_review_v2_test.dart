@@ -261,7 +261,7 @@ void main() {
           'missing_candidates',
         );
 
-        // Clean Object Review begins at the persistent category guide.
+        // If clean, target is object_gate
         const cleanContext = PowerLensAssistantContext(
           currentScreen: 'REVIEW_PAGE',
           workflowStage: 'object_review',
@@ -271,10 +271,7 @@ void main() {
             {'id': 'B1', 'status': 'DETECTED'},
           ],
         );
-        expect(
-          service.determineTargetForContext(cleanContext),
-          'object_category_bar',
-        );
+        expect(service.determineTargetForContext(cleanContext), 'object_gate');
       },
     );
 
@@ -654,10 +651,15 @@ void main() {
           source: 'cv_primary',
           reviewStatus: 'DETECTED',
           evidence: {
-            'yolo_support': 0.865,
+            'node_id': 'load_normal_1',
+            'class': 'load',
+            'bbox': [300.0, 300.0, 30.0, 30.0],
+            'source': 'cv_primary',
+          },
+          metadata: {
+            'yolo_support': 0.8654,
             'policy_decision': 'ACCEPT',
-            'is_suspicious': false,
-            'geometry_evidence': {'has_cv_lead': true},
+            'geometry_evidence': {'width': 30, 'height': 30},
           },
         );
 
@@ -675,59 +677,27 @@ void main() {
           ),
         );
 
-        expect(find.text('AI 판단 결과'), findsOneWidget);
-        expect(find.text('최종 인식 신뢰도'), findsOneWidget);
-        expect(find.text('94%'), findsOneWidget);
-        expect(find.text('OpenCV 검출'), findsOneWidget);
-        expect(find.text('YOLO 보조 확인'), findsOneWidget);
-        expect(find.text('86.5%'), findsOneWidget);
-        expect(find.text('교차 검증 결과'), findsOneWidget);
-        expect(find.text('추가 확인 필요'), findsOneWidget);
-        expect(find.textContaining('추가 검토 사유가 없습니다'), findsOneWidget);
-        expect(find.textContaining('node_id'), findsNothing);
-        await tester.tap(find.byKey(const ValueKey('ObjectTechnicalDetails')));
+        // Shows AI model confidence percentage
+        expect(find.textContaining("최종 인식 신뢰도: 94%"), findsOneWidget);
+        expect(find.text("검출 출처: OpenCV 1차 검출"), findsOneWidget);
+        expect(find.text("YOLO 보조 확인: 87%"), findsOneWidget);
+        expect(find.text("교차 검증: OpenCV 검출을 YOLO가 보조 확인했습니다."), findsOneWidget);
+        expect(find.text("추가 확인 필요: 없음"), findsOneWidget);
+        expect(find.text("기술 상세 정보"), findsOneWidget);
+        expect(find.textContaining("node_id: load_normal_1"), findsNothing);
+        expect(find.textContaining("policy_decision"), findsNothing);
+
+        await tester.tap(find.text("기술 상세 정보"));
         await tester.pumpAndSettle();
-        expect(find.textContaining('node_id'), findsOneWidget);
-        expect(find.textContaining('cv_primary'), findsOneWidget);
+        expect(find.textContaining("node_id: load_normal_1"), findsOneWidget);
+        expect(find.textContaining("policy_decision: ACCEPT"), findsOneWidget);
+        expect(find.textContaining("geometry_evidence:"), findsOneWidget);
+        // Shows clean notice
+        expect(find.text("AI가 확인한 정상 객체입니다. (승인 불필요)"), findsOneWidget);
         // Zero approval buttons
         expect(find.text("승인하고 다음"), findsNothing);
         expect(find.text("정상 객체 일괄 승인"), findsNothing);
         expect(find.byKey(const ValueKey('ObjectMatchButton')), findsNothing);
-      },
-    );
-
-    testWidgets(
-      'ObjectInspector hides unsupported evidence instead of inventing values',
-      (tester) async {
-        final nodeWithoutEvidence = ReviewNodeItem(
-          id: 'load_unknown',
-          className: 'load',
-          bbox: const [10.0, 10.0, 8.0, 8.0],
-          confidence: 0,
-          source: 'unknown',
-          reviewStatus: 'DETECTED',
-        );
-
-        await tester.pumpWidget(
-          MaterialApp(
-            home: Scaffold(
-              body: SingleChildScrollView(
-                child: ObjectInspectorView(
-                  node: nodeWithoutEvidence,
-                  onMatch: () {},
-                  onEditToggle: () {},
-                ),
-              ),
-            ),
-          ),
-        );
-
-        expect(find.text('인식 객체'), findsOneWidget);
-        expect(find.text('최종 인식 신뢰도'), findsNothing);
-        expect(find.text('OpenCV 검출'), findsNothing);
-        expect(find.text('YOLO 보조 확인'), findsNothing);
-        expect(find.text('교차 검증 결과'), findsNothing);
-        expect(find.text('%'), findsNothing);
       },
     );
 
@@ -924,7 +894,7 @@ void main() {
         expect(cleanSpeech.contains('승인하고 다음'), isFalse);
         expect(cleanSpeech.contains('정상 객체 일괄 승인'), isFalse);
         expect(cleanSpeech.contains('정상 객체 전체 승인'), isFalse);
-        expect(cleanSpeech.contains('[객체 검수 완료]'), isTrue);
+        expect(cleanSpeech.contains('설비 종류별 탭'), isTrue);
       },
     );
   });

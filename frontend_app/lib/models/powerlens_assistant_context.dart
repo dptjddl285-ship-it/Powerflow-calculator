@@ -42,13 +42,14 @@ class PowerLensAssistantContext {
   final List<Map<String, dynamic>> topologyIssues;
   final List<String> currentBlockers;
 
-  // Review-stage counters represent category reviews, not individual nodes.
+  // Review-stage state used by the deterministic Lensy coach. These fields
+  // keep the guide honest about whether a human check or AI bus read is still
+  // in progress; they are optional so existing callers remain compatible.
   final bool objectHumanCompletenessConfirmed;
   final String objectReviewStage;
   final int objectVisualSweepVisited;
   final int objectVisualSweepTotal;
   final String? objectVisualSweepCurrentId;
-  final String? objectActiveCategory;
   final bool busMappingAiReading;
   final String? activeBusId;
   final String? busModelUsed;
@@ -92,7 +93,6 @@ class PowerLensAssistantContext {
     this.objectVisualSweepVisited = 0,
     this.objectVisualSweepTotal = 0,
     this.objectVisualSweepCurrentId,
-    this.objectActiveCategory,
     this.busMappingAiReading = false,
     this.activeBusId,
     this.busModelUsed,
@@ -138,8 +138,6 @@ class PowerLensAssistantContext {
     'object_visual_sweep_total': objectVisualSweepTotal,
     if (objectVisualSweepCurrentId != null)
       'object_visual_sweep_current_id': objectVisualSweepCurrentId,
-    if (objectActiveCategory != null)
-      'object_active_category': objectActiveCategory,
     'bus_mapping_ai_reading': busMappingAiReading,
     if (activeBusId != null) 'active_bus_id': activeBusId,
     if (busModelUsed != null) 'bus_model_used': busModelUsed,
@@ -184,7 +182,6 @@ class PowerLensAssistantContext {
     int? objectVisualSweepVisited,
     int? objectVisualSweepTotal,
     String? objectVisualSweepCurrentId,
-    String? objectActiveCategory,
     bool? busMappingAiReading,
     String? activeBusId,
     String? busModelUsed,
@@ -236,7 +233,6 @@ class PowerLensAssistantContext {
           objectVisualSweepTotal ?? this.objectVisualSweepTotal,
       objectVisualSweepCurrentId:
           objectVisualSweepCurrentId ?? this.objectVisualSweepCurrentId,
-      objectActiveCategory: objectActiveCategory ?? this.objectActiveCategory,
       busMappingAiReading: busMappingAiReading ?? this.busMappingAiReading,
       activeBusId: activeBusId ?? this.activeBusId,
       busModelUsed: busModelUsed ?? this.busModelUsed,

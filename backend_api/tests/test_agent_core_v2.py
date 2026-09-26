@@ -775,6 +775,20 @@ class AgentCoreV2Test(unittest.TestCase):
         self.assertEqual(res["action_mode"], "NONE")
         self.assertEqual(len(res["focus_targets"]), 0)
         self.assertIsNone(res["highlight_target"])
+        self.assertNotIn("[모선 검수 완료]", res["reply_ko"])
+        self.assertIn("자동 확인", res["reply_ko"])
+
+        chat = self.local_prov.answer_chat(
+            message="다음에 뭐 해?",
+            document_id="doc_bus_clean",
+            stage="BUS_MAPPING",
+            working_nodes=nodes,
+            working_lines=[],
+            missing_candidates=[],
+            topology_issues=[],
+        )
+        self.assertNotIn("[모선 검수 완료]", chat["reply_ko"])
+        self.assertIsNone(chat["highlight_target"])
 
     def test_27_bus_gate_duplicate_bus_numbers(self):
         """BACKEND TEST 4: duplicate Bus 번호 -> 두 Bus 모두 issue 대상."""

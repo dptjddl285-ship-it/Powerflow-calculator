@@ -179,9 +179,11 @@ void main() {
             workingNodes: [makeBus('bus_clean', number: 1).toJson()],
           ),
         );
-        expect(cleanDecision.coachTarget, 'bus_gate');
-        expect(cleanDecision.highlightTarget, 'bus_gate');
-        expect(cleanDecision.coachMode, 'GATE');
+        expect(cleanDecision.coachTarget, isNull);
+        expect(cleanDecision.highlightTarget, isNull);
+        expect(cleanDecision.coachMode, 'PROCESSING');
+        expect(cleanDecision.coachMessage, contains('자동 검증'));
+        expect(cleanDecision.coachMessage, isNot(contains('[모선 검수 완료]')));
       },
     );
 
@@ -223,33 +225,5 @@ void main() {
       expect(service.activeHighlightTarget.value, 'connection_focus_toggle');
       service.clearHighlight();
     });
-
-    test(
-      'Object Review guide stays lit until its workflow stage changes',
-      () async {
-        final service = PowerLensAIService.instance;
-        service.clearHighlight();
-        service.setStageHighlightTarget(
-          'object_category_bar',
-          persistent: true,
-        );
-        await Future<void>.delayed(const Duration(milliseconds: 25));
-        expect(service.activeHighlightTarget.value, 'object_category_bar');
-        expect(service.hasPersistentStageHighlight, isTrue);
-
-        service.triggerHighlight(
-          'temporary_response_target',
-          duration: const Duration(milliseconds: 5),
-        );
-        await Future<void>.delayed(const Duration(milliseconds: 25));
-        expect(service.activeHighlightTarget.value, 'object_category_bar');
-
-        service.setStageHighlightTarget('object_gate', persistent: true);
-        expect(service.activeHighlightTarget.value, 'object_gate');
-        service.setStageHighlightTarget(null);
-        expect(service.activeHighlightTarget.value, isNull);
-        service.clearHighlight();
-      },
-    );
   });
 }

@@ -550,6 +550,7 @@ void main() {
         expect(cleanBubble.contains('승인하고 다음'), isFalse);
         expect(cleanBubble.contains('전체 승인'), isFalse);
         expect(cleanBubble.contains('하나씩 넘겨'), isFalse);
+        expect(cleanBubble, isNot(contains('[모선 검수 완료]')));
 
         final issueBubble = BusReviewGateEvaluator.getSpeechBubbleText(
           workingNodes: [
@@ -560,6 +561,7 @@ void main() {
         expect(issueBubble.contains('승인하고 다음'), isFalse);
         expect(issueBubble.contains('전체 승인'), isFalse);
         expect(issueBubble.contains('하나씩 넘겨'), isFalse);
+        expect(issueBubble, isNot(contains('[모선 검수 완료]')));
       },
     );
 
@@ -730,22 +732,42 @@ void main() {
       expect(BusReviewUiState.fromNodes(nodes).issueBuses, 1);
     });
 
-    // TEST Z: offline "전체 승인해줘" has no legacy batch-approval guidance.
-    test('TEST Z: offline Bus batch request gives the single CTA guidance', () {
+    // TEST Z: offline "전체 승인해줘" does not request manual Bus completion.
+    test(
+      'TEST Z: offline Bus batch request explains exception repair and auto gate',
+      () {
+        final service = PowerLensAIService.instance;
+        const busCtx = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'BUS_MAPPING',
+          totalBuses: 1,
+          unresolvedBusNumbers: 1,
+        );
+        final reply = service.generateOfflineFallbackReply('전체 승인해줘', busCtx);
+
+        expect(reply, isNot(contains('[모선 검수 완료]')));
+        expect(reply, contains('정상 모선은 개별 또는 일괄 승인할 필요가 없습니다'));
+        expect(reply, contains('자동 검증'));
+        expect(reply, isNot(contains('일괄 승인 버튼')));
+        expect(reply, isNot(contains('승인하고 다음 모선')));
+        expect(reply, isNot(contains('하나씩 넘겨')));
+      },
+    );
+
+    test('clean offline Bus guidance never asks for a completion button', () {
       final service = PowerLensAIService.instance;
-      const busCtx = PowerLensAssistantContext(
+      final cleanContext = PowerLensAssistantContext(
         currentScreen: 'REVIEW_PAGE',
         workflowStage: 'BUS_MAPPING',
         totalBuses: 1,
-        unresolvedBusNumbers: 1,
+        workingNodes: [bus1.toJson()],
       );
-      final reply = service.generateOfflineFallbackReply('전체 승인해줘', busCtx);
 
-      expect(reply, contains('[모선 검수 완료]'));
-      expect(reply, contains('정상 모선은 개별 또는 일괄 승인할 필요가 없습니다'));
-      expect(reply, isNot(contains('일괄 승인 버튼')));
-      expect(reply, isNot(contains('승인하고 다음 모선')));
-      expect(reply, isNot(contains('하나씩 넘겨')));
+      for (final query in const ['다음에 뭐 해?', '검토 필요한 항목 보여줘', '전체 승인해줘']) {
+        final reply = service.generateOfflineFallbackReply(query, cleanContext);
+        expect(reply, isNot(contains('[모선 검수 완료]')), reason: query);
+        expect(reply, contains('자동'), reason: query);
+      }
     });
 
     // Production phase/keyboard/filter contracts used by ReviewPage.

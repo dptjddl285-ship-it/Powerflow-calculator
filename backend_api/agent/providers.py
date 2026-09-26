@@ -677,7 +677,7 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                 decision = "PROCEED"
                 action_mode = "NONE"
                 target = None
-                reply_ko = "제가 다시 확인할 모선은 이제 없어요. 전체 번호를 한번 확인한 뒤 [모선 검수 완료]를 눌러주세요."
+                reply_ko = "모선 번호 오류가 없어 결정론적 Gate를 자동 확인하고 있어요. 통과하면 별도 완료 버튼 없이 결선 검수로 이동합니다."
 
             summary_text = (
                 "📊 **[AI 검토 우선순위 요약 - 모선 번호 매핑]**\n\n"
@@ -689,8 +689,12 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                         f"• **총 모선 수**: {total_buses}개 (정상/확인 대상: **{clean_count}개**)\n"
                         f"• **확인 필요 모선**: **{issue_count}건**\n\n"
                         "💡 **안내:**\n"
-                        "도면에 표시된 확인 필요 모선을 클릭하여 번호와 근거를 확인하고 틀린 경우에만 수정한 뒤, "
-                        "하단 **[모선 검수 완료]**를 눌러주세요."
+                        + (
+                            "도면에 표시된 확인 필요 모선의 번호와 근거를 확인하고 필요한 경우 수정하세요. "
+                            "마지막 문제가 해결되면 Gate가 자동 검증되고 결선 검수로 이동합니다."
+                            if issue_count > 0
+                            else "모선 번호 오류가 없어 Gate를 자동 확인하고 있습니다. 통과하면 결선 검수로 이동합니다."
+                        )
                     )
                 )
             )
@@ -1287,15 +1291,15 @@ class LocalReviewAssistantProvider(ReviewAssistantProvider):
                 reply += f"⚠️ {BUS_NO_ACTIVE_MESSAGE}\n"
                 reply += "객체 검수에서 모선 인식을 확인한 뒤 다시 시도해주세요."
             elif issue_count == 0:
-                target = "bus_gate"
+                target = None
                 reply += "✓ 모든 모선 번호가 확인되었습니다!\n"
-                reply += "• 전체 번호를 확인한 뒤 하단 **[모선 검수 완료]** 버튼을 눌러 다음 단계로 이동하세요."
+                reply += "• 결정론적 Gate를 자동 확인하고 있습니다. 통과하면 별도 버튼 없이 결선 검수로 이동합니다."
             else:
                 target = None
                 dec = "HUMAN_CHECK"
                 reply += f"1. 모선 번호 확인 필요: **{issue_count}개**\n"
                 reply += "2. 도면에 표시된 확인 필요 모선을 클릭하여 번호와 근거를 확인하고 틀린 경우에만 수정하세요.\n"
-                reply += "3. 모든 확인이 끝나면 하단 **[모선 검수 완료]**를 눌러주세요."
+                reply += "3. 마지막 문제가 해결되면 Gate가 자동 검증되고 결선 검수로 이동합니다."
         elif _is_connection_review_stage(stage):
             active_lines = active_connection_lines(w_lines)
             exception_ids = connection_exception_line_ids(active_lines, issues)
