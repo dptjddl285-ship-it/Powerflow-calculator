@@ -65,13 +65,6 @@ class _PowerLensAIFloatingButtonState extends State<PowerLensAIFloatingButton>
 
   @override
   Widget build(BuildContext context) {
-    final bubbleText =
-        (widget.useObjectReviewGuidance
-            ? PowerLensAIService.instance.currentObjectWorkflowGuidance
-            : null) ??
-        widget.coachMessage ??
-        widget.speechBubbleText ??
-        "도면 사진으로 시작할까요? 샘플로 체험할까요? ⚡";
     final presenceColor = _presenceColor;
 
     return GestureDetector(
@@ -89,8 +82,18 @@ class _PowerLensAIFloatingButtonState extends State<PowerLensAIFloatingButton>
           ? null
           : () => widget.onDragEnd?.call(),
       child: AnimatedBuilder(
-        animation: _animController,
+        animation: Listenable.merge([
+          _animController,
+          PowerLensAIService.instance,
+        ]),
         builder: (context, child) {
+          final bubbleText =
+              (widget.useObjectReviewGuidance
+                  ? PowerLensAIService.instance.currentObjectWorkflowGuidance
+                  : null) ??
+              widget.coachMessage ??
+              widget.speechBubbleText ??
+              "도면 사진으로 시작할까요? 샘플로 체험할까요? ⚡";
           final double t = _animController.value;
           // Subtle idle motion keeps the companion calm while the panel moves.
           final state = widget.presenceState.toLowerCase();

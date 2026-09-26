@@ -568,6 +568,9 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                             widget.currentCategoryHighlightKey != null &&
                             node.className.toLowerCase() ==
                                 widget.currentCategoryHighlightKey!.toLowerCase();
+                        final bool isAllCategoryOverview =
+                            widget.isObjectCategorySweepActive &&
+                            widget.currentCategoryHighlightKey == null;
                         final bool isGuide = isCurrentCategory ||
                             (isBus
                                 ? (widget.guideNodeIds.contains(node.id) ||
@@ -833,10 +836,12 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                     }
                                   },
                                   child: Container(
+                                    key: ValueKey('ObjectTightBox_${node.id}'),
                                     width: renderW,
                                     height: renderH,
                                     decoration: BoxDecoration(
-                                      color: widget.isObjectCategorySweepActive
+                                      color: (widget.isObjectCategorySweepActive ||
+                                              isAllCategoryOverview)
                                           ? Colors.transparent
                                           : (isSelectedForNodeStyle
                                               ? selectionColor.withValues(
@@ -866,43 +871,48 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                                         alpha: 0.08,
                                                                       ))))),
                                       border: Border.all(
-                                        color: widget.isObjectCategorySweepActive
-                                            ? (isCurrentCategory
-                                                  ? (isSelected
-                                                      ? objectCategoryColor(node.className)
-                                                      : objectCategoryColor(node.className).withValues(alpha: 0.4))
-                                                  : classColor.withValues(
-                                                      alpha: 0.25,
-                                                    ))
-                                            : (isSelectedForNodeStyle
-                                                  ? selectionColor
-                                                  : (isViolation
-                                                        ? Colors.redAccent
-                                                        : (isEndpointOfSelectedLine
-                                                              ? Colors.cyanAccent
-                                                              : (isRejected
-                                                                    ? Colors.redAccent
-                                                                    : (isVisitedObject
-                                                                          ? const Color(
-                                                                              0xFFF59E0B,
-                                                                            )
-                                                                          : classColor))))),
-                                        width: widget.isObjectCategorySweepActive
-                                            ? (isCurrentCategory ? 1.0 : 0.8)
-                                            : (isSelectedForNodeStyle
-                                                  ? (2.0 + 1.2 * pulseVal)
-                                                  : (isVisitedObject
-                                                        ? 1.5
-                                                        : (isViolation
-                                                              ? (2.2 + 1.5 * pulseVal)
-                                                              : (isEndpointOfSelectedLine
-                                                                    ? (2.2 +
-                                                                          1.8 *
-                                                                              pulseVal)
-                                                                    : 1.2)))),
+                                        color: isAllCategoryOverview
+                                            ? classColor
+                                            : (widget.isObjectCategorySweepActive
+                                                ? (isCurrentCategory
+                                                      ? (isSelected
+                                                          ? objectCategoryColor(node.className)
+                                                          : objectCategoryColor(node.className).withValues(alpha: 0.4))
+                                                      : classColor.withValues(
+                                                          alpha: 0.25,
+                                                        ))
+                                                : (isSelectedForNodeStyle
+                                                      ? selectionColor
+                                                      : (isViolation
+                                                            ? Colors.redAccent
+                                                            : (isEndpointOfSelectedLine
+                                                                  ? Colors.cyanAccent
+                                                                  : (isRejected
+                                                                        ? Colors.redAccent
+                                                                        : (isVisitedObject
+                                                                              ? const Color(
+                                                                                  0xFFF59E0B,
+                                                                                )
+                                                                              : classColor)))))),
+                                        width: isAllCategoryOverview
+                                            ? 1.5
+                                            : (widget.isObjectCategorySweepActive
+                                                ? (isCurrentCategory ? 1.0 : 0.8)
+                                                : (isSelectedForNodeStyle
+                                                      ? (2.0 + 1.2 * pulseVal)
+                                                      : (isVisitedObject
+                                                            ? 1.5
+                                                            : (isViolation
+                                                                  ? (2.2 + 1.5 * pulseVal)
+                                                                  : (isEndpointOfSelectedLine
+                                                                        ? (2.2 +
+                                                                              1.8 *
+                                                                                  pulseVal)
+                                                                        : 1.2))))),
                                       ),
                                       borderRadius: BorderRadius.circular(2),
-                                      boxShadow: widget.isObjectCategorySweepActive
+                                      boxShadow: (widget.isObjectCategorySweepActive ||
+                                              isAllCategoryOverview)
                                           ? const <BoxShadow>[]
                                           : (isSelectedForNodeStyle
                                               ? [

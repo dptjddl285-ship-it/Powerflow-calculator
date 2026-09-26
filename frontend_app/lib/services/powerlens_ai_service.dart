@@ -927,6 +927,16 @@ class PowerLensAIService extends ChangeNotifier {
     notifyListeners();
   }
 
+  void clearObjectReviewGuidance() {
+    _currentObjectWorkflowGuidance = null;
+    notifyListeners();
+  }
+
+  void addMessageForTest(PowerLensAIMessageItem message) {
+    _messages.add(message);
+    notifyListeners();
+  }
+
   void ensureInitialGreeting(
     String stage, [
     PowerLensAssistantContext? context,
@@ -962,6 +972,9 @@ class PowerLensAIService extends ChangeNotifier {
       syncObjectReviewGuidance(context.objectWorkflowMessage!);
       return;
     }
+    if (context.workflowStage != 'OBJECT_REVIEW') {
+      clearObjectReviewGuidance();
+    }
     await _requestProactiveForContext(context.workflowStage, context);
   }
 
@@ -974,6 +987,9 @@ class PowerLensAIService extends ChangeNotifier {
         context!.objectWorkflowMessage!.isNotEmpty) {
       syncObjectReviewGuidance(context.objectWorkflowMessage!);
       return;
+    }
+    if (stage != 'OBJECT_REVIEW' && context?.workflowStage != 'OBJECT_REVIEW') {
+      clearObjectReviewGuidance();
     }
     await _requestProactiveForContext(stage, context);
   }
@@ -2587,6 +2603,7 @@ class PowerLensAIService extends ChangeNotifier {
   void clearHistory() {
     _requestSerial++;
     _messages.clear();
+    _currentObjectWorkflowGuidance = null;
     _lastNotifiedStage = null;
     _lastFailedQuery = null;
     _isLoading = false;

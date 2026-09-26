@@ -7,6 +7,7 @@ import 'package:circuit_solver/models/powerlens_assistant_context.dart';
 import 'package:circuit_solver/models/review_coach_policy.dart';
 import 'package:circuit_solver/services/powerlens_ai_service.dart';
 import 'package:circuit_solver/widgets/powerlens_ai/powerlens_ai_button.dart';
+import 'package:circuit_solver/widgets/powerlens_ai/powerlens_ai_message.dart';
 import 'package:circuit_solver/widgets/powerlens_ai/powerlens_ai_panel.dart';
 
 void main() {
@@ -145,6 +146,73 @@ void main() {
         expect(agentChatRequests, 0);
       }
       await tester.pump(const Duration(seconds: 11));
+    },
+  );
+
+  testWidgets(
+    'pinned guidance card stays visible and outside scrollable ListView even with heavy chat history',
+    (tester) async {
+      service.clearHistory();
+      // Simulate historical messages from HOME / upload stages
+      for (var i = 1; i <= 6; i++) {
+        service.addMessageForTest(
+          PowerLensAIMessageItem(
+            id: 'legacy_msg_$i',
+            sender: i.isEven ? 'user' : 'assistant',
+            text: '과거 대화 내역 $i: 도면 사진을 업로드하거나 분석을 진행하세요.',
+            stage: 'HOME',
+          ),
+        );
+      }
+
+      final canonical = ObjectReviewGuidanceMessages.initialBus(24);
+      service.syncObjectReviewGuidance(canonical);
+
+      final context = PowerLensAssistantContext(
+        currentScreen: 'REVIEW_PAGE',
+        workflowStage: 'OBJECT_REVIEW',
+        objectWorkflowMessage: canonical,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: PowerLensAIPanel(assistantContext: context, onClose: _noop),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Pinned guidance card MUST be present and visible
+      expect(
+        find.byKey(const ValueKey('objectReviewCurrentGuidanceCard')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('objectReviewCurrentGuidanceText')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<Text>(
+              find.byKey(const ValueKey('objectReviewCurrentGuidanceText')),
+            )
+            .data,
+        canonical,
+      );
+      expect(find.byKey(const ValueKey('objectReviewChatHistoryHeading')), findsOneWidget);
+
+      // Verify that the pinned card is NOT an item inside ListView.
+      // The ListView only contains chat history bubbles.
+      final listViewFinder = find.byType(ListView);
+      expect(listViewFinder, findsOneWidget);
+      expect(
+        find.descendant(
+          of: listViewFinder,
+          matching: find.byKey(const ValueKey('objectReviewCurrentGuidanceCard')),
+        ),
+        findsNothing,
+      );
     },
   );
 }

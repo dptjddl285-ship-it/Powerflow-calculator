@@ -719,6 +719,24 @@ void main() {
         find.byKey(const ValueKey('ObjectGuideBox_overview_transformer')),
         findsNothing,
       );
+
+      // Tight bounding boxes MUST remain visible for every object in ALL VIEW
+      expect(
+        find.byKey(const ValueKey('ObjectTightBox_overview_bus')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('ObjectTightBox_overview_load')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('ObjectTightBox_overview_generator')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('ObjectTightBox_overview_transformer')),
+        findsOneWidget,
+      );
     });
 
     // -------------------------------------------------------------

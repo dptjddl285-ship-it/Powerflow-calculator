@@ -916,6 +916,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       _stageGateMessage =
           '전체 도면을 표시했습니다. 설비 종류별 확인 순서는 그대로 이어집니다.';
     });
+    PowerLensAIService.instance.syncObjectReviewGuidance(_stageGateMessage!);
     _announceReviewStage();
   }
 
@@ -937,6 +938,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         )) {
       setState(() {
         _stageGateMessage = ObjectReviewGuidanceMessages.allReviewedCompletePass;
+        _objectGateMessage = null;
       });
       PowerLensAIService.instance.syncObjectReviewGuidance(
         ObjectReviewGuidanceMessages.allReviewedCompletePass,
@@ -1697,12 +1699,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   }
 
   String _getReviewStageSpeechBubbleText() {
-    if (_stageGateMessage != null && _stageGateMessage!.isNotEmpty) {
-      return _stageGateMessage!;
-    }
     if (_currentPhase == ReviewPhase.objectReview) {
       final canonical = PowerLensAIService.instance.currentObjectWorkflowGuidance;
       if (canonical != null && canonical.isNotEmpty) return canonical;
+    }
+    if (_stageGateMessage != null && _stageGateMessage!.isNotEmpty) {
+      return _stageGateMessage!;
     }
     return _reviewCoachDecision.coachMessage;
   }
@@ -7983,6 +7985,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     setState(() {
       _currentPhase = ReviewPhase.busMappingReview;
       _stageGateMessage = null;
+      _objectGateMessage = null;
       _selectedLine = null;
       _busFilterStatus = 'ALL';
       _busPage = 0;
@@ -7998,6 +8001,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       }
     });
 
+    PowerLensAIService.instance.clearObjectReviewGuidance();
     PowerLensAIService.instance.clearFocusTargets();
     _announceReviewStage();
     // Automatically run AI vision grounding on all working buses (including human-added ones)

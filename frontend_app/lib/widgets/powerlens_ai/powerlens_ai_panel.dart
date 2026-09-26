@@ -688,17 +688,16 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
             'OBJECT_REVIEW';
         WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
 
-        return ListView.builder(
-          controller: _scrollController,
-          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-          itemCount: msgs.length + (isObjectReview ? 2 : 0),
-          itemBuilder: (context, index) {
-            if (isObjectReview && index == 0) {
-              return _buildCurrentObjectGuidance();
-            }
-            if (isObjectReview && index == 1) {
-              return const Padding(
-                padding: EdgeInsets.fromLTRB(4, 12, 4, 4),
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (isObjectReview) ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+                child: _buildCurrentObjectGuidance(),
+              ),
+              const Padding(
+                padding: EdgeInsets.fromLTRB(12, 8, 12, 4),
                 child: Text(
                   '대화 기록',
                   key: ValueKey('objectReviewChatHistoryHeading'),
@@ -708,15 +707,23 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
                     fontWeight: FontWeight.w700,
                   ),
                 ),
-              );
-            }
-            final messageIndex = index - (isObjectReview ? 2 : 0);
-            final m = msgs[messageIndex];
-            return PowerLensAIMessageBubble(
-              message: m,
-              onActionSelected: (act) => _handleSend(act),
-            );
-          },
+              ),
+            ],
+            Expanded(
+              child: ListView.builder(
+                controller: _scrollController,
+                padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+                itemCount: msgs.length,
+                itemBuilder: (context, index) {
+                  final m = msgs[index];
+                  return PowerLensAIMessageBubble(
+                    message: m,
+                    onActionSelected: (act) => _handleSend(act),
+                  );
+                },
+              ),
+            ),
+          ],
         );
       },
     );
