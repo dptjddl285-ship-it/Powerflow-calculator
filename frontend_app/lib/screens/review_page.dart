@@ -806,11 +806,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               )
               .toList();
           _selectedNode = busNodes.isNotEmpty ? busNodes.first : null;
+          final busCount = _objectCategoryCount('bus');
           _stageGateMessage =
-              'AI 1차 검수에서 확인이 필요한 객체는 모두 정리됐어요.\n'
-              '이제 객체 종류별로 전체 도면을 한 번 확인해 주세요.\n'
-              '먼저 Bus 객체부터 확인하겠습니다.\n'
-              '모선이 빠짐없이 잡혔는지 확인한 뒤 오른쪽 화살표를 눌러주세요.';
+              'AI 1차 검사에서는 확인이 필요한 객체가 없어요.\n'
+              '이제 설비 종류별로 한 번씩 확인해 주세요.\n'
+              '먼저 Bus ${busCount}개를 청록색으로 표시했습니다.\n'
+              '빠지거나 잘못 인식된 Bus가 없는지 확인한 뒤\n'
+              '오른쪽의 [확인 후 다음 >]을 눌러주세요.';
         }
       }
     });
@@ -837,7 +839,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       _objFilterClass = key;
       _nodePage = 0;
       _selectedNode = categoryNodes.isEmpty ? null : categoryNodes.first;
-      _stageGateMessage = '${_objectCategoryLabel(key)} 객체를 보고 있어요. 도면을 확인해주세요.';
+      _stageGateMessage =
+          '${_objectCategoryLabel(key)} 객체를 다시 보여드릴게요.\n'
+          '필요한 부분을 다시 확인해주세요.\n'
+          '확인이 끝나면 [확인 후 다음 >]을 눌러 계속 진행할 수 있어요.';
     });
     _announceReviewStage();
   }
@@ -860,25 +865,51 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       _selectedNode = nextNodes.isNotEmpty ? nextNodes.first : null;
 
       if (advanced) {
+        final count = _objectCategoryCount(nextKey);
         if (currentKey == 'bus' && nextKey == 'load') {
-          _stageGateMessage = 'Bus 확인을 마쳤어요.\n이번에는 Load 객체를 확인해주세요.';
+          _stageGateMessage =
+              'Bus 확인을 마쳤어요.\n'
+              '이번에는 Load ${count}개를 표시했습니다.\n'
+              '부하 심볼이 빠짐없이 잡혔는지 확인한 뒤\n'
+              '[확인 후 다음 >]을 눌러주세요.';
         } else if (currentKey == 'load' && nextKey == 'generator') {
-          _stageGateMessage = 'Load 확인을 마쳤어요.\n이번에는 Generator 객체를 확인해주세요.';
+          _stageGateMessage =
+              'Load 확인을 마쳤어요.\n'
+              '이번에는 Generator ${count}개를 표시했습니다.\n'
+              '발전기 심볼이 올바르게 인식됐는지 확인한 뒤\n'
+              '[확인 후 다음 >]을 눌러주세요.';
         } else if (currentKey == 'generator' && nextKey == 'transformer') {
           _stageGateMessage =
-              'Generator 확인을 마쳤어요.\n마지막으로 Transformer 객체를 확인해주세요.';
+              'Generator 확인을 마쳤어요.\n'
+              '마지막으로 Transformer ${count}개를 표시했습니다.\n'
+              '변압기 심볼이 빠짐없이 잡혔는지 확인한 뒤\n'
+              '[확인 후 다음 >]을 눌러주세요.';
         } else {
           _stageGateMessage =
-              '${_objectCategoryLabel(currentKey)} 확인을 마쳤어요.\n이번에는 ${_objectCategoryLabel(nextKey)} 객체를 확인해주세요.';
+              '${_objectCategoryLabel(currentKey)} 확인을 마쳤어요.\n'
+              '이번에는 ${_objectCategoryLabel(nextKey)} ${count}개를 표시했습니다.\n'
+              '심볼이 올바르게 인식됐는지 확인한 뒤\n'
+              '[확인 후 다음 >]을 눌러주세요.';
         }
       } else {
-        // Last category (Transformer) confirmed!
+        // Last category (Transformer) confirmed! 4/4 REVIEWED!
         _stageGateMessage =
-            'Bus, Load, Generator, Transformer를 모두 확인했어요.\n검사해 주셔서 감사합니다. 나머지는 제가 한 번 더 확인할게요.';
-        _runFinalObjectDeterministicCheck();
+            'Bus, Load, Generator, Transformer를 모두 확인했어요.\n'
+            '검사해 주셔서 감사합니다.\n'
+            '제가 마지막으로 상태를 한 번 더 확인할게요.';
       }
     });
     _announceReviewStage();
+
+    if (!_objectSweep.isAllCategoriesReviewed(_workingNodes)) {
+      return;
+    }
+
+    Future.delayed(const Duration(milliseconds: 600), () {
+      if (!mounted) return;
+      _runFinalObjectDeterministicCheck();
+      _announceReviewStage();
+    });
   }
 
   void _handleObjectCategoryPrevious() {
@@ -898,7 +929,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             .toList();
         _selectedNode = prevNodes.isNotEmpty ? prevNodes.first : null;
         _stageGateMessage =
-            '${_objectCategoryLabel(prevKey)} 객체를 다시 보여드릴게요.\n필요한 부분을 다시 확인해주세요.';
+            '${_objectCategoryLabel(prevKey)} 객체를 다시 보여드릴게요.\n'
+            '필요한 부분을 다시 확인해주세요.\n'
+            '확인이 끝나면 [확인 후 다음 >]을 눌러 계속 진행할 수 있어요.';
       }
     });
     _announceReviewStage();
@@ -960,6 +993,16 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       return;
     }
     _focusNextReviewTask();
+  }
+
+  int _objectCategoryCount(String key) {
+    return _workingNodes
+        .where(
+          (node) =>
+              node.className.trim().toLowerCase() == key.trim().toLowerCase() &&
+              node.reviewStatus.toUpperCase() != 'REJECTED',
+        )
+        .length;
   }
 
   String _objectCategoryLabel(String key) {
@@ -1273,11 +1316,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               )
               .toList();
           _selectedNode = busNodes.isNotEmpty ? busNodes.first : null;
+          final busCount = _objectCategoryCount('bus');
           _stageGateMessage =
-              'AI 1차 검수에서 확인이 필요한 객체는 모두 정리됐어요.\n'
-              '이제 객체 종류별로 전체 도면을 한 번 확인해 주세요.\n'
-              '먼저 Bus 객체부터 확인하겠습니다.\n'
-              '모선이 빠짐없이 잡혔는지 확인한 뒤 오른쪽 화살표를 눌러주세요.';
+              'AI 1차 검사에서는 확인이 필요한 객체가 없어요.\n'
+              '이제 설비 종류별로 한 번씩 확인해 주세요.\n'
+              '먼저 Bus ${busCount}개를 청록색으로 표시했습니다.\n'
+              '빠지거나 잘못 인식된 Bus가 없는지 확인한 뒤\n'
+              '오른쪽의 [확인 후 다음 >]을 눌러주세요.';
         }
         _isLoading = false;
 

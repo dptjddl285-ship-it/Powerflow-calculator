@@ -206,45 +206,72 @@ class _ObjectCategoryReviewBarState extends State<ObjectCategoryReviewBar>
                 animation: _pulseController,
                 builder: (context, _) {
                   final isNextEnabled = widget.onConfirmCurrentAndNext != null;
+                  final pulseVal = _pulseController.value;
                   return SizedBox(
                     height: 26,
-                    child: ElevatedButton(
-                      key: ObjectCategoryReviewBar.nextButtonKey,
-                      onPressed: widget.onConfirmCurrentAndNext,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: widget.allReviewed
-                            ? const Color(0xFF15803D)
-                            : (isNextEnabled
-                                ? const Color(0xFF0284C7)
-                                : const Color(0xFF94A3B8)),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(horizontal: 10),
-                        elevation: isNextEnabled && !widget.allReviewed
-                            ? 1.5 + _pulseController.value * 2.0
-                            : 0,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(5),
+                    child: Container(
+                      decoration: isNextEnabled && !widget.allReviewed
+                          ? BoxDecoration(
+                              borderRadius: BorderRadius.circular(5),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(0xFF0284C7).withValues(
+                                    alpha: 0.30 + 0.35 * pulseVal,
+                                  ),
+                                  blurRadius: 6.0 + 4.0 * pulseVal,
+                                  spreadRadius: 1.0 + 1.0 * pulseVal,
+                                ),
+                              ],
+                            )
+                          : null,
+                      child: ElevatedButton(
+                        key: ObjectCategoryReviewBar.nextButtonKey,
+                        onPressed: widget.onConfirmCurrentAndNext,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: widget.allReviewed
+                              ? const Color(0xFF15803D)
+                              : (isNextEnabled
+                                  ? const Color(0xFF0284C7)
+                                  : const Color(0xFF94A3B8)),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 10),
+                          elevation: isNextEnabled && !widget.allReviewed
+                              ? 2.0 + pulseVal * 2.0
+                              : 0,
+                          side: isNextEnabled && !widget.allReviewed
+                              ? BorderSide(
+                                  color: Color.lerp(
+                                    const Color(0xFF38BDF8),
+                                    Colors.white,
+                                    pulseVal,
+                                  )!,
+                                  width: 1.5,
+                                )
+                              : BorderSide.none,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(5),
+                          ),
                         ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            widget.allReviewed ? '확인 완료' : '확인 후 다음',
-                            style: const TextStyle(
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              widget.allReviewed ? '확인 완료' : '확인 후 다음',
+                              style: const TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 3),
-                          Icon(
-                            widget.allReviewed
-                                ? Icons.check_circle_rounded
-                                : Icons.arrow_forward_ios_rounded,
-                            size: 9,
-                            color: Colors.white,
-                          ),
-                        ],
+                            const SizedBox(width: 3),
+                            Icon(
+                              widget.allReviewed
+                                  ? Icons.check_circle_rounded
+                                  : Icons.arrow_forward_ios_rounded,
+                              size: 9,
+                              color: Colors.white,
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   );
@@ -331,7 +358,6 @@ class _ObjectCategoryReviewBarState extends State<ObjectCategoryReviewBar>
   Widget _buildCategoryChip(ObjectReviewCategoryStatus category) {
     final isCurrent = category.state == ObjectCategoryState.current;
     final isReviewed = category.state == ObjectCategoryState.reviewed;
-    final isUnreviewed = category.state == ObjectCategoryState.unreviewed;
 
     final Color color;
     final Color bgColor;
@@ -346,9 +372,9 @@ class _ObjectCategoryReviewBarState extends State<ObjectCategoryReviewBar>
       statusText = '확인 완료';
       icon = Icons.check_circle_outline_rounded;
     } else if (isCurrent) {
-      color = const Color(0xFF0891B2); // Cyan / Blue
-      bgColor = const Color(0xFFECFEFF);
-      borderColor = const Color(0xFF06B6D4);
+      color = const Color(0xFF0284C7); // Sharp Cyan/Blue
+      bgColor = Colors.white; // White background, transparent center, no fill color
+      borderColor = const Color(0xFF0284C7);
       statusText = '확인 중';
       icon = Icons.radio_button_checked_rounded;
     } else {
@@ -366,14 +392,73 @@ class _ObjectCategoryReviewBarState extends State<ObjectCategoryReviewBar>
         final pulseShadow = isCurrent
             ? [
                 BoxShadow(
-                  color: color.withValues(
-                    alpha: 0.25 + 0.35 * _pulseController.value,
+                  color: const Color(0xFF0284C7).withValues(
+                    alpha: 0.35 + 0.35 * _pulseController.value,
                   ),
-                  blurRadius: 6.0 + 4.0 * _pulseController.value,
-                  spreadRadius: 1.0 + 0.8 * _pulseController.value,
+                  blurRadius: 8.0 + 6.0 * _pulseController.value,
+                  spreadRadius: 1.5 + 1.2 * _pulseController.value,
                 ),
               ]
             : const <BoxShadow>[];
+
+        Widget chipWidget = AnimatedContainer(
+          duration: const Duration(milliseconds: 140),
+          padding: const EdgeInsets.symmetric(horizontal: 7.5, vertical: 4.5),
+          decoration: BoxDecoration(
+            color: bgColor,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(
+              color: isCurrent
+                  ? Color.lerp(
+                      const Color(0xFF06B6D4),
+                      const Color(0xFF0284C7),
+                      _pulseController.value,
+                    )!
+                  : borderColor,
+              width: isCurrent ? 2.4 : 1.1,
+            ),
+            boxShadow: pulseShadow,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 11,
+                color: color,
+              ),
+              const SizedBox(width: 3.5),
+              Text(
+                '${_categoryLabel(category.key)} ${category.count}',
+                style: TextStyle(
+                  color: isCurrent || isReviewed
+                      ? color
+                      : const Color(0xFF334155),
+                  fontSize: 9.5,
+                  fontWeight: isCurrent || isReviewed
+                      ? FontWeight.w700
+                      : FontWeight.w600,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Text(
+                statusText,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 8.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        );
+
+        if (isCurrent) {
+          chipWidget = Transform.scale(
+            scale: 1.0 + 0.03 * _pulseController.value,
+            child: chipWidget,
+          );
+        }
 
         return Material(
           color: Colors.transparent,
@@ -386,58 +471,7 @@ class _ObjectCategoryReviewBarState extends State<ObjectCategoryReviewBar>
               selected: isCurrent,
               label:
                   '${_categoryLabel(category.key)}, ${category.count}개, $statusText',
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 140),
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 7.5, vertical: 4.5),
-                decoration: BoxDecoration(
-                  color: bgColor,
-                  borderRadius: BorderRadius.circular(6),
-                  border: Border.all(
-                    color: isCurrent
-                        ? Color.lerp(
-                            borderColor,
-                            const Color(0xFF0284C7),
-                            _pulseController.value,
-                          )!
-                        : borderColor,
-                    width: isCurrent ? 1.8 : 1.1,
-                  ),
-                  boxShadow: pulseShadow,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      icon,
-                      size: 11,
-                      color: color,
-                    ),
-                    const SizedBox(width: 3.5),
-                    Text(
-                      '${_categoryLabel(category.key)} ${category.count}',
-                      style: TextStyle(
-                        color: isCurrent || isReviewed
-                            ? color
-                            : const Color(0xFF334155),
-                        fontSize: 9.5,
-                        fontWeight: isCurrent || isReviewed
-                            ? FontWeight.w700
-                            : FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      statusText,
-                      style: TextStyle(
-                        color: color,
-                        fontSize: 8.5,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              child: chipWidget,
             ),
           ),
         );

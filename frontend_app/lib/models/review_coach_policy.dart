@@ -107,25 +107,34 @@ class ReviewCoachPolicy {
         highlightTarget: null,
       );
     }
+    if (context.objectReviewStage == 'CATEGORY_REVIEW') {
+      final busCount = context.workingNodes
+          .where(
+            (node) =>
+                node['class_name']?.toString().toLowerCase() == 'bus' &&
+                node['review_status']?.toString().toUpperCase() != 'REJECTED',
+          )
+          .length;
+      final countStr = busCount > 0 ? '${busCount}개' : '객체';
+      return ReviewCoachDecision(
+        coachTarget: 'object_category_review',
+        coachMessage:
+            'AI 1차 검사에서는 확인이 필요한 객체가 없어요.\n'
+            '이제 설비 종류별로 한 번씩 확인해 주세요.\n'
+            '먼저 Bus ${countStr}를 청록색으로 표시했습니다.\n'
+            '빠지거나 잘못 인식된 Bus가 없는지 확인한 뒤\n'
+            '오른쪽의 [확인 후 다음 >]을 눌러주세요.',
+        coachMode: 'GUIDE',
+        highlightTarget: 'object_category_bar',
+        focusNodeId: context.selectedNode?['id']?.toString(),
+      );
+    }
     if (context.objectHumanCompletenessConfirmed || legacySummaryContext) {
       return const ReviewCoachDecision(
         coachTarget: 'object_gate',
         coachMessage: '객체 검수가 모두 완료됐습니다. 아래 [객체 검수 완료]를 눌러주세요.',
         coachMode: 'GATE',
         highlightTarget: 'object_gate',
-      );
-    }
-    if (context.objectReviewStage == 'CATEGORY_REVIEW') {
-      return ReviewCoachDecision(
-        coachTarget: 'object_category_review',
-        coachMessage:
-            'AI 1차 검수에서 확인이 필요한 객체는 모두 정리됐어요.\n'
-            '이제 객체 종류별로 전체 도면을 한 번 확인해 주세요.\n'
-            '먼저 Bus 객체부터 확인하겠습니다.\n'
-            '모선이 빠짐없이 잡혔는지 확인한 뒤 오른쪽 화살표를 눌러주세요.',
-        coachMode: 'GUIDE',
-        highlightTarget: 'object_category_bar',
-        focusNodeId: context.selectedNode?['id']?.toString(),
       );
     }
     if (context.objectReviewStage == 'WAITING_HUMAN_COMPLETE') {

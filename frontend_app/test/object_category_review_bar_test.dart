@@ -144,6 +144,73 @@ void main() {
 
       await tester.pumpWidget(const SizedBox.shrink());
     });
+
+    testWidgets(
+      'CURRENT badge has white/transparent background, cyan border >= 2px, and subtle scale pulse',
+      (tester) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: ObjectCategoryReviewBar(
+                totalCount: 24,
+                categories: const [
+                  ObjectReviewCategoryStatus(
+                    key: 'bus',
+                    count: 24,
+                    state: ObjectCategoryState.current,
+                  ),
+                ],
+                allReviewed: false,
+                onSelectCategory: _dummySelect,
+                onConfirmCurrentAndNext: () {},
+              ),
+            ),
+          ),
+        );
+
+        // Find the Bus chip
+        final busChipFinder = find.byKey(
+          ObjectCategoryReviewBar.categoryChipKey('bus'),
+        );
+        expect(busChipFinder, findsOneWidget);
+
+        // Verify AnimatedContainer inside chip has white/transparent background (no blue fill)
+        final containerFinder = find.descendant(
+          of: busChipFinder,
+          matching: find.byType(AnimatedContainer),
+        );
+        expect(containerFinder, findsOneWidget);
+
+        final container = tester.widget<AnimatedContainer>(containerFinder);
+        final decoration = container.decoration as BoxDecoration;
+        expect(decoration.color, equals(Colors.white));
+
+        // Verify border is cyan/blue and width >= 2.0
+        final border = decoration.border as Border;
+        expect(border.top.width, greaterThanOrEqualTo(2.0));
+        expect(border.top.color, isNot(Colors.transparent));
+
+        // Verify Transform.scale is applied to the CURRENT badge
+        final scaleFinder = find.descendant(
+          of: busChipFinder,
+          matching: find.byType(Transform),
+        );
+        expect(scaleFinder, findsOneWidget);
+
+        // Verify [확인 후 다음] button has glowing border and boxShadow
+        final nextBtnContainer = tester.widget<Container>(
+          find.ancestor(
+            of: find.byKey(ObjectCategoryReviewBar.nextButtonKey),
+            matching: find.byType(Container),
+          ).first,
+        );
+        final nextDeco = nextBtnContainer.decoration as BoxDecoration?;
+        expect(nextDeco?.boxShadow, isNotNull);
+        expect(nextDeco!.boxShadow!.isNotEmpty, isTrue);
+
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
   });
 }
 
