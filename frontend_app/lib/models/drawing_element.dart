@@ -46,6 +46,7 @@ class DrawingElement {
   bool isEquipmentLead = false;
   bool isGenLead = false;
   bool electricalBranch = true;
+  List<Map<String, dynamic>> electricalBranches;
 
   bool get isAutoAddedFromExcel =>
       source == 'excel_auto' || id.startsWith('gen_auto_');
@@ -111,9 +112,13 @@ class DrawingElement {
     this.isEquipmentLead = false,
     this.isGenLead = false,
     this.electricalBranch = true,
+    this.electricalBranches = const [],
   }) {
     parameterMissingFields = List<String>.from(parameterMissingFields);
     parameterInputFields = List<String>.from(parameterInputFields);
+    electricalBranches = electricalBranches
+        .map((branch) => Map<String, dynamic>.from(branch))
+        .toList();
     if (type == Tool.generator && isSynchronousCondenserExplicit == null) {
       if (label.startsWith("SC_") ||
           label.startsWith("SC ") ||
@@ -162,6 +167,9 @@ class DrawingElement {
         isEquipmentLead: isEquipmentLead,
         isGenLead: isGenLead,
         electricalBranch: electricalBranch,
+        electricalBranches: electricalBranches
+            .map((branch) => Map<String, dynamic>.from(branch))
+            .toList(),
       )
       ..showInfo = showInfo
       ..isSlack = isSlack
@@ -209,6 +217,9 @@ class DrawingElement {
       'isEquipmentLead': isEquipmentLead,
       'isGenLead': isGenLead,
       'electricalBranch': electricalBranch,
+      'electrical_branches': electricalBranches
+          .map((branch) => Map<String, dynamic>.from(branch))
+          .toList(),
     };
   }
 
@@ -356,6 +367,14 @@ class DrawingElement {
     if (json.containsKey('electricalBranch') &&
         json['electricalBranch'] != null) {
       electricalBranch = json['electricalBranch'] == true;
+    }
+    final rawElectricalBranches =
+        json['electrical_branches'] ?? json['electricalBranches'];
+    if (rawElectricalBranches is List) {
+      electricalBranches = rawElectricalBranches
+          .whereType<Map>()
+          .map((branch) => Map<String, dynamic>.from(branch))
+          .toList();
     }
   }
 

@@ -1489,7 +1489,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     });
     _announceReviewStage();
     if (_canVerifyBusGate && mounted && !_isLoading) {
-      _verifyBusGate();
+      _verifyBusGateAutomatically();
     }
   }
 
@@ -7721,12 +7721,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   // --- Phase 2: Bus Number Mapping & Review ---
 
   bool _isLinkingBusNumbers = false;
+  bool _isAutoVerifyingBusGate = false;
   String? _busModelUsed;
   bool _busFallbackUsed = false;
   int? _busHttpCode;
 
   Future<void> _triggerAiBusLinking() async {
     if (_document == null) return;
+    var shouldAutoVerifyBusGate = false;
     setState(() {
       _isLinkingBusNumbers = true;
       _busMappingFeedback = BusMappingFeedback.processing(_busNodes.length);
@@ -7826,6 +7828,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           _busMappingFeedback = feedback;
           _stageGateMessage = feedback.message;
         });
+        shouldAutoVerifyBusGate = feedback.shouldAutoVerifyBusGate(
+          gateReady: _canVerifyBusGate,
+        );
         _announceReviewStage();
         _showBusMappingFeedback(feedback);
       } else {
@@ -7856,6 +7861,22 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       if (mounted) {
         setState(() => _isLinkingBusNumbers = false);
         _announceReviewStage();
+      }
+    }
+
+    if (shouldAutoVerifyBusGate && mounted) {
+      await _verifyBusGateAutomatically();
+    }
+  }
+
+  Future<void> _verifyBusGateAutomatically() async {
+    if (!mounted || _isLoading || _isAutoVerifyingBusGate) return;
+    setState(() => _isAutoVerifyingBusGate = true);
+    try {
+      await _verifyBusGate();
+    } finally {
+      if (mounted) {
+        setState(() => _isAutoVerifyingBusGate = false);
       }
     }
   }
@@ -8982,24 +9003,67 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             Row(
               children: [
                 Expanded(
-                  child: GlowingTargetWrapper(
-                    targetId: 'bus_gate',
-                    borderRadius: BorderRadius.circular(8),
-                    guideLabel: "✨ 모선 검수 완료",
-                    child: ElevatedButton.icon(
-                      key: const ValueKey('BusCompleteButton'),
-                      onPressed: _completeBusReview,
-                      icon: const Icon(Icons.check_circle_outline, size: 16),
-                      label: const Text("모선 검수 완료"),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _canVerifyBusGate
-                            ? const Color(0xFF16A34A)
-                            : const Color(0xFF2563EB),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                      ),
-                    ),
-                  ),
+                  child: _isAutoVerifyingBusGate
+                      ? Container(
+                          key: const ValueKey('AutoBusGateProgress'),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 13,
+                          ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFEFF6FF),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: const Color(0xFF93C5FD),
+                            ),
+                          ),
+                          child: const Row(
+                            children: [
+                              SizedBox(
+                                width: 15,
+                                height: 15,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                              SizedBox(width: 9),
+                              Expanded(
+                                child: Text(
+                                  '모든 모선 번호를 확인했어요. 결선 검수로 이동합니다.',
+                                  style: TextStyle(
+                                    color: Color(0xFF1D4ED8),
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : GlowingTargetWrapper(
+                          targetId: 'bus_gate',
+                          borderRadius: BorderRadius.circular(8),
+                          guideLabel: "✨ 모선 검수 완료",
+                          child: ElevatedButton.icon(
+                            key: const ValueKey('BusCompleteButton'),
+                            onPressed:
+                                _isLinkingBusNumbers || _isLoading
+                                ? null
+                                : _completeBusReview,
+                            icon: const Icon(
+                              Icons.check_circle_outline,
+                              size: 16,
+                            ),
+                            label: const Text("모선 검수 완료"),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: _canVerifyBusGate
+                                  ? const Color(0xFF16A34A)
+                                  : const Color(0xFF2563EB),
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(vertical: 12),
+                            ),
+                          ),
+                        ),
                 ),
               ],
             ),

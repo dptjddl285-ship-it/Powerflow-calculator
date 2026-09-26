@@ -351,6 +351,70 @@ void main() {
         );
       },
     );
+
+    test(
+      'power-flow result UI actions dispatch locally and ignore semantic replies',
+      () async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        final originalBaseUrl = PowerLensAIService.baseUrl;
+        PowerLensAIService.baseUrl = 'http://127.0.0.1:${server.port}';
+        var requestCount = 0;
+        server.listen((request) async {
+          requestCount++;
+          request.response
+            ..statusCode = HttpStatus.ok
+            ..headers.contentType = ContentType.json
+            ..write(
+              jsonEncode({
+                'status': 'success',
+                'result': {
+                  'reply_ko': '먼저 조류계산을 완료하면 결과를 보여드릴 수 있어요.',
+                  'action_mode': 'GUIDE',
+                  'agent_status': 'GEMINI',
+                },
+              }),
+            );
+          await request.response.close();
+        });
+
+        final dispatched = <PowerLensAppAction>[];
+        Future<bool> handler(
+          PowerLensAppAction action,
+          Map<String, dynamic>? params,
+        ) async {
+          dispatched.add(action);
+          return true;
+        }
+
+        service.registerActionHandler(handler);
+        try {
+          service.clearHistory();
+          const context = PowerLensAssistantContext(
+            currentScreen: 'CAD_CANVAS',
+            workflowStage: 'POWERFLOW_CONVERGED',
+            powerflowReady: true,
+            powerflowConverged: true,
+          );
+
+          await service.sendMessage('결과 보여줘', context);
+          await service.sendMessage('흐름 방향 보여줘', context);
+          await service.sendMessage('수치 보여줘', context);
+
+          expect(requestCount, 0);
+          expect(dispatched, [
+            PowerLensAppAction.showPowerFlowResults,
+            PowerLensAppAction.showFlowDirection,
+            PowerLensAppAction.showValueLabels,
+          ]);
+          expect(service.messages.last.agentStatus, 'LOCAL_DETERMINISTIC');
+          expect(service.messages.last.text, contains('수치 라벨'));
+        } finally {
+          service.unregisterActionHandler(handler);
+          PowerLensAIService.baseUrl = originalBaseUrl;
+          await server.close(force: true);
+        }
+      },
+    );
   });
 
   group('Agent Core V2 Proactive Deduplication Tests', () {

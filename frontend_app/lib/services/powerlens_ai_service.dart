@@ -1248,6 +1248,38 @@ class PowerLensAIService extends ChangeNotifier {
         return;
       }
 
+      // These actions only reveal or toggle already-computed CAD results.
+      // Dispatch them locally so a semantic/LLM response cannot contradict
+      // the solver state currently visible on the canvas.
+      if (screen == 'CAD_CANVAS' &&
+          requestedActions.isNotEmpty &&
+          requestedActions.every(_isPowerFlowResultUiAction)) {
+        final handledActions = <bool>[];
+        for (final action in requestedActions) {
+          handledActions.add(await dispatchAction(action, context: context));
+        }
+        final replies = <String>[];
+        for (var i = 0; i < requestedActions.length; i++) {
+          replies.add(
+            _getActionReply(requestedActions[i], handledActions[i], context),
+          );
+        }
+        _messages.add(
+          PowerLensAIMessageItem(
+            id: 'ai_powerflow_ui_${DateTime.now().millisecondsSinceEpoch}',
+            sender: 'assistant',
+            text: replies.join(' '),
+            stage: context.workflowStage,
+            suggestedActions: _getQuickActions(context.workflowStage, context),
+            agentStatus: 'LOCAL_DETERMINISTIC',
+          ),
+        );
+        finalMascotState = handledActions.every((handled) => handled)
+            ? 'success'
+            : 'blocked';
+        return;
+      }
+
       // 1. Semantic Routing First: Send query to backend Agent /review/agent_chat
       final uri = Uri.parse('$baseUrl/review/agent_chat');
       final payload = {
@@ -1498,6 +1530,18 @@ class PowerLensAIService extends ChangeNotifier {
       );
     }
   }
+
+  bool _isPowerFlowResultUiAction(PowerLensAppAction action) =>
+      switch (action) {
+        PowerLensAppAction.showPowerFlowResults ||
+        PowerLensAppAction.toggleFlowDirection ||
+        PowerLensAppAction.showFlowDirection ||
+        PowerLensAppAction.hideFlowDirection ||
+        PowerLensAppAction.toggleValueLabels ||
+        PowerLensAppAction.showValueLabels ||
+        PowerLensAppAction.hideValueLabels => true,
+        _ => false,
+      };
 
   String _getActionReply(
     PowerLensAppAction action,

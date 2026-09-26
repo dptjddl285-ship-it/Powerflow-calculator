@@ -571,7 +571,7 @@ class BusReviewUiState {
   String get nextActionText {
     if (totalBuses == 0) return noActiveBusMessage;
     if (hasIssues) return '번호 확인이 필요한 모선 $issueBuses개를 확인하세요.';
-    return '모선 번호 확인이 완료되었습니다. [모선 검수 완료]를 눌러주세요.';
+    return '모선 번호 확인이 완료되었습니다. 결선 검수로 자동 이동합니다.';
   }
 
   static List<ReviewNodeItem> activeBusNodes(Iterable<ReviewNodeItem> nodes) {

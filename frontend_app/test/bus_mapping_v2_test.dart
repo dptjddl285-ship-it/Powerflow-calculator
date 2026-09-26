@@ -499,12 +499,12 @@ void main() {
       expect(guideIds, isEmpty);
     });
 
-    // TEST N & O: production Bus state exposes the single completion CTA and
-    // keeps phase entry behind the Object Gate.
-    test('TEST N & O: production Bus completion and phase policy', () {
+    // TEST N & O: a clean Bus state advances after its deterministic gate;
+    // entering Bus Mapping remains behind the Object Gate.
+    test('TEST N & O: clean Bus completion advances without a second CTA', () {
       final cleanState = BusReviewUiState.fromNodes([bus1, bus2]);
-      expect(cleanState.nextActionText, contains('[모선 검수 완료]'));
-      expect(cleanState.nextActionText, isNot(contains('결선')));
+      expect(cleanState.nextActionText, contains('결선 검수'));
+      expect(cleanState.nextActionText, isNot(contains('[모선 검수 완료]')));
       expect(
         BusReviewUiPolicy.canEnterBusMapping(objectGateVerified: false),
         isFalse,
@@ -680,12 +680,13 @@ void main() {
       expect(state.nextActionText, isNot(contains('최종 검증')));
     });
 
-    // TEST W: clean Bus state points only to the Bus completion CTA.
-    test('TEST W: clean Bus next action has no final-review wording', () {
+    // TEST W: clean Bus state advances to Connection after the Bus Gate.
+    test('TEST W: clean Bus next action advances without a completion CTA', () {
       final state = BusReviewUiState.fromNodes([bus1, bus2, bus3]);
       expect(state.issueBuses, 0);
-      expect(state.nextActionText, '모선 번호 확인이 완료되었습니다. [모선 검수 완료]를 눌러주세요.');
+      expect(state.nextActionText, '모선 번호 확인이 완료되었습니다. 결선 검수로 자동 이동합니다.');
       expect(state.nextActionText, isNot(contains('최종 검증')));
+      expect(state.nextActionText, isNot(contains('[모선 검수 완료]')));
     });
 
     // TEST X: rejected buses do not enter active totals or focus IDs.

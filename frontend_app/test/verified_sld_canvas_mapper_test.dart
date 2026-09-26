@@ -73,6 +73,41 @@ void main() {
       },
     );
 
+    test('preserves Excel-bound transformer branches through model copies', () {
+      final transformer =
+          DrawingElement(
+            id: 'trans_multi',
+            type: Tool.transformer,
+            position: Offset.zero,
+          )..updateFromJson({
+            'electrical_branches': [
+              {
+                'from_bus': 9,
+                'to_bus': 11,
+                'r_pu': 0.0023,
+                'x_pu': 0.0839,
+                'tap': 1.0,
+              },
+              {
+                'from_bus': 10,
+                'to_bus': 11,
+                'r_pu': 0.0023,
+                'x_pu': 0.0839,
+                'tap': 1.0,
+              },
+            ],
+          });
+
+      final serialized = transformer.toJson();
+      final copied = transformer.copy();
+      final restored = DrawingElement.fromJson(serialized);
+
+      expect(transformer.electricalBranches, hasLength(2));
+      expect(serialized['electrical_branches'], hasLength(2));
+      expect(copied.electricalBranches, transformer.electricalBranches);
+      expect(restored.electricalBranches, transformer.electricalBranches);
+    });
+
     test(
       'uses only explicit device connection metadata and preserves class',
       () {

@@ -34,6 +34,13 @@ class BusMappingFeedback {
 
   bool get isComplete => kind == BusMappingFeedbackKind.complete;
 
+  bool shouldAutoVerifyBusGate({required bool gateReady}) =>
+      isComplete &&
+      total > 0 &&
+      verified == total &&
+      uncertain == 0 &&
+      gateReady;
+
   factory BusMappingFeedback.processing(int total) => BusMappingFeedback(
     kind: BusMappingFeedbackKind.processing,
     message: 'AI 번호 판독 중... 지금 Lensy가 도면의 모선 번호를 확인하고 있어요. 잠시만 기다려 주세요.',
@@ -150,7 +157,7 @@ class BusMappingFeedback {
     if (verified == total && uncertain == 0) {
       return BusMappingFeedback(
         kind: BusMappingFeedbackKind.complete,
-        message: 'AI 모선 번호 판독 완료: $verified/$total. 전체 번호를 확인하면 결선 검수로 이동합니다.',
+        message: 'AI 모선 번호 판독 완료: $verified/$total. 번호 검증 후 결선 검수로 이동합니다.',
         total: total,
         verified: verified,
         uncertain: uncertain,

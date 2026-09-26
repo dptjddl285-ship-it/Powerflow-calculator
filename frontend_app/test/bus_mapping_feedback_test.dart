@@ -16,6 +16,10 @@ void main() {
 
       expect(feedback.kind, BusMappingFeedbackKind.complete);
       expect(feedback.message, contains('24/24'));
+      expect(feedback.message, contains('결선 검수로 이동'));
+      expect(feedback.message, isNot(contains('눌러주세요')));
+      expect(feedback.shouldAutoVerifyBusGate(gateReady: true), isTrue);
+      expect(feedback.shouldAutoVerifyBusGate(gateReady: false), isFalse);
     });
 
     test('reports partial recognition and remaining review count', () {
@@ -32,6 +36,7 @@ void main() {
       expect(feedback.kind, BusMappingFeedbackKind.partial);
       expect(feedback.message, contains('18/24'));
       expect(feedback.uncertain, 6);
+      expect(feedback.shouldAutoVerifyBusGate(gateReady: true), isFalse);
     });
 
     test(
