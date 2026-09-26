@@ -51,6 +51,8 @@ class PowerLensAIService extends ChangeNotifier {
     defaultValue: 'http://127.0.0.1:8000',
   );
 
+  http.Client? httpClient;
+
   final List<PowerLensAIMessageItem> _messages = [];
   List<PowerLensAIMessageItem> get messages => List.unmodifiable(_messages);
 
@@ -584,6 +586,9 @@ class PowerLensAIService extends ChangeNotifier {
       '어디에',
       '어디',
       '어떻게',
+      '어떻게진행',
+      '진행방법',
+      '진행해',
       '할려면',
       '하려면',
       '누르면',
@@ -602,6 +607,10 @@ class PowerLensAIService extends ChangeNotifier {
       '버튼어디',
       '어느거',
       '어느것',
+      '검수방법',
+      '지금뭐',
+      '현재단계',
+      '단계설명',
     ]);
     if (isHowToOrWhereQuestion) {
       return const [PowerLensAppAction.explainCurrentStage];
@@ -994,11 +1003,10 @@ class PowerLensAIService extends ChangeNotifier {
   }
 
   Future<void> notifyStageChange(PowerLensAssistantContext context) async {
-    if (context.workflowStage == 'OBJECT_REVIEW') {
-      final msg = context.objectWorkflowMessage ?? _currentObjectWorkflowGuidance;
-      if (msg != null && msg.isNotEmpty) {
-        syncObjectReviewGuidance(msg);
-      }
+    if (context.workflowStage == 'OBJECT_REVIEW' &&
+        context.objectWorkflowMessage != null &&
+        context.objectWorkflowMessage!.isNotEmpty) {
+      syncObjectReviewGuidance(context.objectWorkflowMessage!);
       return;
     }
     await _requestProactiveForContext(context.workflowStage, context);
@@ -1008,11 +1016,10 @@ class PowerLensAIService extends ChangeNotifier {
     String stage, [
     PowerLensAssistantContext? context,
   ]) async {
-    if (stage == 'OBJECT_REVIEW' || context?.workflowStage == 'OBJECT_REVIEW') {
-      final msg = context?.objectWorkflowMessage ?? _currentObjectWorkflowGuidance;
-      if (msg != null && msg.isNotEmpty) {
-        syncObjectReviewGuidance(msg);
-      }
+    if ((stage == 'OBJECT_REVIEW' || context?.workflowStage == 'OBJECT_REVIEW') &&
+        context?.objectWorkflowMessage != null &&
+        context!.objectWorkflowMessage!.isNotEmpty) {
+      syncObjectReviewGuidance(context.objectWorkflowMessage!);
       return;
     }
     await _requestProactiveForContext(stage, context);
@@ -1022,11 +1029,10 @@ class PowerLensAIService extends ChangeNotifier {
     String stage, [
     PowerLensAssistantContext? context,
   ]) async {
-    if (stage == 'OBJECT_REVIEW') {
-      final msg = context?.objectWorkflowMessage ?? _currentObjectWorkflowGuidance;
-      if (msg != null && msg.isNotEmpty) {
-        syncObjectReviewGuidance(msg);
-      }
+    if (stage == 'OBJECT_REVIEW' &&
+        context?.objectWorkflowMessage != null &&
+        context!.objectWorkflowMessage!.isNotEmpty) {
+      syncObjectReviewGuidance(context.objectWorkflowMessage!);
       return; // Remote proactive summary must NEVER overwrite deterministic OBJECT_REVIEW workflow guidance
     }
     if (!shouldRequestProactive(context?.documentId, stage)) return;
@@ -1359,6 +1365,33 @@ class PowerLensAIService extends ChangeNotifier {
         return;
       }
 
+      // Navigation/workflow guidance in OBJECT_REVIEW is handled strictly
+      // as a local deterministic response. It must never hit backend agent_chat
+      // to prevent generic/stale stage answers from Gemini.
+      if (context.workflowStage.toUpperCase() == 'OBJECT_REVIEW' &&
+          _isObjectReviewWorkflowHelpQuery(trimmed, requestedActions)) {
+        final canonicalText = currentObjectWorkflowGuidance ??
+            (context.objectWorkflowMessage != null &&
+                    context.objectWorkflowMessage!.isNotEmpty
+                ? context.objectWorkflowMessage!
+                : ReviewCoachPolicy.resolve(context).coachMessage);
+
+        triggerHighlight('object_review_next');
+
+        _messages.add(
+          PowerLensAIMessageItem(
+            id: 'ai_object_workflow_${DateTime.now().millisecondsSinceEpoch}',
+            sender: 'assistant',
+            text: canonicalText,
+            stage: context.workflowStage,
+            suggestedActions: _getQuickActions(context.workflowStage, context),
+            agentStatus: 'LOCAL_DETERMINISTIC',
+          ),
+        );
+        finalMascotState = 'speaking';
+        return;
+      }
+
       // 1. Semantic Routing First: Send query to backend Agent /review/agent_chat
       final uri = Uri.parse('$baseUrl/review/agent_chat');
       final payload = {
@@ -1375,13 +1408,22 @@ class PowerLensAIService extends ChangeNotifier {
         'app_context': context.toJson(),
       };
 
-      final response = await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode(payload),
-          )
-          .timeout(const Duration(seconds: 15));
+      final client = httpClient;
+      final response = client != null
+          ? await client
+              .post(
+                uri,
+                headers: {'Content-Type': 'application/json'},
+                body: jsonEncode(payload),
+              )
+              .timeout(const Duration(seconds: 15))
+          : await http
+              .post(
+                uri,
+                headers: {'Content-Type': 'application/json'},
+                body: jsonEncode(payload),
+              )
+              .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final decoded = jsonDecode(utf8.decode(response.bodyBytes));
@@ -2430,7 +2472,7 @@ class PowerLensAIService extends ChangeNotifier {
         }
         return ctx?.objectHumanCompletenessConfirmed == true
             ? ['객체 검수 완료하기', '다음에 뭐 해?', '현재 상태 요약']
-            : ['도면 주요 객체 확인', '확인했어', '다음에 뭐 해?'];
+            : ['여기서 어떻게 진행해?', '다음에 뭐 해?', '설비 확인'];
       case 'BUS_MAPPING':
       case 'BUS_MAPPING_REVIEW':
         if (ctx == null) {
@@ -2542,6 +2584,48 @@ class PowerLensAIService extends ChangeNotifier {
     return _messages.take(10).map((m) {
       return {'role': m.isUser ? 'user' : 'model', 'content': m.text};
     }).toList();
+  }
+
+  bool _isObjectReviewWorkflowHelpQuery(
+    String text,
+    List<PowerLensAppAction> requestedActions,
+  ) {
+    if (requestedActions.contains(PowerLensAppAction.explainCurrentStage)) {
+      return true;
+    }
+    final q = _normalizeQuery(text);
+    const keywords = [
+      '어떻게진행',
+      '어떻게해',
+      '어떻게해야',
+      '여기서뭐',
+      '뭐해야',
+      '뭘해야',
+      '무엇을해야',
+      '다음에뭐',
+      '다음할일',
+      '뭐눌러',
+      '뭘눌러',
+      '어디눌러',
+      '어디해야',
+      '어디를해야',
+      '어떻게확인',
+      '검수방법',
+      '지금뭐',
+      '현재단계',
+      '단계설명',
+      '사용법',
+      '진행방법',
+      '어디로가',
+      '다음단계',
+      '누르면돼',
+      '누르면되',
+      '어느버튼',
+      '어떤버튼',
+      '무슨버튼',
+      '버튼어디',
+    ];
+    return _containsAny(q, keywords);
   }
 
   void clearHistory() {

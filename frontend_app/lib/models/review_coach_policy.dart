@@ -411,3 +411,4 @@ class ObjectReviewGuidanceMessages {
       '객체 검수가 모두 완료됐습니다.\n'
       '아래 [객체 검수 완료]를 눌러주세요.';
 }
+
