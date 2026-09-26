@@ -125,7 +125,7 @@ class ReviewCoachPolicy {
                 node['review_status']?.toString().toUpperCase() != 'REJECTED',
           )
           .length;
-      final count = busCount > 0 ? busCount : 24;
+      final count = busCount;
       return ReviewCoachDecision(
         coachTarget: 'object_category_review',
         coachMessage: ObjectReviewGuidanceMessages.initialBus(count),
@@ -364,30 +364,38 @@ class ReviewCoachPolicy {
 }
 
 class ObjectReviewGuidanceMessages {
-  static String initialBus(int count) =>
-      'AI 1차 검사에서는 확인이 필요한 객체가 없어요.\n'
-      '이제 설비 종류별로 한 번씩 확인해 주세요.\n'
-      '먼저 Bus ${count}개를 청록색으로 표시했습니다.\n'
-      '빠지거나 잘못 인식된 Bus가 없는지 확인한 뒤\n'
-      '오른쪽의 [확인 후 다음 >]을 눌러주세요.';
+  static String initialBus(int count) {
+    final countText = count > 0 ? '$count개' : '객체';
+    return 'AI 1차 검사에서는 확인이 필요한 객체가 없어요.\n'
+        '이제 설비 종류별로 한 번씩 확인해 주세요.\n'
+        '먼저 Bus $countText를 청록색으로 표시했습니다.\n'
+        '빠지거나 잘못 인식된 Bus가 없는지 확인한 뒤\n'
+        '오른쪽의 [확인 후 다음 >]을 눌러주세요.';
+  }
 
-  static String load(int count) =>
-      'Bus 확인을 마쳤어요.\n'
-      '이번에는 Load ${count}개를 표시했습니다.\n'
-      '부하 심볼이 빠짐없이 잡혔는지 확인한 뒤\n'
-      '[확인 후 다음 >]을 눌러주세요.';
+  static String load(int count) {
+    final countText = count > 0 ? '$count개' : '객체';
+    return 'Bus 확인을 마쳤어요.\n'
+        '이번에는 Load $countText를 표시했습니다.\n'
+        '부하 심볼이 빠짐없이 잡혔는지 확인한 뒤\n'
+        '[확인 후 다음 >]을 눌러주세요.';
+  }
 
-  static String generator(int count) =>
-      'Load 확인을 마쳤어요.\n'
-      '이번에는 Generator ${count}개를 표시했습니다.\n'
-      '발전기 심볼이 올바르게 인식됐는지 확인한 뒤\n'
-      '[확인 후 다음 >]을 눌러주세요.';
+  static String generator(int count) {
+    final countText = count > 0 ? '$count개' : '객체';
+    return 'Load 확인을 마쳤어요.\n'
+        '이번에는 Generator $countText를 표시했습니다.\n'
+        '발전기 심볼이 올바르게 인식됐는지 확인한 뒤\n'
+        '[확인 후 다음 >]을 눌러주세요.';
+  }
 
-  static String transformer(int count) =>
-      'Generator 확인을 마쳤어요.\n'
-      '마지막으로 Transformer ${count}개를 표시했습니다.\n'
-      '변압기 심볼이 빠짐없이 잡혔는지 확인한 뒤\n'
-      '[확인 후 다음 >]을 눌러주세요.';
+  static String transformer(int count) {
+    final countText = count > 0 ? '$count개' : '객체';
+    return 'Generator 확인을 마쳤어요.\n'
+        '마지막으로 Transformer $countText를 표시했습니다.\n'
+        '변압기 심볼이 빠짐없이 잡혔는지 확인한 뒤\n'
+        '[확인 후 다음 >]을 눌러주세요.';
+  }
 
   static String revisit(String categoryLabel) =>
       '$categoryLabel 객체를 다시 보여드릴게요.\n'

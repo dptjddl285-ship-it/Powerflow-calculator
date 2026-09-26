@@ -1,4 +1,27 @@
+import 'package:flutter/material.dart';
 import 'review_models.dart';
+
+/// High-contrast CTA action color distinct from category colors (especially Bus cyan)
+const Color objectReviewCtaColor = Color(0xFFEA580C);
+
+/// Distinct identity color per equipment category
+Color objectCategoryColor(String? className) {
+  if (className == null) return const Color(0xFF64748B);
+  switch (className.trim().toLowerCase()) {
+    case 'bus':
+      return const Color(0xFF06B6D4); // Cyan / sky blue
+    case 'load':
+      return const Color(0xFFF97316); // Orange / amber
+    case 'generator':
+    case 'gen':
+      return const Color(0xFF10B981); // Green
+    case 'transformer':
+    case 'trans':
+      return const Color(0xFFA855F7); // Purple / violet
+    default:
+      return const Color(0xFF0284C7);
+  }
+}
 
 enum ObjectReviewFlowStage {
   exceptionReview,

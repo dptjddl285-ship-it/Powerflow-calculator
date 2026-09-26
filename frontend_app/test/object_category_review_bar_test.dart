@@ -197,7 +197,7 @@ void main() {
         );
         expect(scaleFinder, findsOneWidget);
 
-        // Verify [확인 후 다음] button has glowing border and boxShadow
+        // Verify [확인 후 다음] button has glowing border, boxShadow, and high-contrast CTA background
         final nextBtnContainer = tester.widget<Container>(
           find.ancestor(
             of: find.byKey(ObjectCategoryReviewBar.nextButtonKey),
@@ -208,7 +208,83 @@ void main() {
         expect(nextDeco?.boxShadow, isNotNull);
         expect(nextDeco!.boxShadow!.isNotEmpty, isTrue);
 
+        final nextElevatedBtn = tester.widget<ElevatedButton>(
+          find.byKey(ObjectCategoryReviewBar.nextButtonKey),
+        );
+        expect(
+          nextElevatedBtn.style?.backgroundColor?.resolve({}),
+          equals(objectReviewCtaColor),
+        );
+
         await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+
+    testWidgets(
+      'Each category CURRENT badge uses distinct category identity color with white background',
+      (tester) async {
+        final categories = [
+          const ObjectReviewCategoryStatus(
+            key: 'bus',
+            count: 24,
+            state: ObjectCategoryState.current,
+          ),
+          const ObjectReviewCategoryStatus(
+            key: 'load',
+            count: 17,
+            state: ObjectCategoryState.current,
+          ),
+          const ObjectReviewCategoryStatus(
+            key: 'generator',
+            count: 10,
+            state: ObjectCategoryState.current,
+          ),
+          const ObjectReviewCategoryStatus(
+            key: 'transformer',
+            count: 3,
+            state: ObjectCategoryState.current,
+          ),
+        ];
+
+        for (final cat in categories) {
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: ObjectCategoryReviewBar(
+                  totalCount: 54,
+                  categories: [cat],
+                  allReviewed: false,
+                  onSelectCategory: _dummySelect,
+                  onConfirmCurrentAndNext: () {},
+                ),
+              ),
+            ),
+          );
+
+          final chipFinder = find.byKey(
+            ObjectCategoryReviewBar.categoryChipKey(cat.key),
+          );
+          final containerFinder = find.descendant(
+            of: chipFinder,
+            matching: find.byType(AnimatedContainer),
+          );
+          final container = tester.widget<AnimatedContainer>(containerFinder);
+          final decoration = container.decoration as BoxDecoration;
+
+          // Interior is white (zero opaque colored fill covering symbols)
+          expect(decoration.color, equals(Colors.white));
+
+          // Border color matches objectCategoryColor (base rgb)
+          final border = decoration.border as Border;
+          final expectedColor = objectCategoryColor(cat.key);
+          expect(
+            border.top.color.withValues(alpha: 1.0),
+            equals(expectedColor),
+          );
+          expect(border.top.width, greaterThanOrEqualTo(2.0));
+
+          await tester.pumpWidget(const SizedBox.shrink());
+        }
       },
     );
   });

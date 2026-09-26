@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import '../models/object_visual_sweep.dart';
 import '../models/review_models.dart';
 
 class ReviewOverlayView extends StatefulWidget {
@@ -655,14 +656,64 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                       : null,
                                   onTap: () => widget.onSelectNode(node),
                                   child: isCurrentCategory
-                                      ? CustomPaint(
-                                          painter: _ObjectGuideBoxPainter(
-                                            borderColor: const Color(0xFF06B6D4),
-                                            glowColor: const Color(0xFF06B6D4),
-                                            borderWidth: 2.2,
-                                            pulseVal: pulseVal,
-                                            borderRadius: 4.0,
-                                          ),
+                                      ? Stack(
+                                          clipBehavior: Clip.none,
+                                          children: [
+                                            CustomPaint(
+                                              size: Size(guideW, guideH),
+                                              painter: _ObjectGuideBoxPainter(
+                                                borderColor: objectCategoryColor(
+                                                  node.className,
+                                                ),
+                                                glowColor: objectCategoryColor(
+                                                  node.className,
+                                                ),
+                                                borderWidth:
+                                                    isSelected ? 3.2 : 2.2,
+                                                pulseVal: pulseVal,
+                                                borderRadius: 4.0,
+                                              ),
+                                            ),
+                                            if (isSelected)
+                                              Positioned(
+                                                top: -6,
+                                                right: -6,
+                                                child: Container(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                    horizontal: 4,
+                                                    vertical: 1.5,
+                                                  ),
+                                                  decoration: BoxDecoration(
+                                                    color: objectCategoryColor(
+                                                      node.className,
+                                                    ),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                      4,
+                                                    ),
+                                                    boxShadow: [
+                                                      BoxShadow(
+                                                        color: Colors.black
+                                                            .withValues(
+                                                              alpha: 0.35,
+                                                            ),
+                                                        blurRadius: 3,
+                                                      ),
+                                                    ],
+                                                  ),
+                                                  child: const Text(
+                                                    '선택됨',
+                                                    style: TextStyle(
+                                                      color: Colors.white,
+                                                      fontSize: 8,
+                                                      fontWeight:
+                                                          FontWeight.w800,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
                                         )
                                       : Container(
                                           decoration: BoxDecoration(
@@ -816,8 +867,9 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                       border: Border.all(
                                         color: widget.isObjectCategorySweepActive
                                             ? (isCurrentCategory
-                                                  ? const Color(0xFF06B6D4)
-                                                        .withValues(alpha: 0.4)
+                                                  ? (isSelected
+                                                      ? objectCategoryColor(node.className)
+                                                      : objectCategoryColor(node.className).withValues(alpha: 0.4))
                                                   : classColor.withValues(
                                                       alpha: 0.25,
                                                     ))

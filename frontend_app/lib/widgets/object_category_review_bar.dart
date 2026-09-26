@@ -76,7 +76,7 @@ class _ObjectCategoryReviewBarState extends State<ObjectCategoryReviewBar>
     super.initState();
     _pulseController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1000),
+      duration: const Duration(milliseconds: 750),
       lowerBound: 0,
       upperBound: 1,
     );
@@ -215,62 +215,67 @@ class _ObjectCategoryReviewBarState extends State<ObjectCategoryReviewBar>
                               borderRadius: BorderRadius.circular(5),
                               boxShadow: [
                                 BoxShadow(
-                                  color: const Color(0xFF0284C7).withValues(
-                                    alpha: 0.30 + 0.35 * pulseVal,
+                                  color: objectReviewCtaColor.withValues(
+                                    alpha: 0.40 + 0.45 * pulseVal,
                                   ),
-                                  blurRadius: 6.0 + 4.0 * pulseVal,
-                                  spreadRadius: 1.0 + 1.0 * pulseVal,
+                                  blurRadius: 10.0 + 8.0 * pulseVal,
+                                  spreadRadius: 2.0 + 1.5 * pulseVal,
                                 ),
                               ],
                             )
                           : null,
-                      child: ElevatedButton(
-                        key: ObjectCategoryReviewBar.nextButtonKey,
-                        onPressed: widget.onConfirmCurrentAndNext,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: widget.allReviewed
-                              ? const Color(0xFF15803D)
-                              : (isNextEnabled
-                                  ? const Color(0xFF0284C7)
-                                  : const Color(0xFF94A3B8)),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 10),
-                          elevation: isNextEnabled && !widget.allReviewed
-                              ? 2.0 + pulseVal * 2.0
-                              : 0,
-                          side: isNextEnabled && !widget.allReviewed
-                              ? BorderSide(
-                                  color: Color.lerp(
-                                    const Color(0xFF38BDF8),
-                                    Colors.white,
-                                    pulseVal,
-                                  )!,
-                                  width: 1.5,
-                                )
-                              : BorderSide.none,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(5),
+                      child: Transform.scale(
+                        scale: isNextEnabled && !widget.allReviewed
+                            ? (1.0 + 0.05 * pulseVal)
+                            : 1.0,
+                        child: ElevatedButton(
+                          key: ObjectCategoryReviewBar.nextButtonKey,
+                          onPressed: widget.onConfirmCurrentAndNext,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: widget.allReviewed
+                                ? const Color(0xFF15803D)
+                                : (isNextEnabled
+                                    ? objectReviewCtaColor
+                                    : const Color(0xFF94A3B8)),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 10),
+                            elevation: isNextEnabled && !widget.allReviewed
+                                ? 3.0 + pulseVal * 4.0
+                                : 0,
+                            side: isNextEnabled && !widget.allReviewed
+                                ? BorderSide(
+                                    color: Color.lerp(
+                                      const Color(0xFFFED7AA),
+                                      Colors.white,
+                                      pulseVal,
+                                    )!,
+                                    width: 2.0,
+                                  )
+                                : BorderSide.none,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(5),
+                            ),
                           ),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              widget.allReviewed ? '확인 완료' : '확인 후 다음',
-                              style: const TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w700,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                widget.allReviewed ? '확인 완료' : '확인 후 다음',
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                ),
                               ),
-                            ),
-                            const SizedBox(width: 3),
-                            Icon(
-                              widget.allReviewed
-                                  ? Icons.check_circle_rounded
-                                  : Icons.arrow_forward_ios_rounded,
-                              size: 9,
-                              color: Colors.white,
-                            ),
-                          ],
+                              const SizedBox(width: 3),
+                              Icon(
+                                widget.allReviewed
+                                    ? Icons.check_circle_rounded
+                                    : Icons.arrow_forward_ios_rounded,
+                                size: 9,
+                                color: Colors.white,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -358,6 +363,7 @@ class _ObjectCategoryReviewBarState extends State<ObjectCategoryReviewBar>
   Widget _buildCategoryChip(ObjectReviewCategoryStatus category) {
     final isCurrent = category.state == ObjectCategoryState.current;
     final isReviewed = category.state == ObjectCategoryState.reviewed;
+    final catColor = objectCategoryColor(category.key);
 
     final Color color;
     final Color bgColor;
@@ -372,9 +378,9 @@ class _ObjectCategoryReviewBarState extends State<ObjectCategoryReviewBar>
       statusText = '확인 완료';
       icon = Icons.check_circle_outline_rounded;
     } else if (isCurrent) {
-      color = const Color(0xFF0284C7); // Sharp Cyan/Blue
+      color = catColor; // Distinct category color
       bgColor = Colors.white; // White background, transparent center, no fill color
-      borderColor = const Color(0xFF0284C7);
+      borderColor = catColor;
       statusText = '확인 중';
       icon = Icons.radio_button_checked_rounded;
     } else {
@@ -392,7 +398,7 @@ class _ObjectCategoryReviewBarState extends State<ObjectCategoryReviewBar>
         final pulseShadow = isCurrent
             ? [
                 BoxShadow(
-                  color: const Color(0xFF0284C7).withValues(
+                  color: catColor.withValues(
                     alpha: 0.35 + 0.35 * _pulseController.value,
                   ),
                   blurRadius: 8.0 + 6.0 * _pulseController.value,
@@ -410,8 +416,8 @@ class _ObjectCategoryReviewBarState extends State<ObjectCategoryReviewBar>
             border: Border.all(
               color: isCurrent
                   ? Color.lerp(
-                      const Color(0xFF06B6D4),
-                      const Color(0xFF0284C7),
+                      catColor.withValues(alpha: 0.7),
+                      catColor,
                       _pulseController.value,
                     )!
                   : borderColor,
@@ -455,7 +461,7 @@ class _ObjectCategoryReviewBarState extends State<ObjectCategoryReviewBar>
 
         if (isCurrent) {
           chipWidget = Transform.scale(
-            scale: 1.0 + 0.03 * _pulseController.value,
+            scale: 1.0 + 0.02 * _pulseController.value,
             child: chipWidget,
           );
         }

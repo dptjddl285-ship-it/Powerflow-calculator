@@ -68,6 +68,9 @@ class PowerLensAIService extends ChangeNotifier {
   String? _lastNotifiedStage;
   String? get lastNotifiedStage => _lastNotifiedStage;
 
+  String? _currentObjectWorkflowGuidance;
+  String? get currentObjectWorkflowGuidance => _currentObjectWorkflowGuidance;
+
   /// Prevent duplicate proactive summaries per (document_id, stage)
   final Set<String> _requestedProactiveKeys = {};
 
@@ -902,7 +905,27 @@ class PowerLensAIService extends ChangeNotifier {
   }
 
   void syncObjectReviewGuidance(String canonicalMessage, {String? target}) {
-    _upsertWorkflowGuidance(canonicalMessage, stage: 'OBJECT_REVIEW', target: target);
+    if (canonicalMessage.trim().isEmpty) return;
+    _currentObjectWorkflowGuidance = canonicalMessage;
+
+    // Remove any stale proactive, welcome, or previous workflow guidance messages in OBJECT_REVIEW
+    _messages.removeWhere((m) =>
+        m.stage == 'OBJECT_REVIEW' &&
+        (m.id.startsWith('proactive_') ||
+            m.id == 'msg_welcome' ||
+            m.id.startsWith('workflow_guidance')));
+
+    final actions = _getQuickActions('OBJECT_REVIEW', null);
+    final newItem = PowerLensAIMessageItem(
+      id: 'workflow_guidance_object_review',
+      sender: 'assistant',
+      text: canonicalMessage,
+      stage: 'OBJECT_REVIEW',
+      suggestedActions: actions,
+      agentStatus: _geminiStatus,
+    );
+
+    _messages.insert(0, newItem);
     notifyListeners();
   }
 
@@ -911,6 +934,10 @@ class PowerLensAIService extends ChangeNotifier {
     String stage = 'OBJECT_REVIEW',
     String? target,
   }) {
+    if (stage == 'OBJECT_REVIEW') {
+      syncObjectReviewGuidance(message, target: target);
+      return;
+    }
     if (message.trim().isEmpty) return;
 
     final idx = _messages.indexWhere(
@@ -942,8 +969,11 @@ class PowerLensAIService extends ChangeNotifier {
     String stage, [
     PowerLensAssistantContext? context,
   ]) {
-    if (stage == 'OBJECT_REVIEW' && context?.objectWorkflowMessage != null) {
-      syncObjectReviewGuidance(context!.objectWorkflowMessage!);
+    if (stage == 'OBJECT_REVIEW') {
+      final msg = context?.objectWorkflowMessage ?? _currentObjectWorkflowGuidance;
+      if (msg != null && msg.isNotEmpty) {
+        syncObjectReviewGuidance(msg);
+      }
       return;
     }
     if (_messages.isNotEmpty) return;
@@ -964,9 +994,12 @@ class PowerLensAIService extends ChangeNotifier {
   }
 
   Future<void> notifyStageChange(PowerLensAssistantContext context) async {
-    if (context.workflowStage == 'OBJECT_REVIEW' &&
-        context.objectWorkflowMessage != null) {
-      syncObjectReviewGuidance(context.objectWorkflowMessage!);
+    if (context.workflowStage == 'OBJECT_REVIEW') {
+      final msg = context.objectWorkflowMessage ?? _currentObjectWorkflowGuidance;
+      if (msg != null && msg.isNotEmpty) {
+        syncObjectReviewGuidance(msg);
+      }
+      return;
     }
     await _requestProactiveForContext(context.workflowStage, context);
   }
@@ -975,8 +1008,12 @@ class PowerLensAIService extends ChangeNotifier {
     String stage, [
     PowerLensAssistantContext? context,
   ]) async {
-    if (stage == 'OBJECT_REVIEW' && context?.objectWorkflowMessage != null) {
-      syncObjectReviewGuidance(context!.objectWorkflowMessage!);
+    if (stage == 'OBJECT_REVIEW' || context?.workflowStage == 'OBJECT_REVIEW') {
+      final msg = context?.objectWorkflowMessage ?? _currentObjectWorkflowGuidance;
+      if (msg != null && msg.isNotEmpty) {
+        syncObjectReviewGuidance(msg);
+      }
+      return;
     }
     await _requestProactiveForContext(stage, context);
   }
@@ -985,8 +1022,12 @@ class PowerLensAIService extends ChangeNotifier {
     String stage, [
     PowerLensAssistantContext? context,
   ]) async {
-    if (stage == 'OBJECT_REVIEW' && context?.objectWorkflowMessage != null) {
-      syncObjectReviewGuidance(context!.objectWorkflowMessage!);
+    if (stage == 'OBJECT_REVIEW') {
+      final msg = context?.objectWorkflowMessage ?? _currentObjectWorkflowGuidance;
+      if (msg != null && msg.isNotEmpty) {
+        syncObjectReviewGuidance(msg);
+      }
+      return; // Remote proactive summary must NEVER overwrite deterministic OBJECT_REVIEW workflow guidance
     }
     if (!shouldRequestProactive(context?.documentId, stage)) return;
     _lastNotifiedStage = stage;
