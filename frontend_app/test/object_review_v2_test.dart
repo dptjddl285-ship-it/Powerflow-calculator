@@ -638,6 +638,90 @@ void main() {
     );
 
     // -------------------------------------------------------------
+    // Full-circuit overview must not retain a category-only guide box.
+    // -------------------------------------------------------------
+    testWidgets('clean all-category overview shows no category guide boxes', (
+      tester,
+    ) async {
+      final nodes = [
+        ReviewNodeItem(
+          id: 'overview_bus',
+          className: 'bus',
+          bbox: [100.0, 100.0, 40.0, 12.0],
+          confidence: 0.95,
+          source: 'test',
+          reviewStatus: 'DETECTED',
+        ),
+        ReviewNodeItem(
+          id: 'overview_load',
+          className: 'load',
+          bbox: [200.0, 100.0, 28.0, 28.0],
+          confidence: 0.95,
+          source: 'test',
+          reviewStatus: 'DETECTED',
+        ),
+        ReviewNodeItem(
+          id: 'overview_generator',
+          className: 'generator',
+          bbox: [300.0, 100.0, 32.0, 32.0],
+          confidence: 0.95,
+          source: 'test',
+          reviewStatus: 'DETECTED',
+        ),
+        ReviewNodeItem(
+          id: 'overview_transformer',
+          className: 'transformer',
+          bbox: [400.0, 100.0, 36.0, 36.0],
+          confidence: 0.95,
+          source: 'test',
+          reviewStatus: 'DETECTED',
+        ),
+      ];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              width: 800,
+              height: 600,
+              child: ReviewOverlayView(
+                imageBytes: testImageBytes,
+                imageUrl: '',
+                originalWidth: 800,
+                originalHeight: 600,
+                nodes: nodes,
+                selectedNode: null,
+                objectReviewTargetActive: false,
+                guideNodeIds: const {},
+                isObjectCategorySweepActive: true,
+                currentCategoryHighlightKey: null,
+                onSelectNode: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(
+        find.byKey(const ValueKey('ObjectGuideBox_overview_bus')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('ObjectGuideBox_overview_load')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('ObjectGuideBox_overview_generator')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('ObjectGuideBox_overview_transformer')),
+        findsNothing,
+      );
+    });
+
+    // -------------------------------------------------------------
     // TEST H: ObjectInspectorView with normal DETECTED node shows confidence and no approval button
     // -------------------------------------------------------------
     testWidgets(

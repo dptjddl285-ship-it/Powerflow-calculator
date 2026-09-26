@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import '../../services/powerlens_ai_service.dart';
 
 class PowerLensAIFloatingButton extends StatefulWidget {
   final VoidCallback onPressed;
@@ -14,6 +15,7 @@ class PowerLensAIFloatingButton extends StatefulWidget {
   /// value lets the mascot show a matching pointing cue.
   final String coachTarget;
   final String? coachMessage;
+  final bool useObjectReviewGuidance;
   final ValueChanged<Offset>? onDragDelta;
   final VoidCallback? onDragStart;
   final VoidCallback? onDragEnd;
@@ -29,6 +31,7 @@ class PowerLensAIFloatingButton extends StatefulWidget {
     this.presenceState = 'idle',
     this.coachTarget = 'floating',
     this.coachMessage,
+    this.useObjectReviewGuidance = false,
     this.onDragDelta,
     this.onDragStart,
     this.onDragEnd,
@@ -63,6 +66,9 @@ class _PowerLensAIFloatingButtonState extends State<PowerLensAIFloatingButton>
   @override
   Widget build(BuildContext context) {
     final bubbleText =
+        (widget.useObjectReviewGuidance
+            ? PowerLensAIService.instance.currentObjectWorkflowGuidance
+            : null) ??
         widget.coachMessage ??
         widget.speechBubbleText ??
         "도면 사진으로 시작할까요? 샘플로 체험할까요? ⚡";
@@ -156,6 +162,11 @@ class _PowerLensAIFloatingButtonState extends State<PowerLensAIFloatingButton>
                         Flexible(
                           child: Text(
                             bubbleText,
+                            key: widget.useObjectReviewGuidance
+                                ? const ValueKey(
+                                    'objectReviewLensyGuidanceBubble',
+                                  )
+                                : null,
                             style: const TextStyle(
                               color: Colors.white,
                               fontSize: 12,

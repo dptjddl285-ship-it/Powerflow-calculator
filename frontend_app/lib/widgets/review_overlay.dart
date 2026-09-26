@@ -602,6 +602,7 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                   !isSelected)
                             ? 0.0
                             : (widget.isObjectCategorySweepActive &&
+                                  widget.currentCategoryHighlightKey != null &&
                                   !isCurrentCategory)
                             ? 0.38
                             : 1.0;
@@ -1463,4 +1464,3 @@ class _ObjectGuideBoxPainter extends CustomPainter {
         oldDelegate.borderWidth != borderWidth;
   }
 }
-

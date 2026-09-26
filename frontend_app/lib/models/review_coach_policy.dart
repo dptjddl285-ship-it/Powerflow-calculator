@@ -365,36 +365,36 @@ class ReviewCoachPolicy {
 
 class ObjectReviewGuidanceMessages {
   static String initialBus(int count) {
-    final countText = count > 0 ? '$count개' : '객체';
-    return 'AI 1차 검사에서는 확인이 필요한 객체가 없어요.\n'
-        '이제 설비 종류별로 한 번씩 확인해 주세요.\n'
-        '먼저 Bus $countText를 청록색으로 표시했습니다.\n'
-        '빠지거나 잘못 인식된 Bus가 없는지 확인한 뒤\n'
-        '오른쪽의 [확인 후 다음 >]을 눌러주세요.';
+    return '오른쪽 위의 설비 종류를 하나씩 확인해 주세요.\n'
+        'Bus → Load → Generator → Transformer 순서로 진행합니다.\n'
+        '지금은 Bus ${count}개를 확인할 차례예요.\n'
+        '도면에서 Bus가 빠지거나 잘못 인식된 곳이 없는지 살펴봐 주세요.\n'
+        '확인이 끝나면 오른쪽 위에서 깜박이는 [확인 후 다음 >] 버튼을 눌러주세요.\n'
+        '버튼을 누르면 다음 종류인 Load로 넘어갑니다.';
   }
 
   static String load(int count) {
-    final countText = count > 0 ? '$count개' : '객체';
     return 'Bus 확인을 마쳤어요.\n'
-        '이번에는 Load $countText를 표시했습니다.\n'
-        '부하 심볼이 빠짐없이 잡혔는지 확인한 뒤\n'
-        '[확인 후 다음 >]을 눌러주세요.';
+        '이번에는 Load ${count}개를 확인할 차례예요.\n'
+        '도면에서 Load가 빠지거나 잘못 인식된 곳이 없는지 살펴봐 주세요.\n'
+        '확인이 끝나면 오른쪽 위에서 깜박이는 [확인 후 다음 >] 버튼을 눌러주세요.\n'
+        '버튼을 누르면 다음 종류인 Generator로 넘어갑니다.';
   }
 
   static String generator(int count) {
-    final countText = count > 0 ? '$count개' : '객체';
     return 'Load 확인을 마쳤어요.\n'
-        '이번에는 Generator $countText를 표시했습니다.\n'
-        '발전기 심볼이 올바르게 인식됐는지 확인한 뒤\n'
-        '[확인 후 다음 >]을 눌러주세요.';
+        '이번에는 Generator ${count}개를 확인할 차례예요.\n'
+        '도면에서 Generator가 빠지거나 잘못 인식된 곳이 없는지 살펴봐 주세요.\n'
+        '확인이 끝나면 오른쪽 위에서 깜박이는 [확인 후 다음 >] 버튼을 눌러주세요.\n'
+        '버튼을 누르면 다음 종류인 Transformer로 넘어갑니다.';
   }
 
   static String transformer(int count) {
-    final countText = count > 0 ? '$count개' : '객체';
     return 'Generator 확인을 마쳤어요.\n'
-        '마지막으로 Transformer $countText를 표시했습니다.\n'
-        '변압기 심볼이 빠짐없이 잡혔는지 확인한 뒤\n'
-        '[확인 후 다음 >]을 눌러주세요.';
+        '마지막으로 Transformer ${count}개를 확인할 차례예요.\n'
+        '도면에서 Transformer가 빠지거나 잘못 인식된 곳이 없는지 살펴봐 주세요.\n'
+        '확인이 끝나면 오른쪽 위에서 깜박이는 [확인 후 다음 >] 버튼을 눌러주세요.\n'
+        '버튼을 누르면 전체 회로 보기로 전환합니다.';
   }
 
   static String revisit(String categoryLabel) =>
@@ -404,11 +404,10 @@ class ObjectReviewGuidanceMessages {
 
   static const String allReviewedBeforeCheck =
       'Bus, Load, Generator, Transformer를 모두 확인했어요.\n'
-      '검사해 주셔서 감사합니다.\n'
-      '제가 마지막으로 상태를 한 번 더 확인할게요.';
+      '전체 회로를 표시했어요. 도면 전체를 한 번 더 살펴봐 주세요.\n'
+      '이제 Lensy가 객체 상태와 남은 검수 항목을 다시 확인할게요.';
 
   static const String allReviewedCompletePass =
-      '객체 검수가 모두 완료됐습니다.\n'
-      '아래 [객체 검수 완료]를 눌러주세요.';
+      '전체 객체 검수가 완료됐습니다. 현재 전체 회로를 확인하고 있습니다.\n'
+      '문제가 없다면 아래에서 깜박이고 있는 [객체 검수 완료] 버튼을 눌러주세요.';
 }
-

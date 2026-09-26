@@ -196,6 +196,8 @@ void main() {
       expect(state.getCategoryState('transformer', nodes), ObjectCategoryState.unreviewed);
       expect(state.isAllCategoriesReviewed(nodes), isFalse);
       expect(state.canGoPrevious(nodes), isFalse);
+      expect(state.confirmHumanComplete(nodes), isFalse);
+      expect(state.humanCompleteConfirmed, isFalse);
 
       // 2. Direct click on badge only views, NEVER marks reviewed
       state.selectCategory('load', nodes);
@@ -259,37 +261,33 @@ void main() {
       expect(state.getCategoryState('generator', nodes), ObjectCategoryState.reviewed);
       expect(state.getCategoryState('transformer', nodes), ObjectCategoryState.reviewed);
       expect(state.isComplete(nodes), isTrue);
+      expect(state.confirmHumanComplete(nodes), isTrue);
+      expect(state.humanCompleteConfirmed, isTrue);
     });
 
-    test('ObjectReviewGuidanceMessages generates exact user-specified strings dynamically', () {
-      // 1. Initial Bus entry
+    test('Object Review guidance covers the full sequence and current action', () {
       final busMsg = ObjectReviewGuidanceMessages.initialBus(24);
-      expect(busMsg, contains('AI 1차 검사에서는 확인이 필요한 객체가 없어요.'));
-      expect(busMsg, contains('이제 설비 종류별로 한 번씩 확인해 주세요.'));
-      expect(busMsg, contains('먼저 Bus 24개를 청록색으로 표시했습니다.'));
-      expect(busMsg, contains('빠지거나 잘못 인식된 Bus가 없는지 확인한 뒤'));
-      expect(busMsg, contains('오른쪽의 [확인 후 다음 >]을 눌러주세요.'));
+      expect(busMsg, contains('Bus → Load → Generator → Transformer'));
+      expect(busMsg, contains('Bus 24개'));
+      expect(busMsg, contains('빠지거나 잘못 인식된 곳이 없는지'));
+      expect(busMsg, contains('오른쪽 위에서 깜박이는 [확인 후 다음 >]'));
+      expect(busMsg, contains('다음 종류인 Load'));
+      expect(ObjectReviewGuidanceMessages.initialBus(0), contains('Bus 0개'));
 
-      // 2. Transition to Load
       final loadMsg = ObjectReviewGuidanceMessages.load(17);
       expect(loadMsg, contains('Bus 확인을 마쳤어요.'));
-      expect(loadMsg, contains('이번에는 Load 17개를 표시했습니다.'));
-      expect(loadMsg, contains('부하 심볼이 빠짐없이 잡혔는지 확인한 뒤'));
-      expect(loadMsg, contains('[확인 후 다음 >]을 눌러주세요.'));
+      expect(loadMsg, contains('Load 17개'));
+      expect(loadMsg, contains('다음 종류인 Generator'));
 
-      // 3. Transition to Generator
       final genMsg = ObjectReviewGuidanceMessages.generator(10);
       expect(genMsg, contains('Load 확인을 마쳤어요.'));
-      expect(genMsg, contains('이번에는 Generator 10개를 표시했습니다.'));
-      expect(genMsg, contains('발전기 심볼이 올바르게 인식됐는지 확인한 뒤'));
-      expect(genMsg, contains('[확인 후 다음 >]을 눌러주세요.'));
+      expect(genMsg, contains('Generator 10개'));
+      expect(genMsg, contains('다음 종류인 Transformer'));
 
-      // 4. Transition to Transformer
       final transMsg = ObjectReviewGuidanceMessages.transformer(3);
       expect(transMsg, contains('Generator 확인을 마쳤어요.'));
-      expect(transMsg, contains('마지막으로 Transformer 3개를 표시했습니다.'));
-      expect(transMsg, contains('변압기 심볼이 빠짐없이 잡혔는지 확인한 뒤'));
-      expect(transMsg, contains('[확인 후 다음 >]을 눌러주세요.'));
+      expect(transMsg, contains('Transformer 3개'));
+      expect(transMsg, contains('전체 회로 보기로 전환'));
 
       // 5. Previous or Direct Badge Select
       final revisitMsg = ObjectReviewGuidanceMessages.revisit('Bus');
@@ -297,10 +295,12 @@ void main() {
       expect(revisitMsg, contains('필요한 부분을 다시 확인해주세요.'));
       expect(revisitMsg, contains('확인이 끝나면 [확인 후 다음 >]을 눌러 계속 진행할 수 있어요.'));
 
-      // 6. Complete and Gate pass
       expect(ObjectReviewGuidanceMessages.allReviewedBeforeCheck, contains('Bus, Load, Generator, Transformer를 모두 확인했어요.'));
-      expect(ObjectReviewGuidanceMessages.allReviewedCompletePass, contains('객체 검수가 모두 완료됐습니다.'));
-      expect(ObjectReviewGuidanceMessages.allReviewedCompletePass, contains('아래 [객체 검수 완료]를 눌러주세요.'));
+      expect(ObjectReviewGuidanceMessages.allReviewedBeforeCheck, contains('전체 회로를 표시'));
+      expect(ObjectReviewGuidanceMessages.allReviewedBeforeCheck, contains('Lensy가 객체 상태'));
+      expect(ObjectReviewGuidanceMessages.allReviewedCompletePass, contains('전체 객체 검수가 완료됐습니다.'));
+      expect(ObjectReviewGuidanceMessages.allReviewedCompletePass, contains('현재 전체 회로를 확인'));
+      expect(ObjectReviewGuidanceMessages.allReviewedCompletePass, contains('깜박이고 있는 [객체 검수 완료]'));
     });
   });
 }

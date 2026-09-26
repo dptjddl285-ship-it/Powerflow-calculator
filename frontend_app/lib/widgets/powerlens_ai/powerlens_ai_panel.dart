@@ -683,14 +683,35 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
       animation: _aiService,
       builder: (context, _) {
         final msgs = _aiService.messages;
+        final isObjectReview =
+            widget.assistantContext.workflowStage.toUpperCase() ==
+            'OBJECT_REVIEW';
         WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
 
         return ListView.builder(
           controller: _scrollController,
           padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-          itemCount: msgs.length,
+          itemCount: msgs.length + (isObjectReview ? 2 : 0),
           itemBuilder: (context, index) {
-            final m = msgs[index];
+            if (isObjectReview && index == 0) {
+              return _buildCurrentObjectGuidance();
+            }
+            if (isObjectReview && index == 1) {
+              return const Padding(
+                padding: EdgeInsets.fromLTRB(4, 12, 4, 4),
+                child: Text(
+                  '대화 기록',
+                  key: ValueKey('objectReviewChatHistoryHeading'),
+                  style: TextStyle(
+                    color: Color(0xFF64748B),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              );
+            }
+            final messageIndex = index - (isObjectReview ? 2 : 0);
+            final m = msgs[messageIndex];
             return PowerLensAIMessageBubble(
               message: m,
               onActionSelected: (act) => _handleSend(act),
@@ -698,6 +719,46 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
           },
         );
       },
+    );
+  }
+
+  Widget _buildCurrentObjectGuidance() {
+    final guidance =
+        _aiService.currentObjectWorkflowGuidance ??
+        widget.assistantContext.objectWorkflowMessage ??
+        '현재 검수 안내를 불러오는 중입니다.';
+    return Container(
+      key: const ValueKey('objectReviewCurrentGuidanceCard'),
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEFF6FF),
+        border: Border.all(color: const Color(0xFFBFDBFE)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '현재 검수 안내',
+            style: TextStyle(
+              color: Color(0xFF1D4ED8),
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            guidance,
+            key: const ValueKey('objectReviewCurrentGuidanceText'),
+            style: const TextStyle(
+              color: Color(0xFF1E293B),
+              fontSize: 12,
+              height: 1.45,
+            ),
+          ),
+        ],
+      ),
     );
   }
 

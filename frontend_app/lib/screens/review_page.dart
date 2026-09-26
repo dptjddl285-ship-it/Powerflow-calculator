@@ -807,12 +807,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               .toList();
           _selectedNode = busNodes.isNotEmpty ? busNodes.first : null;
           final busCount = _objectCategoryCount('bus');
-          _stageGateMessage =
-              'AI 1차 검사에서는 확인이 필요한 객체가 없어요.\n'
-              '이제 설비 종류별로 한 번씩 확인해 주세요.\n'
-              '먼저 Bus ${busCount}개를 청록색으로 표시했습니다.\n'
-              '빠지거나 잘못 인식된 Bus가 없는지 확인한 뒤\n'
-              '오른쪽의 [확인 후 다음 >]을 눌러주세요.';
+          _stageGateMessage = ObjectReviewGuidanceMessages.initialBus(busCount);
         }
       }
     });
@@ -841,6 +836,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   void _handleObjectCategoryConfirmAndNext() {
     final currentKey = _objectSweep.currentCategoryKey;
+    var completedSweep = false;
     setState(() {
       final advanced = _objectSweep.confirmCurrentAndGoNext(_workingNodes);
       final nextKey = _objectSweep.currentCategoryKey;
@@ -865,10 +861,19 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               '오른쪽 위 파란색 [확인 후 다음 >] 버튼을 눌러주세요.';
         }
       } else {
-        // Last category (Transformer) confirmed! 4/4 REVIEWED!
+        // The final NEXT switches to a clean whole-circuit overview while
+        // preserving the category completion history.
+        completedSweep = true;
+        _objFilterStatus = 'ALL';
+        _objFilterClass = 'ALL';
+        _nodePage = 0;
+        _selectedNode = null;
         _stageGateMessage = ObjectReviewGuidanceMessages.allReviewedBeforeCheck;
       }
     });
+    if (completedSweep) {
+      PowerLensAIService.instance.clearFocusTargets();
+    }
     PowerLensAIService.instance.syncObjectReviewGuidance(_stageGateMessage!);
     _announceReviewStage();
 
@@ -908,7 +913,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       _objFilterClass = 'ALL';
       _nodePage = 0;
       _selectedNode = null;
-      _stageGateMessage = '전체 도면의 객체를 보고 있어요.';
+      _stageGateMessage =
+          '전체 도면을 표시했습니다. 설비 종류별 확인 순서는 그대로 이어집니다.';
     });
     _announceReviewStage();
   }
@@ -924,8 +930,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     if (suspicious.isEmpty &&
         missing == 0 &&
         blockers.isEmpty &&
-        validNodes.isNotEmpty) {
-      _objectSweep.confirmHumanComplete(_workingNodes);
+        validNodes.isNotEmpty &&
+        _objectSweep.confirmHumanComplete(
+          _workingNodes,
+          hasOpenMissingCandidates: missing > 0,
+        )) {
       setState(() {
         _stageGateMessage = ObjectReviewGuidanceMessages.allReviewedCompletePass;
       });
@@ -934,16 +943,30 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       );
       PowerLensAIService.instance.setStageHighlightTarget('object_gate');
     } else {
+      _objectSweep.invalidateHumanComplete();
+      _humanCompletenessConfirmed = false;
       setState(() {
+        _objFilterStatus = suspicious.isNotEmpty ? 'SUSPICIOUS' : 'ALL';
+        _objFilterClass = 'ALL';
+        _nodePage = 0;
+        _selectedNode = suspicious.isNotEmpty ? suspicious.first : null;
         if (suspicious.isNotEmpty) {
           _stageGateMessage = '아직 확인이 필요한 의심 객체가 ${suspicious.length}개 있습니다.';
         } else if (missing > 0) {
           _stageGateMessage = '해결되지 않은 누락 후보가 ${missing}개 있습니다.';
         } else if (blockers.isNotEmpty) {
           _stageGateMessage = '객체 검수 완료를 위해 확인이 필요합니다: ${blockers.first}';
+        } else {
+          _stageGateMessage = '활성 객체가 없어 객체 검수를 완료할 수 없습니다.';
         }
       });
+      PowerLensAIService.instance.clearFocusTargets();
+      if (suspicious.isNotEmpty) {
+        PowerLensAIService.instance.setStageHighlightTarget('object_review_next');
+      }
+      PowerLensAIService.instance.syncObjectReviewGuidance(_stageGateMessage!);
     }
+    _announceReviewStage();
   }
 
   void _handleObjectReviewPrimaryAction() {
@@ -1227,7 +1250,16 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         : _currentPhase == ReviewPhase.connectionReview
         ? 'CONNECTION_REVIEW'
         : 'FINAL';
-    PowerLensAIService.instance.onStageChanged(stage, _buildAssistantContext());
+    final service = PowerLensAIService.instance;
+    final assistantContext = _buildAssistantContext();
+    if (stage == 'OBJECT_REVIEW' &&
+        assistantContext.objectWorkflowMessage != null) {
+      service.syncObjectReviewGuidance(
+        assistantContext.objectWorkflowMessage!,
+      );
+      return;
+    }
+    service.onStageChanged(stage, assistantContext);
   }
 
   // --- Step 1: Upload & Object Detection ---
@@ -1667,6 +1699,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   String _getReviewStageSpeechBubbleText() {
     if (_stageGateMessage != null && _stageGateMessage!.isNotEmpty) {
       return _stageGateMessage!;
+    }
+    if (_currentPhase == ReviewPhase.objectReview) {
+      final canonical = PowerLensAIService.instance.currentObjectWorkflowGuidance;
+      if (canonical != null && canonical.isNotEmpty) return canonical;
     }
     return _reviewCoachDecision.coachMessage;
   }
@@ -3086,6 +3122,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                             : null,
                         speechBubbleText: _getReviewStageSpeechBubbleText(),
                         coachMessage: _getReviewStageSpeechBubbleText(),
+                        useObjectReviewGuidance:
+                            _currentPhase == ReviewPhase.objectReview,
                       ),
                     );
                   }
@@ -3162,6 +3200,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                 speechBubbleText:
                                     _getReviewStageSpeechBubbleText(),
                                 coachMessage: _getReviewStageSpeechBubbleText(),
+                                useObjectReviewGuidance:
+                                    _currentPhase == ReviewPhase.objectReview,
                               ),
                             ),
                           ],
@@ -3938,7 +3978,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                     objectReviewTargetActive:
                                         _currentPhase ==
                                             ReviewPhase.objectReview &&
-                                        _objectReviewCurrentTarget != null,
+                                        _objectReviewCurrentTarget != null &&
+                                        (_objFilterClass.toUpperCase() !=
+                                                'ALL' ||
+                                            _objSuspiciousCount > 0 ||
+                                            _unresolvedCandidatesCount > 0),
                                     visitedObjectIds:
                                         _objectSweep.visitedObjectIds,
                                     guideNodeIds:
@@ -3956,7 +4000,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                             _objSuspiciousCount == 0 &&
                                             _unresolvedCandidatesCount == 0,
                                     currentCategoryHighlightKey:
-                                        _objectSweep.currentCategoryKey,
+                                        _objFilterClass.toUpperCase() == 'ALL'
+                                        ? null
+                                        : _objFilterClass,
                                     openMissingCandidates:
                                         (_currentPhase ==
                                             ReviewPhase.objectReview)
@@ -4647,7 +4693,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   Widget _buildObjectReviewSidePanel() {
     final visibleNodes = _filteredAndSortedWorkingNodes;
-    if (_selectedNode == null && visibleNodes.isNotEmpty) {
+    final isWholeCircuitOverview = _objFilterClass.toUpperCase() == 'ALL';
+    if (_selectedNode == null &&
+        visibleNodes.isNotEmpty &&
+        !isWholeCircuitOverview) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted || _selectedNode != null) return;
         setState(() {

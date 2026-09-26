@@ -917,61 +917,14 @@ class PowerLensAIService extends ChangeNotifier {
     if (canonicalMessage.trim().isEmpty) return;
     _currentObjectWorkflowGuidance = canonicalMessage;
 
-    // Remove any stale proactive, welcome, or previous workflow guidance messages in OBJECT_REVIEW
+    // Operational guidance is pinned in the panel, separate from chat history.
+    // Remove only legacy system-generated guidance and preserve user chat.
     _messages.removeWhere((m) =>
         m.stage == 'OBJECT_REVIEW' &&
         (m.id.startsWith('proactive_') ||
             m.id == 'msg_welcome' ||
             m.id.startsWith('workflow_guidance')));
-
-    final actions = _getQuickActions('OBJECT_REVIEW', null);
-    final newItem = PowerLensAIMessageItem(
-      id: 'workflow_guidance_object_review',
-      sender: 'assistant',
-      text: canonicalMessage,
-      stage: 'OBJECT_REVIEW',
-      suggestedActions: actions,
-      agentStatus: _geminiStatus,
-    );
-
-    _messages.insert(0, newItem);
     notifyListeners();
-  }
-
-  void _upsertWorkflowGuidance(
-    String message, {
-    String stage = 'OBJECT_REVIEW',
-    String? target,
-  }) {
-    if (stage == 'OBJECT_REVIEW') {
-      syncObjectReviewGuidance(message, target: target);
-      return;
-    }
-    if (message.trim().isEmpty) return;
-
-    final idx = _messages.indexWhere(
-      (m) =>
-          m.id == 'msg_welcome' ||
-          m.id.startsWith('workflow_guidance') ||
-          (m.sender == 'assistant' &&
-              (m.stage == stage || m.id.startsWith('proactive_'))),
-    );
-
-    final actions = _getQuickActions(stage, null);
-    final newItem = PowerLensAIMessageItem(
-      id: 'workflow_guidance_${stage.toLowerCase()}',
-      sender: 'assistant',
-      text: message,
-      stage: stage,
-      suggestedActions: actions,
-      agentStatus: _geminiStatus,
-    );
-
-    if (idx >= 0) {
-      _messages[idx] = newItem;
-    } else {
-      _messages.insert(0, newItem);
-    }
   }
 
   void ensureInitialGreeting(
@@ -1370,10 +1323,13 @@ class PowerLensAIService extends ChangeNotifier {
       // to prevent generic/stale stage answers from Gemini.
       if (context.workflowStage.toUpperCase() == 'OBJECT_REVIEW' &&
           _isObjectReviewWorkflowHelpQuery(trimmed, requestedActions)) {
+        final contextGuidance = context.objectWorkflowMessage;
+        if (contextGuidance != null && contextGuidance.trim().isNotEmpty) {
+          syncObjectReviewGuidance(contextGuidance);
+        }
         final canonicalText = currentObjectWorkflowGuidance ??
-            (context.objectWorkflowMessage != null &&
-                    context.objectWorkflowMessage!.isNotEmpty
-                ? context.objectWorkflowMessage!
+            (contextGuidance != null && contextGuidance.isNotEmpty
+                ? contextGuidance
                 : ReviewCoachPolicy.resolve(context).coachMessage);
 
         triggerHighlight('object_review_next');
