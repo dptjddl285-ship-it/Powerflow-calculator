@@ -944,7 +944,7 @@ class PowerLensAIService extends ChangeNotifier {
     if (canonicalMessage.trim().isEmpty) return;
     _currentObjectWorkflowGuidance = canonicalMessage;
 
-    // Operational guidance is pinned in the panel, separate from chat history.
+    // Keep operational guidance canonical and separate from user chat history.
     // Remove only legacy system-generated guidance and preserve user chat.
     _messages.removeWhere((m) =>
         m.stage == 'OBJECT_REVIEW' &&
@@ -1061,6 +1061,14 @@ class PowerLensAIService extends ChangeNotifier {
       syncObjectReviewGuidance(context.objectWorkflowMessage!);
       return; // Remote proactive summary must NEVER overwrite deterministic OBJECT_REVIEW workflow guidance
     }
+    final stageUpper = stage.toUpperCase();
+    final busGuidance = context?.busMappingMessage;
+    if ((stageUpper == 'BUS_MAPPING' || stageUpper == 'BUS_MAPPING_REVIEW') &&
+        busGuidance != null &&
+        busGuidance.trim().isNotEmpty) {
+      syncBusMappingGuidance(busGuidance);
+      return; // Remote proactive summaries must not replace deterministic Bus Mapping guidance.
+    }
     if (!shouldRequestProactive(context?.documentId, stage)) return;
     _lastNotifiedStage = stage;
 
@@ -1076,13 +1084,18 @@ class PowerLensAIService extends ChangeNotifier {
     };
 
     try {
-      final response = await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode(payload),
-          )
-          .timeout(const Duration(seconds: 10));
+      final response =
+          await (httpClient?.post(
+                    uri,
+                    headers: {'Content-Type': 'application/json'},
+                    body: jsonEncode(payload),
+                  ) ??
+                  http.post(
+                    uri,
+                    headers: {'Content-Type': 'application/json'},
+                    body: jsonEncode(payload),
+                  ))
+              .timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         final decoded = jsonDecode(utf8.decode(response.bodyBytes));
@@ -1138,6 +1151,12 @@ class PowerLensAIService extends ChangeNotifier {
         final rawActions = result['suggested_actions'];
         final actions = _quickActionsForResponse(rawActions, stage, context);
 
+        if ((stageUpper == 'BUS_MAPPING' ||
+                stageUpper == 'BUS_MAPPING_REVIEW') &&
+            currentBusMappingGuidance?.trim().isNotEmpty == true) {
+          return; // Ignore an in-flight proactive reply after Bus guidance becomes canonical.
+        }
+
         _messages.add(
           PowerLensAIMessageItem(
             id: 'proactive_${DateTime.now().millisecondsSinceEpoch}',
@@ -1154,6 +1173,10 @@ class PowerLensAIService extends ChangeNotifier {
         throw Exception('HTTP ${response.statusCode}');
       }
     } catch (_) {
+      if ((stageUpper == 'BUS_MAPPING' || stageUpper == 'BUS_MAPPING_REVIEW') &&
+          currentBusMappingGuidance?.trim().isNotEmpty == true) {
+        return;
+      }
       // Local deterministic proactive fallback on error or offline
       _executeLocalProactiveFallback(stage, context);
     }
@@ -1429,38 +1452,28 @@ class PowerLensAIService extends ChangeNotifier {
       if ((isObjectReviewStage || isBusMappingStage) &&
           _isObjectReviewWorkflowHelpQuery(trimmed, requestedActions)) {
         String canonicalText;
+        final coach = ReviewCoachPolicy.resolve(context);
         if (isBusMappingStage) {
           final contextGuidance = context.busMappingMessage;
-          if (contextGuidance != null && contextGuidance.trim().isNotEmpty) {
-            syncBusMappingGuidance(contextGuidance);
-          }
-          canonicalText = currentBusMappingGuidance ??
-              (contextGuidance != null && contextGuidance.isNotEmpty
-                  ? contextGuidance
-                  : ReviewCoachPolicy.resolve(context).coachMessage);
-          triggerHighlight('bus_gate');
+          canonicalText = context.busMappingAiReading
+              ? coach.coachMessage
+              : (contextGuidance != null && contextGuidance.trim().isNotEmpty
+                    ? contextGuidance
+                    : currentBusMappingGuidance ?? coach.coachMessage);
+          syncBusMappingGuidance(canonicalText);
+          setStageHighlightTarget(coach.highlightTarget);
         } else {
           final contextGuidance = context.objectWorkflowMessage;
-          if (contextGuidance != null && contextGuidance.trim().isNotEmpty) {
-            syncObjectReviewGuidance(contextGuidance);
-          }
-          canonicalText = currentObjectWorkflowGuidance ??
-              (contextGuidance != null && contextGuidance.isNotEmpty
-                  ? contextGuidance
-                  : ReviewCoachPolicy.resolve(context).coachMessage);
+          canonicalText =
+              contextGuidance != null && contextGuidance.trim().isNotEmpty
+              ? contextGuidance
+              : currentObjectWorkflowGuidance ?? coach.coachMessage;
+          syncObjectReviewGuidance(canonicalText);
           triggerHighlight('object_review_next');
         }
 
-        _messages.add(
-          PowerLensAIMessageItem(
-            id: 'ai_workflow_${DateTime.now().millisecondsSinceEpoch}',
-            sender: 'assistant',
-            text: canonicalText,
-            stage: context.workflowStage,
-            suggestedActions: _getQuickActions(context.workflowStage, context),
-            agentStatus: 'LOCAL_DETERMINISTIC',
-          ),
-        );
+        // The virtual conversation-tail bubble renders this canonical reply.
+        // Keep only the user's query in history to avoid a duplicate Lensy bubble.
         finalMascotState = 'speaking';
         return;
       }
@@ -2555,7 +2568,7 @@ class PowerLensAIService extends ChangeNotifier {
         final hasBusIssues =
             ctx.unresolvedBusNumbers > 0 || ctx.duplicateBusNumbers > 0;
         if (ctx.busMappingAiReading) {
-          return ['AI 번호 판독 중...', '현재 상태 요약'];
+          return ['현재 상태 요약'];
         }
         return [
           hasBusIssues ? '미지정 모선 확인' : '모선 번호 확인 완료',

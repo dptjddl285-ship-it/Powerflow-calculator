@@ -639,6 +639,11 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
 
   Widget _buildQuickActions() {
     final actions = _aiService.quickActionsForContext(widget.assistantContext);
+    final isBusMappingProcessing =
+        (widget.assistantContext.workflowStage.toUpperCase() == 'BUS_MAPPING' ||
+            widget.assistantContext.workflowStage.toUpperCase() ==
+                'BUS_MAPPING_REVIEW') &&
+        widget.assistantContext.busMappingAiReading;
 
     return Container(
       color: const Color(0xFFF8FAFC),
@@ -670,7 +675,11 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
                 ),
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 visualDensity: VisualDensity.compact,
-                onPressed: _aiService.isLoading ? null : () => _handleSend(act),
+                onPressed:
+                    _aiService.isLoading ||
+                        (isBusMappingProcessing && _isBusCompletionAction(act))
+                    ? null
+                    : () => _handleSend(act),
               ),
             );
           }).toList(),
@@ -683,21 +692,34 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
     return AnimatedBuilder(
       animation: _aiService,
       builder: (context, _) {
-        final msgs = _aiService.messages;
+        final messages = _aiService.messages;
         final stageUpper = widget.assistantContext.workflowStage.toUpperCase();
-        final isGuidedReview = stageUpper == 'OBJECT_REVIEW' ||
+        final isGuidedReview =
+            stageUpper == 'OBJECT_REVIEW' ||
             stageUpper == 'BUS_MAPPING' ||
             stageUpper == 'BUS_MAPPING_REVIEW';
+        final isBusMapping =
+            stageUpper == 'BUS_MAPPING' || stageUpper == 'BUS_MAPPING_REVIEW';
+        final guidance = _currentWorkflowGuidance(stageUpper);
+        final isProcessing =
+            isBusMapping && widget.assistantContext.busMappingAiReading;
+        final lastMessageAlreadyShowsGuidance =
+            guidance != null &&
+            messages.isNotEmpty &&
+            !messages.last.isUser &&
+            messages.last.text == guidance;
+        final showGuidanceTail =
+            isGuidedReview &&
+            guidance != null &&
+            guidance.trim().isNotEmpty &&
+            !lastMessageAlreadyShowsGuidance;
+        final showProcessingStatusOnly = isProcessing && !showGuidanceTail;
         WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (isGuidedReview) ...[
-              Padding(
-                padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
-                child: _buildCurrentObjectGuidance(),
-              ),
+            if (isGuidedReview)
               const Padding(
                 padding: EdgeInsets.fromLTRB(12, 8, 12, 4),
                 child: Text(
@@ -710,18 +732,30 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
                   ),
                 ),
               ),
-            ],
             Expanded(
               child: ListView.builder(
                 controller: _scrollController,
                 padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
-                itemCount: msgs.length,
+                itemCount:
+                    messages.length +
+                    (showGuidanceTail ? 1 : 0) +
+                    (showProcessingStatusOnly ? 1 : 0),
                 itemBuilder: (context, index) {
-                  final m = msgs[index];
-                  return PowerLensAIMessageBubble(
-                    message: m,
-                    onActionSelected: (act) => _handleSend(act),
-                  );
+                  if (index < messages.length) {
+                    return PowerLensAIMessageBubble(
+                      message: messages[index],
+                      onActionSelected: (act) => _handleSend(act),
+                    );
+                  }
+
+                  if (showGuidanceTail && index == messages.length) {
+                    return _buildCurrentWorkflowGuidanceTail(
+                      guidance,
+                      isProcessing: isProcessing,
+                    );
+                  }
+
+                  return _buildBusProcessingStatus();
                 },
               ),
             ),
@@ -731,84 +765,81 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
     );
   }
 
-  Widget _buildCurrentObjectGuidance() {
-    final stageUpper = widget.assistantContext.workflowStage.toUpperCase();
-    final isBusMapping =
-        stageUpper == 'BUS_MAPPING' || stageUpper == 'BUS_MAPPING_REVIEW';
-    final guidance = isBusMapping
-        ? (_aiService.currentBusMappingGuidance ??
-            widget.assistantContext.busMappingMessage ??
-            ReviewCoachPolicy.resolve(widget.assistantContext).coachMessage)
-        : (_aiService.currentObjectWorkflowGuidance ??
-            widget.assistantContext.objectWorkflowMessage ??
-            '현재 검수 안내를 불러오는 중입니다.');
+  String? _currentWorkflowGuidance(String stageUpper) {
+    final assistantContext = widget.assistantContext;
+    if (stageUpper == 'OBJECT_REVIEW') {
+      return _aiService.currentObjectWorkflowGuidance ??
+          assistantContext.objectWorkflowMessage ??
+          ReviewCoachPolicy.resolve(assistantContext).coachMessage;
+    }
+    if (stageUpper == 'BUS_MAPPING' || stageUpper == 'BUS_MAPPING_REVIEW') {
+      if (assistantContext.busMappingAiReading) {
+        return ReviewCoachPolicy.resolve(assistantContext).coachMessage;
+      }
+      return assistantContext.busMappingMessage ??
+          _aiService.currentBusMappingGuidance ??
+          ReviewCoachPolicy.resolve(assistantContext).coachMessage;
+    }
+    return null;
+  }
+
+  Widget _buildCurrentWorkflowGuidanceTail(
+    String guidance, {
+    required bool isProcessing,
+  }) {
+    return Column(
+      key: const ValueKey('currentWorkflowGuidanceTail'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        PowerLensAIMessageBubble(
+          key: const ValueKey('currentWorkflowGuidanceBubble'),
+          message: PowerLensAIMessageItem(
+            id: 'current_workflow_guidance',
+            sender: 'assistant',
+            text: guidance,
+            stage: widget.assistantContext.workflowStage,
+          ),
+        ),
+        if (isProcessing) _buildBusProcessingStatus(),
+      ],
+    );
+  }
+
+  Widget _buildBusProcessingStatus() {
     return Padding(
-      key: const ValueKey('objectReviewCurrentGuidanceCard'),
-      padding: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 4.0),
+      key: const ValueKey('busMappingThinkingStatus'),
+      padding: const EdgeInsets.only(left: 44, top: 0, bottom: 8),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF3B82F6), Color(0xFF8B5CF6)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(8),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF8B5CF6).withOpacity(0.25),
-                  blurRadius: 4,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: const Center(
-              child: Icon(Icons.auto_awesome, color: Colors.white, size: 15),
+          const SizedBox(
+            width: 13,
+            height: 13,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Color(0xFF64748B),
             ),
           ),
-          const SizedBox(width: 8),
-          Flexible(
-            child: Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 14.0,
-                vertical: 10.0,
-              ),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF1F5F9),
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(14),
-                  topRight: Radius.circular(14),
-                  bottomLeft: Radius.circular(2),
-                  bottomRight: Radius.circular(14),
-                ),
-                border: Border.all(color: const Color(0xFFE2E8F0)),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.04),
-                    blurRadius: 4,
-                    offset: const Offset(0, 1),
-                  ),
-                ],
-              ),
-              child: Text(
-                guidance,
-                key: const ValueKey('objectReviewCurrentGuidanceText'),
-                style: const TextStyle(
-                  color: Color(0xFF1E293B),
-                  fontSize: 12,
-                  height: 1.45,
-                ),
-              ),
+          const SizedBox(width: 7),
+          Text(
+            '생각 중…',
+            key: const ValueKey('busMappingThinkingText'),
+            style: const TextStyle(
+              color: Color(0xFF64748B),
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
             ),
           ),
         ],
       ),
     );
+  }
+
+  bool _isBusCompletionAction(String action) {
+    final normalized = action.replaceAll(RegExp(r'\s+'), '');
+    return normalized.contains('모선검수완료') ||
+        normalized.contains('모선번호확인완료') ||
+        normalized.contains('모선확인완료');
   }
 
   Widget _buildLoadingIndicator() {

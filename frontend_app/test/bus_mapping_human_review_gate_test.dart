@@ -1,9 +1,16 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:circuit_solver/models/review_models.dart';
 import 'package:circuit_solver/models/powerlens_assistant_context.dart';
+import 'package:circuit_solver/models/review_coach_policy.dart';
 import 'package:circuit_solver/services/powerlens_ai_service.dart';
 import 'package:circuit_solver/widgets/powerlens_ai/powerlens_ai_button.dart';
+import 'package:circuit_solver/widgets/powerlens_ai/powerlens_ai_message.dart';
 import 'package:circuit_solver/widgets/powerlens_ai/powerlens_ai_panel.dart';
 
 ReviewNodeItem makeBus({
@@ -214,100 +221,310 @@ void main() {
       );
     });
 
-    // 10. opened Lensy canonical guidance renders as assistant bubble
-    testWidgets('10. Opened Lensy canonical guidance renders as assistant message bubble', (tester) async {
-      const guidance = '모선 번호 자동 판독을 마쳤어요. 24개의 모선 번호를 모두 읽었고, 현재 확인이 필요한 번호는 없습니다.\n\n제가 먼저 확인했으니, 이번에는 도면의 모선 번호가 실제 도면과 맞는지 직접 한 번 더 확인해 주세요.\n\n확인이 끝나면 저에게 \'다 했어\' 또는 \'확인했어\'라고 말씀하시거나, 아래에서 깜박이고 있는 [모선 검수 완료] 버튼을 눌러주세요.';
-      service.syncBusMappingGuidance(guidance);
+    // 10. opened Lensy canonical guidance renders as the final assistant bubble
+    testWidgets(
+      '10. Opened Lensy canonical guidance renders at the conversation tail',
+      (tester) async {
+        const guidance =
+            '모선 번호 자동 판독을 마쳤어요. 24개의 모선 번호를 모두 읽었고, 현재 확인이 필요한 번호는 없습니다.\n\n제가 먼저 확인했으니, 이번에는 도면의 모선 번호가 실제 도면과 맞는지 직접 한 번 더 확인해 주세요.\n\n확인이 끝나면 저에게 \'다 했어\' 또는 \'확인했어\'라고 말씀하시거나, 아래에서 깜박이고 있는 [모선 검수 완료] 버튼을 눌러주세요.';
+        service.syncBusMappingGuidance(guidance);
 
+        const context = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'BUS_MAPPING',
+          busMappingMessage: guidance,
+        );
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: PowerLensAIPanel(assistantContext: context, onClose: () {}),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const ValueKey('objectReviewCurrentGuidanceCard')),
+          findsNothing,
+        );
+        final tail = find.byKey(
+          const ValueKey('currentWorkflowGuidanceBubble'),
+        );
+        expect(tail, findsOneWidget);
+        expect(
+          tester.widget<PowerLensAIMessageBubble>(tail).message.text,
+          guidance,
+        );
+        expect(find.byType(ListView), findsOneWidget);
+        expect(
+          find.descendant(of: find.byType(ListView), matching: tail),
+          findsOneWidget,
+        );
+        expect(
+          service.messages.any((message) => message.text == guidance),
+          isFalse,
+        );
+        await tester.pump(const Duration(seconds: 11));
+      },
+    );
+
+    // 11. closed/open/help exact same guidance, without duplicate bubbles
+    testWidgets(
+      '11. Closed bubble, opened tail, and help share exact guidance once',
+      (tester) async {
+        const guidance =
+            '모선 번호 자동 판독을 마쳤어요. 24개의 모선 번호를 모두 읽었고, 현재 확인이 필요한 번호는 없습니다.\n\n제가 먼저 확인했으니, 이번에는 도면의 모선 번호가 실제 도면과 맞는지 직접 한 번 더 확인해 주세요.\n\n확인이 끝나면 저에게 \'다 했어\' 또는 \'확인했어\'라고 말씀하시거나, 아래에서 깜박이고 있는 [모선 검수 완료] 버튼을 눌러주세요.';
+        service.syncBusMappingGuidance(guidance);
+
+        const context = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'BUS_MAPPING',
+          busMappingMessage: guidance,
+        );
+
+        // Closed bubble
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: Scaffold(
+              body: PowerLensAIFloatingButton(
+                onPressed: _noop,
+                useObjectReviewGuidance: true,
+              ),
+            ),
+          ),
+        );
+        final closedText = tester
+            .widget<Text>(
+              find.byKey(const ValueKey('objectReviewLensyGuidanceBubble')),
+            )
+            .data;
+        expect(closedText, guidance);
+
+        // Opened conversation tail
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: PowerLensAIPanel(assistantContext: context, onClose: _noop),
+            ),
+          ),
+        );
+        final openedTail = find.byKey(
+          const ValueKey('currentWorkflowGuidanceBubble'),
+        );
+        final openedText = tester
+            .widget<PowerLensAIMessageBubble>(openedTail)
+            .message
+            .text;
+        expect(openedText, guidance);
+
+        // Help query ("다음에 뭐 해?")
+        await service.sendMessage('다음에 뭐 해?', context);
+        await tester.pumpAndSettle();
+        expect(service.messages, hasLength(1));
+        expect(service.messages.single.isUser, isTrue);
+        expect(
+          tester.widget<PowerLensAIMessageBubble>(openedTail).message.text,
+          guidance,
+        );
+        expect(
+          find.byKey(const ValueKey('currentWorkflowGuidanceBubble')),
+          findsOneWidget,
+        );
+        await tester.pump(const Duration(seconds: 11));
+      },
+    );
+
+    testWidgets(
+      'Bus AI reading shows canonical processing tail, spinner, and no completion action',
+      (tester) async {
+        final buses = List.generate(
+          24,
+          (index) => makeBus(
+            id: 'reading_${index + 1}',
+            bbox: [index.toDouble(), 0, 1, 1],
+            busNumber: index + 1,
+          ),
+        );
+        final context = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'BUS_MAPPING',
+          totalBuses: buses.length,
+          busMappingAiReading: true,
+          busMappingMessage: '이전 검수 안내',
+          workingNodes: buses.map((bus) => bus.toJson()).toList(),
+        );
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: PowerLensAIPanel(assistantContext: context, onClose: _noop),
+            ),
+          ),
+        );
+        await tester.pump(const Duration(milliseconds: 300));
+
+        final expected = ReviewCoachPolicy.resolve(context).coachMessage;
+        final tail = find.byKey(
+          const ValueKey('currentWorkflowGuidanceBubble'),
+        );
+        expect(
+          tester.widget<PowerLensAIMessageBubble>(tail).message.text,
+          expected,
+        );
+        expect(expected, contains('잠시만 기다려주세요.'));
+        expect(
+          find.byKey(const ValueKey('busMappingThinkingStatus')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('busMappingThinkingText')),
+          findsOneWidget,
+        );
+        expect(find.text('모선 번호 확인 완료'), findsNothing);
+        expect(find.text('AI 번호 판독 중...'), findsNothing);
+        expect(
+          service.quickActionsForContext(context),
+          isNot(contains('모선 번호 확인 완료')),
+        );
+      },
+    );
+
+    test('Bus deterministic guidance bypasses proactive requests', () async {
+      final originalBaseUrl = PowerLensAIService.baseUrl;
+      var proactiveRequests = 0;
+      final mockClient = MockClient((request) async {
+        if (request.url.path.endsWith('/review/proactive_summary')) {
+          proactiveRequests++;
+        }
+        return http.Response('{}', 200);
+      });
+      service.httpClient = mockClient;
+      PowerLensAIService.baseUrl = 'http://127.0.0.1:1';
+      addTearDown(() async {
+        service.httpClient = null;
+        PowerLensAIService.baseUrl = originalBaseUrl;
+        mockClient.close();
+      });
+
+      const guidance = '자동 판독을 마쳤어요. 직접 확인해 주세요.';
       const context = PowerLensAssistantContext(
         currentScreen: 'REVIEW_PAGE',
         workflowStage: 'BUS_MAPPING',
         busMappingMessage: guidance,
       );
+      await service.notifyStageChange(context);
+      await service.onStageChanged('BUS_MAPPING', context);
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: PowerLensAIPanel(
-              assistantContext: context,
-              onClose: () {},
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      // Card container exists with correct key
-      expect(find.byKey(const ValueKey('objectReviewCurrentGuidanceCard')), findsOneWidget);
-      // Pinned text exists and matches guidance
-      expect(find.byKey(const ValueKey('objectReviewCurrentGuidanceText')), findsOneWidget);
-      expect(
-        tester.widget<Text>(find.byKey(const ValueKey('objectReviewCurrentGuidanceText'))).data,
-        guidance,
-      );
-      // Renders conversational bubble styling (not old rigid card)
-      final cardFinder = find.byKey(const ValueKey('objectReviewCurrentGuidanceCard'));
-      expect(cardFinder, findsOneWidget);
-      final bubbleContainer = tester.widget<Container>(
-        find.descendant(of: cardFinder, matching: find.byType(Container)).last,
-      );
-      expect(bubbleContainer.decoration, isA<BoxDecoration>());
-      final decoration = bubbleContainer.decoration as BoxDecoration;
-      expect(decoration.color, const Color(0xFFF1F5F9));
-      await tester.pump(const Duration(seconds: 11));
+      expect(proactiveRequests, 0);
+      expect(service.currentBusMappingGuidance, guidance);
     });
 
-    // 11. closed/open/help exact same guidance
-    testWidgets('11. Closed bubble, opened pinned card, and help reply have exact same guidance', (tester) async {
-      const guidance = '모선 번호 자동 판독을 마쳤어요. 24개의 모선 번호를 모두 읽었고, 현재 확인이 필요한 번호는 없습니다.\n\n제가 먼저 확인했으니, 이번에는 도면의 모선 번호가 실제 도면과 맞는지 직접 한 번 더 확인해 주세요.\n\n확인이 끝나면 저에게 \'다 했어\' 또는 \'확인했어\'라고 말씀하시거나, 아래에서 깜박이고 있는 [모선 검수 완료] 버튼을 눌러주세요.';
-      service.syncBusMappingGuidance(guidance);
+    test(
+      'an in-flight proactive reply cannot replace newly synced Bus guidance',
+      () async {
+        final requestStarted = Completer<void>();
+        final response = Completer<http.Response>();
+        final originalBaseUrl = PowerLensAIService.baseUrl;
+        final mockClient = MockClient((request) {
+          requestStarted.complete();
+          return response.future;
+        });
+        service.httpClient = mockClient;
+        PowerLensAIService.baseUrl = 'http://127.0.0.1:1';
+        addTearDown(() async {
+          service.httpClient = null;
+          PowerLensAIService.baseUrl = originalBaseUrl;
+          mockClient.close();
+        });
 
-      const context = PowerLensAssistantContext(
-        currentScreen: 'REVIEW_PAGE',
-        workflowStage: 'BUS_MAPPING',
-        busMappingMessage: guidance,
-      );
-
-      // Closed bubble
-      await tester.pumpWidget(
-        const MaterialApp(
-          home: Scaffold(
-            body: PowerLensAIFloatingButton(
-              onPressed: _noop,
-              useObjectReviewGuidance: true,
-            ),
+        const initialContext = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'BUS_MAPPING',
+        );
+        final pending = service.notifyStageChange(initialContext);
+        await requestStarted.future;
+        const guidance = '모선 번호 자동 판독을 마쳤어요. 직접 확인해 주세요.';
+        service.syncBusMappingGuidance(guidance);
+        response.complete(
+          http.Response(
+            jsonEncode({
+              'status': 'success',
+              'reply_ko': '오래된 원격 안내',
+              'agent_status': 'PROACTIVE',
+            }),
+            200,
+            headers: {'content-type': 'application/json'},
           ),
-        ),
-      );
-      final closedText = tester.widget<Text>(
-        find.byKey(const ValueKey('objectReviewLensyGuidanceBubble')),
-      ).data;
-      expect(closedText, guidance);
+        );
+        await pending;
 
-      // Opened pinned card
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: PowerLensAIPanel(
-              assistantContext: context,
-              onClose: _noop,
-            ),
+        expect(service.currentBusMappingGuidance, guidance);
+        expect(
+          service.messages.any((message) => message.text == '오래된 원격 안내'),
+          isFalse,
+        );
+      },
+    );
+
+    test(
+      '24 verified buses resolve to human-review guidance; partial results show dynamic unresolved count',
+      () {
+        final completeBuses = List.generate(
+          24,
+          (index) => makeBus(
+            id: 'complete_${index + 1}',
+            bbox: [index.toDouble(), 0, 1, 1],
+            busNumber: index + 1,
           ),
-        ),
-      );
-      final openedText = tester.widget<Text>(
-        find.byKey(const ValueKey('objectReviewCurrentGuidanceText')),
-      ).data;
-      expect(openedText, guidance);
+        );
+        final complete = ReviewCoachPolicy.resolve(
+          PowerLensAssistantContext(
+            currentScreen: 'REVIEW_PAGE',
+            workflowStage: 'BUS_MAPPING',
+            totalBuses: completeBuses.length,
+            workingNodes: completeBuses.map((bus) => bus.toJson()).toList(),
+          ),
+        );
+        expect(complete.coachMessage, contains('24개의 모선 번호를 모두 읽었고'));
+        expect(complete.coachMessage, contains('직접 한 번 더 확인'));
+        expect(complete.coachMessage, contains('[모선 검수 완료]'));
+        expect(complete.coachMessage, isNot(contains('자동으로 읽고 있어요')));
+        expect(complete.coachMessage, isNot(contains('잠시만 기다려')));
 
-      // Help query ("다음에 뭐 해?")
-      await service.sendMessage('다음에 뭐 해?', context);
-      final helpReply = service.messages.lastWhere(
-        (m) => m.sender == 'assistant',
-      );
-      expect(helpReply.text, guidance);
-      await tester.pump(const Duration(seconds: 11));
-    });
+        final partialBuses = [
+          ...completeBuses.take(21),
+          makeBus(
+            id: 'uncertain_22',
+            bbox: [22, 0, 1, 1],
+            busNumber: null,
+            busNumberStatus: 'UNCERTAIN',
+          ),
+          makeBus(
+            id: 'uncertain_23',
+            bbox: [23, 0, 1, 1],
+            busNumber: null,
+            busNumberStatus: 'UNCERTAIN',
+          ),
+          makeBus(
+            id: 'uncertain_24',
+            bbox: [24, 0, 1, 1],
+            busNumber: null,
+            busNumberStatus: 'UNCERTAIN',
+          ),
+        ];
+        final partial = ReviewCoachPolicy.resolve(
+          PowerLensAssistantContext(
+            currentScreen: 'REVIEW_PAGE',
+            workflowStage: 'BUS_MAPPING',
+            totalBuses: partialBuses.length,
+            workingNodes: partialBuses.map((bus) => bus.toJson()).toList(),
+          ),
+        );
+        expect(partial.coachMessage, contains('전체 24개 중 21개는 확인했고'));
+        expect(partial.coachMessage, contains('3개는 번호를 명확하게 읽지 못했습니다'));
+        expect(partial.coachMessage, isNot(contains('잠시만 기다려')));
+      },
+    );
   });
 }
 

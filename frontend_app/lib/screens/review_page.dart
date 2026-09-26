@@ -1267,7 +1267,24 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       );
       return;
     }
+    if (stage == 'BUS_MAPPING') {
+      _syncBusMappingGuidanceFromCurrentState();
+      service.onStageChanged(stage, _buildAssistantContext());
+      return;
+    }
     service.onStageChanged(stage, assistantContext);
+  }
+
+  void _syncBusMappingGuidanceFromCurrentState() {
+    if (!mounted || _currentPhase != ReviewPhase.busMappingReview) return;
+
+    final coach = ReviewCoachPolicy.resolve(_buildAssistantContext());
+    if (_stageGateMessage != coach.coachMessage) {
+      setState(() => _stageGateMessage = coach.coachMessage);
+    }
+    final service = PowerLensAIService.instance;
+    service.syncBusMappingGuidance(coach.coachMessage);
+    service.setStageHighlightTarget(coach.highlightTarget);
   }
 
   // --- Step 1: Upload & Object Detection ---
@@ -1650,14 +1667,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     setState(() {
       _selectedNode = next;
       _busNumberEditController.text = next.busNumber?.toString() ?? '';
-      _stageGateMessage = _canVerifyBusGate
-          ? '이제 모든 모선 번호가 정리됐어요.\n전체 도면을 한 번 확인한 뒤\n[모선 검수 완료]를 눌러주세요.'
-          : '번호를 적용했어요. 다음 확인 모선을 표시했습니다.';
     });
-    PowerLensAIService.instance.syncBusMappingGuidance(_stageGateMessage!);
-    if (_canVerifyBusGate) {
-      PowerLensAIService.instance.setStageHighlightTarget('bus_gate');
-    }
     _announceReviewStage();
   }
 
@@ -2095,7 +2105,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   // --- Step 4: Bus Gate Verification & Unified Completion ---
 
   Future<void> _completeBusReview() async {
-    if (_document == null || _isLoading) return;
+    if (_document == null || _isLoading || _isLinkingBusNumbers) return;
 
     if (!_canVerifyBusGate) {
       final blockers = _busGateBlockers;
@@ -2109,7 +2119,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       setState(() {
         _stageGateMessage = msg;
       });
-      PowerLensAIService.instance.syncBusMappingGuidance(msg);
       _focusNextReviewTask();
       _announceReviewStage();
       return;
@@ -2142,6 +2151,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               ? '마지막 확인에서 다시 볼 모선을 찾았어요. 제가 첫 번째 항목을 가리켰습니다.'
               : '마지막 확인에서 다음 항목이 남아 있어요:\n• ${_busGateBlockers.join('\n• ')}';
         });
+        _announceReviewStage();
       }
       return;
     }
@@ -7864,9 +7874,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       _busMappingFeedback = BusMappingFeedback.processing(_busNodes.length);
       _stageGateMessage = _busMappingFeedback!.message;
     });
-    PowerLensAIService.instance.syncBusMappingGuidance(
-      '모선 번호를 자동으로 읽고 있어요.\n잠시만 기다려주세요.',
-    );
     _announceReviewStage();
     try {
       final res = await _apiService.linkBusNumbers(
@@ -7963,14 +7970,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           }
           _busMappingFeedback = feedback;
           _busHumanReviewConfirmed = false;
-          final coach = _reviewCoachDecision;
-          _stageGateMessage = coach.coachMessage;
         });
-        PowerLensAIService.instance.syncBusMappingGuidance(_stageGateMessage!);
-        if (_canVerifyBusGate) {
-          PowerLensAIService.instance.setStageHighlightTarget('bus_gate');
-        }
-        _announceReviewStage();
         _showBusMappingFeedback(feedback);
       } else {
         final code = int.tryParse(res['http_code']?.toString() ?? '');
@@ -7982,11 +7982,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           _busMappingFeedback = feedback;
           _busHttpCode = code;
           _busHumanReviewConfirmed = false;
-          final coach = _reviewCoachDecision;
-          _stageGateMessage = coach.coachMessage;
         });
-        PowerLensAIService.instance.syncBusMappingGuidance(_stageGateMessage!);
-        _announceReviewStage();
         _showBusMappingFeedback(feedback);
       }
     } catch (_) {
@@ -7995,11 +7991,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         setState(() {
           _busMappingFeedback = feedback;
           _busHumanReviewConfirmed = false;
-          final coach = _reviewCoachDecision;
-          _stageGateMessage = coach.coachMessage;
         });
-        PowerLensAIService.instance.syncBusMappingGuidance(_stageGateMessage!);
-        _announceReviewStage();
         _showBusMappingFeedback(feedback);
       }
     } finally {

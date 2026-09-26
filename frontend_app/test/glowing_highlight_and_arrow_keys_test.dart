@@ -915,12 +915,14 @@ void main() {
         );
 
         await service.sendMessage('다 잘됐을경우 뭐 눌러?', cleanCtx);
-        final lastMsg = service.messages.last.text;
-        expect(lastMsg, contains('객체 검수 완료'));
-        expect(lastMsg.contains('정상 객체 일괄 승인'), isFalse);
+        expect(service.messages, hasLength(1));
+        expect(service.messages.single.isUser, isTrue);
+        final guidance = service.currentObjectWorkflowGuidance!;
+        expect(guidance, contains('객체 검수 완료'));
+        expect(guidance.contains('정상 객체 일괄 승인'), isFalse);
 
         // In Object Review V2, quick actions suggest object completion instead of batch approval
-        final quickActions = service.messages.last.suggestedActions;
+        final quickActions = service.quickActionsForContext(cleanCtx);
         expect(quickActions, contains('객체 검수 완료하기'));
         expect(quickActions.contains('정상 객체 일괄 승인'), isFalse);
       },

@@ -21,7 +21,7 @@ void main() {
   });
 
   test(
-    'workflow guidance stays outside chat and Object Review help is local',
+    'workflow guidance stays canonical outside history and help uses the tail bubble',
     () async {
       final originalBaseUrl = PowerLensAIService.baseUrl;
       var agentChatRequests = 0;
@@ -48,30 +48,24 @@ void main() {
       expect(service.messages, isEmpty);
 
       await service.sendMessage('여기서 어떻게 진행해?', firstContext);
-      final reply = service.messages.singleWhere(
-        (message) => message.sender == 'assistant',
-      );
-      expect(reply.text, initialGuidance);
-      expect(reply.agentStatus, 'LOCAL_DETERMINISTIC');
+      expect(service.messages, hasLength(1));
+      expect(service.messages.single.isUser, isTrue);
+      expect(service.messages.single.text, '여기서 어떻게 진행해?');
       expect(agentChatRequests, 0);
 
       service.syncObjectReviewGuidance(nextGuidance);
       expect(service.currentObjectWorkflowGuidance, nextGuidance);
-      expect(service.messages, hasLength(2));
+      expect(service.messages, hasLength(1));
       expect(service.messages.any((message) => message.isUser), isTrue);
       expect(
         service.messages.any((message) => message.text == initialGuidance),
-        isTrue,
-      );
-      expect(
-        service.messages.any((message) => message.text == nextGuidance),
         isFalse,
       );
     },
   );
 
   testWidgets(
-    'closed, pinned, and help guidance match at every Object Review stage',
+    'closed and conversation-tail guidance match through every Object Review stage and help query',
     (tester) async {
       final originalBaseUrl = PowerLensAIService.baseUrl;
       var agentChatRequests = 0;
@@ -129,23 +123,41 @@ void main() {
             ),
           ),
         );
-        final pinnedGuidance = tester
-            .widget<Text>(
-              find.byKey(const ValueKey('objectReviewCurrentGuidanceText')),
-            )
-            .data;
-        expect(pinnedGuidance, guidance);
+        expect(
+          find.byKey(const ValueKey('currentWorkflowGuidanceBubble')),
+          findsOneWidget,
+        );
+        expect(
+          tester
+              .widget<PowerLensAIMessageBubble>(
+                find.byKey(const ValueKey('currentWorkflowGuidanceBubble')),
+              )
+              .message
+              .text,
+          guidance,
+        );
         expect(
           find.byKey(const ValueKey('objectReviewCurrentGuidanceCard')),
-          findsOneWidget,
+          findsNothing,
         );
         expect(find.text('대화 기록'), findsOneWidget);
 
         await service.sendMessage('여기서 어떻게 진행해?', context);
-        final helpReply = service.messages.lastWhere(
-          (message) => message.sender == 'assistant',
+        await tester.pumpAndSettle();
+        expect(service.messages.last.isUser, isTrue);
+        expect(
+          tester
+              .widget<PowerLensAIMessageBubble>(
+                find.byKey(const ValueKey('currentWorkflowGuidanceBubble')),
+              )
+              .message
+              .text,
+          guidance,
         );
-        expect(helpReply.text, guidance);
+        expect(
+          find.byKey(const ValueKey('currentWorkflowGuidanceBubble')),
+          findsOneWidget,
+        );
         expect(agentChatRequests, 0);
       }
       await tester.pump(const Duration(seconds: 11));
@@ -153,7 +165,7 @@ void main() {
   );
 
   testWidgets(
-    'pinned guidance card stays visible and outside scrollable ListView even with heavy chat history',
+    'current guidance is the last assistant bubble after existing chat history',
     (tester) async {
       service.clearHistory();
       // Simulate historical messages from HOME / upload stages
@@ -186,36 +198,36 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Pinned guidance card MUST be present and visible
+      expect(
+        find.byKey(const ValueKey('currentWorkflowGuidanceTail')),
+        findsOneWidget,
+      );
       expect(
         find.byKey(const ValueKey('objectReviewCurrentGuidanceCard')),
+        findsNothing,
+      );
+      expect(service.messages, hasLength(6));
+      expect(
+        find.byKey(const ValueKey('objectReviewChatHistoryHeading')),
         findsOneWidget,
       );
-      expect(
-        find.byKey(const ValueKey('objectReviewCurrentGuidanceText')),
-        findsOneWidget,
-      );
-      expect(
-        tester
-            .widget<Text>(
-              find.byKey(const ValueKey('objectReviewCurrentGuidanceText')),
-            )
-            .data,
-        canonical,
-      );
-      expect(find.byKey(const ValueKey('objectReviewChatHistoryHeading')), findsOneWidget);
 
-      // Verify that the pinned card is NOT an item inside ListView.
-      // The ListView only contains chat history bubbles.
       final listViewFinder = find.byType(ListView);
       expect(listViewFinder, findsOneWidget);
       expect(
         find.descendant(
           of: listViewFinder,
-          matching: find.byKey(const ValueKey('objectReviewCurrentGuidanceCard')),
+          matching: find.byKey(const ValueKey('currentWorkflowGuidanceTail')),
         ),
-        findsNothing,
+        findsOneWidget,
       );
+      final visibleBubbles = tester.widgetList<PowerLensAIMessageBubble>(
+        find.descendant(
+          of: listViewFinder,
+          matching: find.byType(PowerLensAIMessageBubble),
+        ),
+      );
+      expect(visibleBubbles.last.message.text, canonical);
     },
   );
 }
