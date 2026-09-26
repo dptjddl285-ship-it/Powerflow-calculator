@@ -41,10 +41,10 @@ class BusMappingLeaderStyle {
 }
 
 class ConnectionReviewVisualColors {
-  static const currentLine = Color(0xFFFF6D00);
-  static const visitedLine = Color(0xFFFB923C);
-  static const visitedLineOpacity = 0.58;
-  static const visitedLineStrokeWidth = 2.4;
+  static const currentLine = Colors.cyanAccent;
+  static const visitedLine = Color(0xFFFF6D00);
+  static const visitedLineOpacity = 1.0;
+  static const visitedLineStrokeWidth = 3.2;
   static const busEndpoint = Color(0xFF2563EB);
   static const equipmentEndpoint = Color(0xFFEAB308);
 
@@ -52,6 +52,15 @@ class ConnectionReviewVisualColors {
     required bool visitedBefore,
     required bool isCurrent,
   }) => visitedBefore && !isCurrent;
+
+  static Color? overlayColorForLine({
+    required bool isCurrent,
+    required bool visitedBefore,
+  }) {
+    if (isCurrent) return currentLine;
+    if (visitedBefore) return visitedLine;
+    return null;
+  }
 
   static Color forEndpointClass(String className) =>
       className.trim().toLowerCase() == 'bus' ? busEndpoint : equipmentEndpoint;
@@ -421,7 +430,6 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                               scaleX: scaleX,
                               scaleY: scaleY,
                               pulseValue: pulseVal,
-                              lineFocusOnly: widget.lineFocusOnly,
                               visitedLineIds: widget.visitedLineIds,
                             ),
                           ),
@@ -1533,7 +1541,6 @@ class _ConnectionOverlayPainter extends CustomPainter {
   final double scaleX;
   final double scaleY;
   final double pulseValue;
-  final bool lineFocusOnly;
   final Set<String> visitedLineIds;
 
   _ConnectionOverlayPainter({
@@ -1543,7 +1550,6 @@ class _ConnectionOverlayPainter extends CustomPainter {
     required this.scaleX,
     required this.scaleY,
     required this.pulseValue,
-    this.lineFocusOnly = false,
     this.visitedLineIds = const {},
   });
 
@@ -1553,44 +1559,14 @@ class _ConnectionOverlayPainter extends CustomPainter {
       if (line.path.length < 2) continue;
 
       final bool isSelected = selectedLine?.lineId == line.lineId;
-      final bool isVisited = ConnectionReviewVisualColors.isVisitedLine(
-        visitedBefore: visitedLineIds.contains(line.lineId),
+      final strokeColor = ConnectionReviewVisualColors.overlayColorForLine(
         isCurrent: isSelected,
+        visitedBefore: visitedLineIds.contains(line.lineId),
       );
-      final status = line.reviewStatus.toUpperCase();
-
-      Color strokeColor;
-      double strokeWidth;
-
-      if (isSelected) {
-        strokeColor = ConnectionReviewVisualColors.currentLine;
-        strokeWidth = 4.2 + pulseValue * 1.5;
-      } else if (isVisited) {
-        strokeColor = ConnectionReviewVisualColors.visitedLine.withValues(
-          alpha: ConnectionReviewVisualColors.visitedLineOpacity,
-        );
-        strokeWidth = ConnectionReviewVisualColors.visitedLineStrokeWidth;
-      } else if (ConnectionReviewGateEvaluator.lineHasCriticalIssue(line)) {
-        strokeColor = const Color(0xFFDC2626); // critical electrical error
-        strokeWidth = isSelected ? 4.2 + pulseValue * 1.5 : 3.2;
-      } else if (ConnectionReviewGateEvaluator.isUnresolvedCrossing(line)) {
-        strokeColor = const Color(0xFF9333EA); // actual crossing evidence
-        strokeWidth = isSelected ? 4.2 + pulseValue * 1.5 : 3.2;
-      } else if (status == 'AMBIGUOUS') {
-        strokeColor = const Color(0xFFD97706); // endpoint uncertainty
-        strokeWidth = isSelected ? 4.2 + pulseValue * 1.5 : 3.2;
-      } else if (status == 'REJECTED') {
-        strokeColor = Colors.grey.withValues(alpha: 0.4);
-        strokeWidth = 1.5;
-      } else {
-        strokeColor = const Color(0xFF64748B); // neutral, auto-accepted line
-        strokeWidth = isSelected ? 4.2 + pulseValue * 1.5 : 2.2;
-      }
-
-      if (lineFocusOnly && selectedLine != null && !isSelected && !isVisited) {
-        strokeColor = Colors.grey.withValues(alpha: 0.18);
-        strokeWidth = 1.0;
-      }
+      if (strokeColor == null) continue;
+      final strokeWidth = isSelected
+          ? 4.2 + pulseValue * 1.5
+          : ConnectionReviewVisualColors.visitedLineStrokeWidth;
 
       final paint = Paint()
         ..color = strokeColor
@@ -1651,11 +1627,18 @@ class _ConnectionOverlayPainter extends CustomPainter {
           canvas.drawCircle(point, endpointRadius, endpointFillPaint);
         }
       } else {
-        final dotPaint = Paint()
-          ..color = strokeColor
-          ..style = PaintingStyle.fill;
-        canvas.drawCircle(startPt, 3.0, dotPaint);
-        canvas.drawCircle(endPt, 3.0, dotPaint);
+        for (final entry in [
+          (point: startPt, color: _endpointColor(line, 0)),
+          (point: endPt, color: _endpointColor(line, 1)),
+        ]) {
+          canvas.drawCircle(
+            entry.point,
+            3.0,
+            Paint()
+              ..color = entry.color
+              ..style = PaintingStyle.fill,
+          );
+        }
       }
     }
   }

@@ -34,12 +34,9 @@ void main() {
   test(
     'Connection overlay palette separates line, Bus, and equipment roles',
     () {
-      expect(ConnectionReviewVisualColors.currentLine, const Color(0xFFFF6D00));
-      expect(ConnectionReviewVisualColors.visitedLine, const Color(0xFFFB923C));
-      expect(
-        ConnectionReviewVisualColors.currentLine,
-        isNot(Colors.cyanAccent),
-      );
+      expect(ConnectionReviewVisualColors.currentLine, Colors.cyanAccent);
+      expect(ConnectionReviewVisualColors.visitedLine, const Color(0xFFFF6D00));
+      expect(ConnectionReviewVisualColors.currentLine, isNot(Colors.orange));
       expect(
         ConnectionReviewVisualColors.forEndpointClass('bus'),
         ConnectionReviewVisualColors.busEndpoint,
@@ -52,10 +49,10 @@ void main() {
         ConnectionReviewVisualColors.forEndpointClass('transformer'),
         ConnectionReviewVisualColors.equipmentEndpoint,
       );
-      expect(ConnectionReviewVisualColors.visitedLineOpacity, lessThan(0.7));
+      expect(ConnectionReviewVisualColors.visitedLineOpacity, 1.0);
       expect(
         ConnectionReviewVisualColors.visitedLineStrokeWidth,
-        lessThan(4.2),
+        greaterThanOrEqualTo(3.0),
       );
       expect(
         ConnectionReviewVisualColors.isVisitedLine(
@@ -70,6 +67,27 @@ void main() {
           isCurrent: false,
         ),
         isTrue,
+      );
+      expect(
+        ConnectionReviewVisualColors.overlayColorForLine(
+          isCurrent: true,
+          visitedBefore: true,
+        ),
+        ConnectionReviewVisualColors.currentLine,
+      );
+      expect(
+        ConnectionReviewVisualColors.overlayColorForLine(
+          isCurrent: false,
+          visitedBefore: true,
+        ),
+        ConnectionReviewVisualColors.visitedLine,
+      );
+      expect(
+        ConnectionReviewVisualColors.overlayColorForLine(
+          isCurrent: false,
+          visitedBefore: false,
+        ),
+        isNull,
       );
     },
   );
