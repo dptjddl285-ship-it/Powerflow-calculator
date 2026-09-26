@@ -24,6 +24,57 @@ class ReviewCoachDecision {
 class ReviewCoachPolicy {
   const ReviewCoachPolicy._();
 
+  static String resolveMascotState(
+    PowerLensAssistantContext context, {
+    required bool completionCtaReady,
+  }) {
+    if (context.analysisRunning || context.busMappingAiReading) {
+      return 'thinking';
+    }
+
+    final stage = context.workflowStage.toUpperCase();
+    final decision = resolve(context);
+    switch (stage) {
+      case 'OBJECT_REVIEW':
+        if (context.unresolvedMissingCandidates > 0 ||
+            context.suspiciousObjects > 0 ||
+            context.currentBlockers.isNotEmpty ||
+            decision.coachMode == 'BLOCKED') {
+          return 'warning';
+        }
+        final objectReady =
+            completionCtaReady &&
+            context.objectHumanCompletenessConfirmed &&
+            context.objectReviewStage.toUpperCase() == 'READY_TO_COMPLETE' &&
+            decision.coachMode == 'GATE';
+        return objectReady ? 'success' : 'idle';
+      case 'BUS_MAPPING':
+      case 'BUS_MAPPING_REVIEW':
+        if (context.unresolvedBusNumbers > 0 ||
+            context.duplicateBusNumbers > 0 ||
+            context.currentBlockers.isNotEmpty ||
+            decision.coachMode != 'HUMAN_REVIEW') {
+          return 'warning';
+        }
+        return completionCtaReady ? 'success' : 'idle';
+      case 'CONNECTION_REVIEW':
+        if (context.currentBlockers.isNotEmpty ||
+            decision.coachTarget == 'connection_exception' ||
+            decision.coachMode == 'BLOCKED') {
+          return 'warning';
+        }
+        return completionCtaReady && decision.coachMode == 'GATE'
+            ? 'success'
+            : 'idle';
+      case 'FINAL':
+      case 'FINAL_CAD':
+      case 'VERIFIED_FINAL':
+        return context.finalVerified ? 'success' : 'idle';
+      default:
+        return 'idle';
+    }
+  }
+
   static ReviewCoachDecision resolve(PowerLensAssistantContext context) {
     switch (context.workflowStage.toUpperCase()) {
       case 'OBJECT_REVIEW':
@@ -457,6 +508,8 @@ class ObjectReviewGuidanceMessages {
       '이제 Lensy가 객체 상태와 남은 검수 항목을 다시 확인할게요.';
 
   static const String allReviewedCompletePass =
-      '전체 객체 검수가 완료됐습니다. 현재 전체 회로를 확인하고 있습니다.\n'
-      '문제가 없다면 아래에서 깜박이고 있는 [객체 검수 완료] 버튼을 눌러주세요.';
+      '객체 검수를 모두 확인했어요.\n'
+      '마지막으로 전체 도면을 한 번 확인해 주세요.\n\n'
+      '문제가 없다면 아래에서 깜박이고 있는\n'
+      '[객체 검수 완료] 버튼을 눌러주세요.';
 }

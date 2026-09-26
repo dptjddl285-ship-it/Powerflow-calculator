@@ -108,6 +108,17 @@ void main() {
       expect(decision.coachMode, 'GUIDE');
       expect(decision.coachMessage, contains('→'));
       expect(decision.coachMessage, isNot(contains('[결선 검수 완료]')));
+      expect(
+        ReviewCoachPolicy.resolveMascotState(
+          PowerLensAssistantContext(
+            currentScreen: 'REVIEW_PAGE',
+            workflowStage: 'CONNECTION_REVIEW',
+            workingLines: lines.map((line) => line.toJson()).toList(),
+          ),
+          completionCtaReady: false,
+        ),
+        'idle',
+      );
     });
 
     test('Object missing candidates take priority over suspicious objects', () {
@@ -182,16 +193,15 @@ void main() {
         );
         expect(lastLineSelected.coachTarget, 'connection_line_focus');
 
-        final complete = ReviewCoachPolicy.resolve(
-          PowerLensAssistantContext(
-            currentScreen: 'REVIEW_PAGE',
-            workflowStage: 'CONNECTION_REVIEW',
-            workingLines: lines.map((line) => line.toJson()).toList(),
-            selectedLine: ordered.last.toJson(),
-            connectionVisualSweepStarted: true,
-            connectionVisualSweepComplete: true,
-          ),
+        final completeContext = PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'CONNECTION_REVIEW',
+          workingLines: lines.map((line) => line.toJson()).toList(),
+          selectedLine: ordered.last.toJson(),
+          connectionVisualSweepStarted: true,
+          connectionVisualSweepComplete: true,
         );
+        final complete = ReviewCoachPolicy.resolve(completeContext);
         expect(complete.coachTarget, 'connection_gate');
         expect(complete.highlightTarget, 'connection_gate');
         expect(complete.coachMode, 'GATE');
@@ -204,8 +214,55 @@ void main() {
           '[결선 검수 완료] 버튼을 눌러\n'
           '다음 단계로 이동해 주세요.',
         );
+        expect(
+          ReviewCoachPolicy.resolveMascotState(
+            completeContext,
+            completionCtaReady: true,
+          ),
+          'success',
+        );
       },
     );
+
+    test('Object completion CTA readiness controls Lensy success', () {
+      final bus = makeBus('bus_object_review', number: 1);
+      final readyContext = PowerLensAssistantContext(
+        currentScreen: 'REVIEW_PAGE',
+        workflowStage: 'OBJECT_REVIEW',
+        hasDiagram: true,
+        totalObjects: 1,
+        workingNodes: [bus.toJson()],
+        objectReviewStage: 'READY_TO_COMPLETE',
+        objectHumanCompletenessConfirmed: true,
+      );
+
+      expect(
+        ReviewCoachPolicy.resolveMascotState(
+          readyContext,
+          completionCtaReady: true,
+        ),
+        'success',
+      );
+      expect(
+        ReviewCoachPolicy.resolve(readyContext).coachMessage,
+        '객체 검수를 모두 확인했어요.\n'
+        '마지막으로 전체 도면을 한 번 확인해 주세요.\n\n'
+        '문제가 없다면 아래에서 깜박이고 있는\n'
+        '[객체 검수 완료] 버튼을 눌러주세요.',
+      );
+
+      final blockedContext = readyContext.copyWith(
+        suspiciousObjects: 1,
+        currentBlockers: const ['의심 객체가 남아 있습니다.'],
+      );
+      expect(
+        ReviewCoachPolicy.resolveMascotState(
+          blockedContext,
+          completionCtaReady: false,
+        ),
+        'warning',
+      );
+    });
 
     test('actual exceptions override the clean visual-sweep guide', () {
       final exceptional = makeLine('line_exception', const [
@@ -259,8 +316,61 @@ void main() {
         expect(cleanDecision.highlightTarget, 'bus_gate');
         expect(cleanDecision.coachMode, 'HUMAN_REVIEW');
         expect(cleanDecision.coachMessage, contains('[모선 검수 완료]'));
+        expect(
+          ReviewCoachPolicy.resolveMascotState(
+            PowerLensAssistantContext(
+              currentScreen: 'REVIEW_PAGE',
+              workflowStage: 'BUS_MAPPING',
+              workingNodes: [makeBus('bus_clean', number: 1).toJson()],
+            ),
+            completionCtaReady: true,
+          ),
+          'success',
+        );
       },
     );
+
+    test('Bus reading and unresolved buses cannot show Lensy success', () {
+      final buses = [makeBus('bus_clean', number: 1)];
+      final reading = PowerLensAssistantContext(
+        currentScreen: 'REVIEW_PAGE',
+        workflowStage: 'BUS_MAPPING',
+        workingNodes: buses.map((bus) => bus.toJson()).toList(),
+        busMappingAiReading: true,
+      );
+      expect(
+        ReviewCoachPolicy.resolveMascotState(
+          reading,
+          completionCtaReady: false,
+        ),
+        'thinking',
+      );
+
+      final unresolved = ReviewNodeItem(
+        id: 'bus_unresolved',
+        className: 'bus',
+        bbox: const [20, 20, 10, 10],
+        confidence: 0.9,
+        source: 'test',
+        busNumber: null,
+        busNumberStatus: 'UNCERTAIN',
+        reviewStatus: 'CONFIRMED',
+      );
+      final unresolvedContext = PowerLensAssistantContext(
+        currentScreen: 'REVIEW_PAGE',
+        workflowStage: 'BUS_MAPPING',
+        workingNodes: [unresolved.toJson()],
+        unresolvedBusNumbers: 1,
+        currentBlockers: const ['모선 번호 확인이 필요합니다.'],
+      );
+      expect(
+        ReviewCoachPolicy.resolveMascotState(
+          unresolvedContext,
+          completionCtaReady: false,
+        ),
+        'warning',
+      );
+    });
 
     test('Bus coach treats HTTP 200 as successful human review guidance', () {
       final buses = [

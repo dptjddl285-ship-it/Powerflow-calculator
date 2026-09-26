@@ -321,6 +321,8 @@ class _PowerLensAIFloatingButtonState extends State<PowerLensAIFloatingButton>
     switch (widget.presenceState.toLowerCase()) {
       case 'thinking':
         return const Color(0xFFF59E0B);
+      case 'warning':
+        return const Color(0xFFF97316);
       case 'speaking':
         return const Color(0xFF38BDF8);
       case 'pointing':
@@ -444,6 +446,7 @@ class _PowerLensAIFloatingButtonState extends State<PowerLensAIFloatingButton>
     final isThinking = state == 'thinking';
     final isSpeaking = state == 'speaking';
     final isSuccess = state == 'success';
+    final isWarning = state == 'warning';
 
     return SizedBox(
       width: 44,
@@ -555,6 +558,16 @@ class _PowerLensAIFloatingButtonState extends State<PowerLensAIFloatingButton>
               right: -8,
               top: -1,
               child: Icon(Icons.check_circle, size: 14, color: stateColor),
+            ),
+          if (isWarning)
+            Positioned(
+              right: -8,
+              top: -1,
+              child: Icon(
+                Icons.warning_amber_rounded,
+                size: 14,
+                color: stateColor,
+              ),
             ),
 
           // Ear bolts

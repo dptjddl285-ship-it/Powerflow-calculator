@@ -298,9 +298,10 @@ void main() {
       expect(ObjectReviewGuidanceMessages.allReviewedBeforeCheck, contains('Bus, Load, Generator, Transformer를 모두 확인했어요.'));
       expect(ObjectReviewGuidanceMessages.allReviewedBeforeCheck, contains('전체 회로를 표시'));
       expect(ObjectReviewGuidanceMessages.allReviewedBeforeCheck, contains('Lensy가 객체 상태'));
-      expect(ObjectReviewGuidanceMessages.allReviewedCompletePass, contains('전체 객체 검수가 완료됐습니다.'));
-      expect(ObjectReviewGuidanceMessages.allReviewedCompletePass, contains('현재 전체 회로를 확인'));
-      expect(ObjectReviewGuidanceMessages.allReviewedCompletePass, contains('깜박이고 있는 [객체 검수 완료]'));
+      expect(ObjectReviewGuidanceMessages.allReviewedCompletePass, contains('객체 검수를 모두 확인했어요.'));
+      expect(ObjectReviewGuidanceMessages.allReviewedCompletePass, contains('마지막으로 전체 도면을 한 번 확인해 주세요.'));
+      expect(ObjectReviewGuidanceMessages.allReviewedCompletePass, contains('깜박이고 있는'));
+      expect(ObjectReviewGuidanceMessages.allReviewedCompletePass, contains('[객체 검수 완료]'));
     });
   });
 }

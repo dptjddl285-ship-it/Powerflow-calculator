@@ -428,12 +428,20 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   String? _stageGateMessage;
 
   String get _reviewLensyPresenceState {
-    if (_currentPhase == ReviewPhase.busMappingReview) {
-      return _isLinkingBusNumbers ? 'thinking' : 'idle';
-    }
-    if (_stageGateMessage != null || _isLoading) return 'thinking';
-    if (_isFinalVerified) return 'success';
-    return 'idle';
+    final completionCtaReady = switch (_currentPhase) {
+      ReviewPhase.objectReview => _objectGateReadyForUser,
+      ReviewPhase.busMappingReview =>
+        !_isLoading &&
+            !_isLinkingBusNumbers &&
+            !_busHumanReviewConfirmed &&
+            _canVerifyBusGate,
+      ReviewPhase.connectionReview => _canVerifyFinalGate,
+      _ => _isFinalVerified,
+    };
+    return ReviewCoachPolicy.resolveMascotState(
+      _buildAssistantContext(),
+      completionCtaReady: completionCtaReady,
+    );
   }
 
   ReviewCoachDecision get _reviewCoachDecision =>
@@ -1215,6 +1223,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           : 'FINAL',
       documentId: _document?.documentId ?? '',
       hasDiagram: _document != null,
+      analysisRunning: _isLoading,
       totalObjects: _workingNodes.length,
       suspiciousObjects: _objSuspiciousCount,
       unresolvedMissingCandidates: _unresolvedCandidatesCount,
