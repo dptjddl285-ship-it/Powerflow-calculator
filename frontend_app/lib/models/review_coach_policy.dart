@@ -170,7 +170,7 @@ class ReviewCoachPolicy {
     if (context.busMappingAiReading) {
       return const ReviewCoachDecision(
         coachTarget: 'bus_ai_reading',
-        coachMessage: '지금 Lensy가 도면의 모선 번호를 확인하고 있어요. 잠시만 기다려 주세요.',
+        coachMessage: '모선 번호를 자동으로 읽고 있어요.\n잠시만 기다려주세요.',
         coachMode: 'PROCESSING',
         highlightTarget: 'bus_ai_reading',
       );
@@ -179,13 +179,14 @@ class ReviewCoachPolicy {
     final issueIds = BusReviewGateEvaluator.computeGuideBusIds(
       workingNodes: nodes,
     );
-    if (nodes
+    final activeBuses = nodes
         .where(
           (n) =>
               n.className.toLowerCase() == 'bus' &&
               n.reviewStatus.toUpperCase() != 'REJECTED',
         )
-        .isEmpty) {
+        .toList();
+    if (activeBuses.isEmpty) {
       return const ReviewCoachDecision(
         coachTarget: null,
         coachMessage: BusReviewUiState.noActiveBusMessage,
@@ -198,9 +199,22 @@ class ReviewCoachPolicy {
       final id = issueIds.contains(selectedId)
           ? selectedId
           : _firstBusIssue(nodes, issueIds);
+      final total = activeBuses.length;
+      final verified = activeBuses
+          .where((n) =>
+              n.busNumber != null &&
+              n.busNumberStatus?.toUpperCase() == 'VERIFIED' &&
+              !issueIds.contains(n.id))
+          .length;
+      final uncertain = issueIds.length;
       return ReviewCoachDecision(
         coachTarget: 'bus_bbox',
-        coachMessage: '번호 확인이 필요한 모선을 보라색으로 표시했어요. 하나씩 번호와 위치를 대조해주세요.',
+        coachMessage: '자동 판독을 마쳤어요.\n'
+            '전체 $total개 중 $verified개는 확인했고,\n'
+            '$uncertain개는 번호를 명확하게 읽지 못했습니다.\n\n'
+            '먼저 표시된 모선 번호를 직접 확인하거나 수정해 주세요.\n'
+            '모든 번호 확인이 끝나면\n'
+            '제가 다시 전체 상태를 확인할게요.',
         coachMode: 'GUIDE',
         highlightTarget: null,
         focusNodeId: id,
@@ -216,12 +230,21 @@ class ReviewCoachPolicy {
         focusNodeId: context.selectedNode?['id']?.toString(),
       );
     }
-    return const ReviewCoachDecision(
-      coachTarget: null,
-      coachMessage:
-          '모선 번호 오류가 없어 자동 검증 중이에요. 별도 완료 버튼 없이 검증에 통과하면 결선 검수로 이동합니다.',
-      coachMode: 'PROCESSING',
-      highlightTarget: null,
+    final total = activeBuses.length;
+    return ReviewCoachDecision(
+      coachTarget: 'bus_gate',
+      coachMessage: '모선 번호 자동 판독을 마쳤어요.\n'
+          '$total개의 모선 번호를 모두 읽었고,\n'
+          '현재 확인이 필요한 번호는 없습니다.\n\n'
+          '제가 먼저 확인했으니,\n'
+          '이번에는 도면의 모선 번호가 실제 도면과 맞는지\n'
+          '직접 한 번 더 확인해 주세요.\n\n'
+          '확인이 끝나면 저에게\n'
+          '\'다 했어\' 또는 \'확인했어\'라고 말씀하시거나,\n'
+          '아래에서 깜박이고 있는\n'
+          '[모선 검수 완료] 버튼을 눌러주세요.',
+      coachMode: 'HUMAN_REVIEW',
+      highlightTarget: 'bus_gate',
     );
   }
 

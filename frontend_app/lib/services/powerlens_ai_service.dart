@@ -72,6 +72,10 @@ class PowerLensAIService extends ChangeNotifier {
 
   String? _currentObjectWorkflowGuidance;
   String? get currentObjectWorkflowGuidance => _currentObjectWorkflowGuidance;
+  String? _currentBusMappingGuidance;
+  String? get currentBusMappingGuidance => _currentBusMappingGuidance;
+  String? get currentWorkflowGuidance =>
+      _currentBusMappingGuidance ?? _currentObjectWorkflowGuidance;
 
   /// Prevent duplicate proactive summaries per (document_id, stage)
   final Set<String> _requestedProactiveKeys = {};
@@ -570,6 +574,29 @@ class PowerLensAIService extends ChangeNotifier {
         _containsAny(q, const ['확인했어', '주요객체확인', '객체확인끝'])) {
       return const [PowerLensAppAction.confirmObjectCompleteness];
     }
+    if ((stage == 'BUS_MAPPING' || stage == 'BUS_MAPPING_REVIEW') &&
+        _containsAny(q, const [
+          '다했어',
+          '다했',
+          '확인했어',
+          '확인했',
+          '다확인했어',
+          '다확인했',
+          '모선확인끝났어',
+          '모선확인끝났',
+          '모선확인끝',
+          '모선확인완료',
+          '모선검수완료',
+          '모선검수끝',
+          '모선다봤',
+          '버스번호확인끝',
+          '문제없어',
+          '문제없',
+          '번호다맞아',
+          '번호다맞',
+        ])) {
+      return const [PowerLensAppAction.goToNextStage];
+    }
     if (requiresCircuitMutationConfirmation(q)) return const [];
 
     // If the user is asking a question (where to click, how to do, what button to press),
@@ -932,6 +959,29 @@ class PowerLensAIService extends ChangeNotifier {
     notifyListeners();
   }
 
+  void syncBusMappingGuidance(String canonicalMessage, {String? target}) {
+    if (canonicalMessage.trim().isEmpty) return;
+    _currentBusMappingGuidance = canonicalMessage;
+
+    _messages.removeWhere((m) =>
+        (m.stage == 'BUS_MAPPING' || m.stage == 'BUS_MAPPING_REVIEW') &&
+        (m.id.startsWith('proactive_') ||
+            m.id == 'msg_welcome' ||
+            m.id.startsWith('workflow_guidance')));
+    notifyListeners();
+  }
+
+  void clearBusMappingGuidance() {
+    _currentBusMappingGuidance = null;
+    notifyListeners();
+  }
+
+  void clearWorkflowGuidance() {
+    _currentObjectWorkflowGuidance = null;
+    _currentBusMappingGuidance = null;
+    notifyListeners();
+  }
+
   void addMessageForTest(PowerLensAIMessageItem message) {
     _messages.add(message);
     notifyListeners();
@@ -945,6 +995,13 @@ class PowerLensAIService extends ChangeNotifier {
       final msg = context?.objectWorkflowMessage ?? _currentObjectWorkflowGuidance;
       if (msg != null && msg.isNotEmpty) {
         syncObjectReviewGuidance(msg);
+      }
+      return;
+    }
+    if (stage == 'BUS_MAPPING' || stage == 'BUS_MAPPING_REVIEW') {
+      final msg = context?.busMappingMessage ?? _currentBusMappingGuidance;
+      if (msg != null && msg.isNotEmpty) {
+        syncBusMappingGuidance(msg);
       }
       return;
     }
@@ -1302,6 +1359,33 @@ class PowerLensAIService extends ChangeNotifier {
         return;
       }
 
+      // Bus Mapping confirmation ("다 했어", "확인했어", etc.) is handled locally
+      // and deterministically. Never send this completion intent to free-form backend.
+      if ((context.workflowStage.toUpperCase() == 'BUS_MAPPING' ||
+              context.workflowStage.toUpperCase() == 'BUS_MAPPING_REVIEW') &&
+          requestedActions.contains(PowerLensAppAction.goToNextStage)) {
+        final handled = await dispatchAction(
+          PowerLensAppAction.goToNextStage,
+          context: context,
+        );
+        final replyText = handled
+            ? '모선 확인을 완료했어요. 결선 검수로 이동합니다.'
+            : (currentBusMappingGuidance ??
+                _cleanAssistantReply(_getBlockedNextStageReply(context)));
+        _messages.add(
+          PowerLensAIMessageItem(
+            id: 'ai_bus_confirm_${DateTime.now().millisecondsSinceEpoch}',
+            sender: 'assistant',
+            text: replyText,
+            stage: context.workflowStage,
+            suggestedActions: _getQuickActions(context.workflowStage, context),
+            agentStatus: 'LOCAL_DETERMINISTIC',
+          ),
+        );
+        finalMascotState = handled ? 'success' : 'blocked';
+        return;
+      }
+
       // These actions only reveal or toggle already-computed CAD results.
       // Dispatch them locally so a semantic/LLM response cannot contradict
       // the solver state currently visible on the canvas.
@@ -1334,25 +1418,42 @@ class PowerLensAIService extends ChangeNotifier {
         return;
       }
 
-      // Navigation/workflow guidance in OBJECT_REVIEW is handled strictly
-      // as a local deterministic response. It must never hit backend agent_chat
+      // Navigation/workflow guidance in OBJECT_REVIEW and BUS_MAPPING is handled
+      // strictly as a local deterministic response. It must never hit backend agent_chat
       // to prevent generic/stale stage answers from Gemini.
-      if (context.workflowStage.toUpperCase() == 'OBJECT_REVIEW' &&
-          _isObjectReviewWorkflowHelpQuery(trimmed, requestedActions)) {
-        final contextGuidance = context.objectWorkflowMessage;
-        if (contextGuidance != null && contextGuidance.trim().isNotEmpty) {
-          syncObjectReviewGuidance(contextGuidance);
-        }
-        final canonicalText = currentObjectWorkflowGuidance ??
-            (contextGuidance != null && contextGuidance.isNotEmpty
-                ? contextGuidance
-                : ReviewCoachPolicy.resolve(context).coachMessage);
+      final stageUpper = context.workflowStage.toUpperCase();
+      final isObjectReviewStage = stageUpper == 'OBJECT_REVIEW';
+      final isBusMappingStage =
+          stageUpper == 'BUS_MAPPING' || stageUpper == 'BUS_MAPPING_REVIEW';
 
-        triggerHighlight('object_review_next');
+      if ((isObjectReviewStage || isBusMappingStage) &&
+          _isObjectReviewWorkflowHelpQuery(trimmed, requestedActions)) {
+        String canonicalText;
+        if (isBusMappingStage) {
+          final contextGuidance = context.busMappingMessage;
+          if (contextGuidance != null && contextGuidance.trim().isNotEmpty) {
+            syncBusMappingGuidance(contextGuidance);
+          }
+          canonicalText = currentBusMappingGuidance ??
+              (contextGuidance != null && contextGuidance.isNotEmpty
+                  ? contextGuidance
+                  : ReviewCoachPolicy.resolve(context).coachMessage);
+          triggerHighlight('bus_gate');
+        } else {
+          final contextGuidance = context.objectWorkflowMessage;
+          if (contextGuidance != null && contextGuidance.trim().isNotEmpty) {
+            syncObjectReviewGuidance(contextGuidance);
+          }
+          canonicalText = currentObjectWorkflowGuidance ??
+              (contextGuidance != null && contextGuidance.isNotEmpty
+                  ? contextGuidance
+                  : ReviewCoachPolicy.resolve(context).coachMessage);
+          triggerHighlight('object_review_next');
+        }
 
         _messages.add(
           PowerLensAIMessageItem(
-            id: 'ai_object_workflow_${DateTime.now().millisecondsSinceEpoch}',
+            id: 'ai_workflow_${DateTime.now().millisecondsSinceEpoch}',
             sender: 'assistant',
             text: canonicalText,
             stage: context.workflowStage,
@@ -1766,9 +1867,9 @@ class PowerLensAIService extends ChangeNotifier {
           if (uncertain > 0) '미지정 모선 $uncertain개',
           if (dups > 0) '중복 모선 $dups개',
         ];
-        return '확인이 필요한 모선(${parts.join(', ')})을 표시했어요. 도면 위 표시를 눌러 번호를 확인하거나 수정해주세요. 문제가 모두 해결되면 Gate를 자동 검증하고 결선 검수로 이동합니다.';
+        return '확인이 필요한 모선(${parts.join(', ')})을 표시했어요. 도면 위 표시를 눌러 번호를 확인하거나 수정해주세요. 모든 번호 확인이 끝나면 도면을 확인한 뒤 [모선 검수 완료]를 눌러주세요.';
       } else {
-        return '모선 번호 오류가 없어 결정론적 Gate를 자동 확인하고 있어요. 별도 완료 버튼은 누르지 않아도 됩니다.';
+        return '모선 번호 확인이 완료되었습니다. 도면의 모선 번호가 실제 도면과 맞는지 확인한 뒤 [모선 검수 완료]를 눌러주세요.';
       }
     } else if (stage == 'CONNECTION_REVIEW') {
       final lines = context.workingLines
@@ -1835,16 +1936,15 @@ class PowerLensAIService extends ChangeNotifier {
         break;
       case 'BUS_MAPPING':
       case 'BUS_MAPPING_REVIEW':
+        final issueCount = ctx.unresolvedBusNumbers + ctx.duplicateBusNumbers;
         if (_activeBusCount(ctx) == 0) {
           return "⚠️ ${BusReviewUiState.noActiveBusMessage}\n"
               "객체 검수에서 모선 인식을 확인한 뒤 다시 시도해주세요.";
         }
-        if (ctx.unresolvedBusNumbers > 0 || ctx.duplicateBusNumbers > 0) {
-          return "⚠️ 아직 확정하지 않은 모선 번호가 **${ctx.unresolvedBusNumbers}개**"
-              "${ctx.duplicateBusNumbers > 0 ? '이고 중복 번호도 ${ctx.duplicateBusNumbers}개' : ''} 있어요. "
-              "번호를 확인한 뒤 다음 단계로 갈 수 있습니다.";
+        if (issueCount > 0) {
+          return "아직 확인이 필요한 모선이 ${issueCount}개 있어요. 표시된 모선부터 확인해주세요.";
         }
-        break;
+        return "도면의 모선 번호를 확인하신 뒤 [모선 검수 완료]를 눌러주세요.";
       case 'CONNECTION_REVIEW':
         final connectionLines = ctx.workingLines
             .map((raw) => ReviewLineItem.fromJson(raw))
@@ -1910,7 +2010,7 @@ class PowerLensAIService extends ChangeNotifier {
           reply =
               "✨ **모선 번호 검수 안내:**\n"
               "• 정상 모선은 개별 또는 일괄 승인할 필요가 없습니다.\n"
-              "• ${hasBusIssues ? '확인 필요 모선만 번호를 확인하거나 수정하세요. 마지막 문제가 해결되면 Gate가 자동 검증되고 결선 검수로 이동합니다.' : '모선 번호 오류가 없어 Gate를 자동 확인하고 있습니다. 통과하면 결선 검수로 이동합니다.'}";
+              "• ${hasBusIssues ? '확인 필요 모선만 번호를 확인하거나 수정하세요. 모든 번호 확인이 끝나면 도면을 확인한 뒤 [모선 검수 완료]를 눌러주세요.' : '도면의 모선 번호가 실제 도면과 맞는지 직접 확인한 뒤 [모선 검수 완료]를 눌러주세요.'}";
         }
       } else if (stage == 'OBJECT_REVIEW') {
         reply =
@@ -2045,8 +2145,8 @@ class PowerLensAIService extends ChangeNotifier {
         return BusReviewUiState.noActiveBusMessage;
       }
       return ctx.unresolvedBusNumbers > 0 || ctx.duplicateBusNumbers > 0
-          ? "⚠️ 확인이 필요한 모선이 남아 있습니다. 번호를 확인하거나 수정하면 Gate가 자동 검증되고, 통과 시 결선 검수로 이동합니다."
-          : "✅ 모선 번호 오류가 없어 결정론적 Gate를 자동 확인하고 있어요. 통과하면 결선 검수로 이동합니다.";
+          ? "⚠️ 확인이 필요한 모선이 남아 있습니다. 번호를 확인하거나 수정한 뒤 도면을 확인하고 [모선 검수 완료]를 눌러주세요."
+          : "✅ 모든 모선 번호가 확인되었습니다. 도면을 한 번 더 확인한 뒤 [모선 검수 완료]를 눌러주세요.";
     } else if (ctx.workflowStage == 'CONNECTION_REVIEW') {
       final lines = ctx.workingLines
           .map((raw) => ReviewLineItem.fromJson(raw))
@@ -2139,8 +2239,7 @@ class PowerLensAIService extends ChangeNotifier {
               "• 도면 위 확인 필요 표시를 눌러 번호를 수정하세요. 문제가 해결되면 Gate가 자동 검증됩니다.";
         }
         return "💡 **다음 할 일 (모선 번호 확인 완료):**\n"
-            "• 모선 번호 오류가 없어 결정론적 Gate를 자동 확인하고 있어요.\n"
-            "• 검증에 통과하면 별도 버튼 없이 결선 검수로 이동합니다.";
+            "• 모선 번호 확인이 완료되었습니다. 도면의 모선 번호가 실제 도면과 맞는지 직접 확인한 뒤 [모선 검수 완료]를 눌러주세요.";
       case 'CONNECTION_REVIEW':
         final lines = ctx.workingLines
             .map((raw) => ReviewLineItem.fromJson(raw))
@@ -2442,7 +2541,7 @@ class PowerLensAIService extends ChangeNotifier {
             (ctx.totalObjects == 0 && ctx.selectedNode == null)) {
           return ['객체 검수 완료하기', '다음 단계로 이동', '다음에 뭐 해?'];
         }
-        return ctx?.objectHumanCompletenessConfirmed == true
+        return ctx.objectHumanCompletenessConfirmed == true
             ? ['객체 검수 완료하기', '다음에 뭐 해?', '현재 상태 요약']
             : ['여기서 어떻게 진행해?', '다음에 뭐 해?', '설비 확인'];
       case 'BUS_MAPPING':
@@ -2604,6 +2703,7 @@ class PowerLensAIService extends ChangeNotifier {
     _requestSerial++;
     _messages.clear();
     _currentObjectWorkflowGuidance = null;
+    _currentBusMappingGuidance = null;
     _lastNotifiedStage = null;
     _lastFailedQuery = null;
     _isLoading = false;

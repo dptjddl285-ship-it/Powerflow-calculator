@@ -179,11 +179,10 @@ void main() {
             workingNodes: [makeBus('bus_clean', number: 1).toJson()],
           ),
         );
-        expect(cleanDecision.coachTarget, isNull);
-        expect(cleanDecision.highlightTarget, isNull);
-        expect(cleanDecision.coachMode, 'PROCESSING');
-        expect(cleanDecision.coachMessage, contains('자동 검증'));
-        expect(cleanDecision.coachMessage, isNot(contains('[모선 검수 완료]')));
+        expect(cleanDecision.coachTarget, 'bus_gate');
+        expect(cleanDecision.highlightTarget, 'bus_gate');
+        expect(cleanDecision.coachMode, 'HUMAN_REVIEW');
+        expect(cleanDecision.coachMessage, contains('[모선 검수 완료]'));
       },
     );
 

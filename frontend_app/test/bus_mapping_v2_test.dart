@@ -500,12 +500,11 @@ void main() {
       expect(guideIds, isEmpty);
     });
 
-    // TEST N & O: a clean Bus state advances after its deterministic gate;
+    // TEST N & O: clean Bus completion requires human review confirmation;
     // entering Bus Mapping remains behind the Object Gate.
-    test('TEST N & O: clean Bus completion advances without a second CTA', () {
+    test('TEST N & O: clean Bus completion requires human review confirmation', () {
       final cleanState = BusReviewUiState.fromNodes([bus1, bus2]);
-      expect(cleanState.nextActionText, contains('결선 검수'));
-      expect(cleanState.nextActionText, isNot(contains('[모선 검수 완료]')));
+      expect(cleanState.nextActionText, contains('[모선 검수 완료]'));
       expect(
         BusReviewUiPolicy.canEnterBusMapping(objectGateVerified: false),
         isFalse,
@@ -538,6 +537,24 @@ void main() {
         expect(service.resolveIntentActions('버스 번호 확인 끝', busCtx), [
           PowerLensAppAction.goToNextStage,
         ]);
+        expect(service.resolveIntentActions('다 했어', busCtx), [
+          PowerLensAppAction.goToNextStage,
+        ]);
+        expect(service.resolveIntentActions('확인했어', busCtx), [
+          PowerLensAppAction.goToNextStage,
+        ]);
+        expect(service.resolveIntentActions('다 확인했어', busCtx), [
+          PowerLensAppAction.goToNextStage,
+        ]);
+        expect(service.resolveIntentActions('모선 확인 끝났어', busCtx), [
+          PowerLensAppAction.goToNextStage,
+        ]);
+        expect(service.resolveIntentActions('문제 없어', busCtx), [
+          PowerLensAppAction.goToNextStage,
+        ]);
+        expect(service.resolveIntentActions('번호 다 맞아', busCtx), [
+          PowerLensAppAction.goToNextStage,
+        ]);
       },
     );
 
@@ -551,7 +568,7 @@ void main() {
         expect(cleanBubble.contains('승인하고 다음'), isFalse);
         expect(cleanBubble.contains('전체 승인'), isFalse);
         expect(cleanBubble.contains('하나씩 넘겨'), isFalse);
-        expect(cleanBubble, isNot(contains('[모선 검수 완료]')));
+        expect(cleanBubble, contains('[모선 검수 완료]'));
 
         final issueBubble = BusReviewGateEvaluator.getSpeechBubbleText(
           workingNodes: [
@@ -683,13 +700,12 @@ void main() {
       expect(state.nextActionText, isNot(contains('최종 검증')));
     });
 
-    // TEST W: clean Bus state advances to Connection after the Bus Gate.
-    test('TEST W: clean Bus next action advances without a completion CTA', () {
+    // TEST W: clean Bus next action requests human review gate confirmation.
+    test('TEST W: clean Bus next action requests human review gate confirmation', () {
       final state = BusReviewUiState.fromNodes([bus1, bus2, bus3]);
       expect(state.issueBuses, 0);
-      expect(state.nextActionText, '모선 번호 확인이 완료되었습니다. 결선 검수로 자동 이동합니다.');
-      expect(state.nextActionText, isNot(contains('최종 검증')));
-      expect(state.nextActionText, isNot(contains('[모선 검수 완료]')));
+      expect(state.nextActionText, '모선 번호 확인이 완료되었습니다. 도면 확인 후 [모선 검수 완료]를 눌러주세요.');
+      expect(state.nextActionText, contains('[모선 검수 완료]'));
     });
 
     // TEST X: rejected buses do not enter active totals or focus IDs.
@@ -733,9 +749,9 @@ void main() {
       expect(BusReviewUiState.fromNodes(nodes).issueBuses, 1);
     });
 
-    // TEST Z: offline "전체 승인해줘" does not request manual Bus completion.
+    // TEST Z: offline "전체 승인해줘" explains exception repair and gate confirmation.
     test(
-      'TEST Z: offline Bus batch request explains exception repair and auto gate',
+      'TEST Z: offline Bus batch request explains exception repair and gate confirmation',
       () {
         final service = PowerLensAIService.instance;
         const busCtx = PowerLensAssistantContext(
@@ -746,16 +762,15 @@ void main() {
         );
         final reply = service.generateOfflineFallbackReply('전체 승인해줘', busCtx);
 
-        expect(reply, isNot(contains('[모선 검수 완료]')));
+        expect(reply, contains('[모선 검수 완료]'));
         expect(reply, contains('정상 모선은 개별 또는 일괄 승인할 필요가 없습니다'));
-        expect(reply, contains('자동 검증'));
         expect(reply, isNot(contains('일괄 승인 버튼')));
         expect(reply, isNot(contains('승인하고 다음 모선')));
         expect(reply, isNot(contains('하나씩 넘겨')));
       },
     );
 
-    test('clean offline Bus guidance never asks for a completion button', () {
+    test('clean offline Bus guidance requests human review and [모선 검수 완료]', () {
       final service = PowerLensAIService.instance;
       final cleanContext = PowerLensAssistantContext(
         currentScreen: 'REVIEW_PAGE',
@@ -766,8 +781,7 @@ void main() {
 
       for (final query in const ['다음에 뭐 해?', '검토 필요한 항목 보여줘', '전체 승인해줘']) {
         final reply = service.generateOfflineFallbackReply(query, cleanContext);
-        expect(reply, isNot(contains('[모선 검수 완료]')), reason: query);
-        expect(reply, contains('자동'), reason: query);
+        expect(reply, contains('[모선 검수 완료]'), reason: query);
       }
     });
 

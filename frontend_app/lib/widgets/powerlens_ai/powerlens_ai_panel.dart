@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../models/powerlens_assistant_context.dart';
+import '../../models/review_coach_policy.dart';
 import '../../services/powerlens_ai_service.dart';
 import 'powerlens_ai_message.dart';
 
@@ -683,15 +684,16 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
       animation: _aiService,
       builder: (context, _) {
         final msgs = _aiService.messages;
-        final isObjectReview =
-            widget.assistantContext.workflowStage.toUpperCase() ==
-            'OBJECT_REVIEW';
+        final stageUpper = widget.assistantContext.workflowStage.toUpperCase();
+        final isGuidedReview = stageUpper == 'OBJECT_REVIEW' ||
+            stageUpper == 'BUS_MAPPING' ||
+            stageUpper == 'BUS_MAPPING_REVIEW';
         WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (isObjectReview) ...[
+            if (isGuidedReview) ...[
               Padding(
                 padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
                 child: _buildCurrentObjectGuidance(),
@@ -730,38 +732,78 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
   }
 
   Widget _buildCurrentObjectGuidance() {
-    final guidance =
-        _aiService.currentObjectWorkflowGuidance ??
-        widget.assistantContext.objectWorkflowMessage ??
-        '현재 검수 안내를 불러오는 중입니다.';
-    return Container(
+    final stageUpper = widget.assistantContext.workflowStage.toUpperCase();
+    final isBusMapping =
+        stageUpper == 'BUS_MAPPING' || stageUpper == 'BUS_MAPPING_REVIEW';
+    final guidance = isBusMapping
+        ? (_aiService.currentBusMappingGuidance ??
+            widget.assistantContext.busMappingMessage ??
+            ReviewCoachPolicy.resolve(widget.assistantContext).coachMessage)
+        : (_aiService.currentObjectWorkflowGuidance ??
+            widget.assistantContext.objectWorkflowMessage ??
+            '현재 검수 안내를 불러오는 중입니다.');
+    return Padding(
       key: const ValueKey('objectReviewCurrentGuidanceCard'),
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFEFF6FF),
-        border: Border.all(color: const Color(0xFFBFDBFE)),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Column(
+      padding: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 4.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            '현재 검수 안내',
-            style: TextStyle(
-              color: Color(0xFF1D4ED8),
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
+          Container(
+            width: 28,
+            height: 28,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF3B82F6), Color(0xFF8B5CF6)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(8),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF8B5CF6).withOpacity(0.25),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: const Center(
+              child: Icon(Icons.auto_awesome, color: Colors.white, size: 15),
             ),
           ),
-          const SizedBox(height: 6),
-          Text(
-            guidance,
-            key: const ValueKey('objectReviewCurrentGuidanceText'),
-            style: const TextStyle(
-              color: Color(0xFF1E293B),
-              fontSize: 12,
-              height: 1.45,
+          const SizedBox(width: 8),
+          Flexible(
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 14.0,
+                vertical: 10.0,
+              ),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF1F5F9),
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(14),
+                  topRight: Radius.circular(14),
+                  bottomLeft: Radius.circular(2),
+                  bottomRight: Radius.circular(14),
+                ),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.04),
+                    blurRadius: 4,
+                    offset: const Offset(0, 1),
+                  ),
+                ],
+              ),
+              child: Text(
+                guidance,
+                key: const ValueKey('objectReviewCurrentGuidanceText'),
+                style: const TextStyle(
+                  color: Color(0xFF1E293B),
+                  fontSize: 12,
+                  height: 1.45,
+                ),
+              ),
             ),
           ),
         ],

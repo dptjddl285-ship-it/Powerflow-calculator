@@ -56,11 +56,13 @@ class PowerLensAssistantContext {
   final bool busFallbackUsed;
   final String? busFailureCode;
   final String? objectWorkflowMessage;
+  final String? busMappingMessage;
 
   const PowerLensAssistantContext({
     this.currentScreen = 'HOME',
     this.workflowStage = 'HOME',
     this.objectWorkflowMessage,
+    this.busMappingMessage,
     this.documentId = '',
     this.hasDiagram = false,
     this.analysisRunning = false,
@@ -192,12 +194,14 @@ class PowerLensAssistantContext {
     String? busModelUsed,
     bool? busFallbackUsed,
     String? busFailureCode,
+    String? busMappingMessage,
   }) {
     return PowerLensAssistantContext(
       currentScreen: currentScreen ?? this.currentScreen,
       workflowStage: workflowStage ?? this.workflowStage,
       objectWorkflowMessage:
           objectWorkflowMessage ?? this.objectWorkflowMessage,
+      busMappingMessage: busMappingMessage ?? this.busMappingMessage,
       documentId: documentId ?? this.documentId,
       hasDiagram: hasDiagram ?? this.hasDiagram,
       analysisRunning: analysisRunning ?? this.analysisRunning,

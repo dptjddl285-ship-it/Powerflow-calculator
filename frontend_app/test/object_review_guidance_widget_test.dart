@@ -135,7 +135,10 @@ void main() {
             )
             .data;
         expect(pinnedGuidance, guidance);
-        expect(find.text('현재 검수 안내'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('objectReviewCurrentGuidanceCard')),
+          findsOneWidget,
+        );
         expect(find.text('대화 기록'), findsOneWidget);
 
         await service.sendMessage('여기서 어떻게 진행해?', context);

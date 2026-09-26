@@ -128,6 +128,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   bool _isObjectVerified = false;
   String? _objectGateMessage;
 
+  bool _busHumanReviewConfirmed = false;
+  bool _isBusVerified = false;
+
   bool _isFinalVerified = false;
   List<Map<String, dynamic>> _topologyIssues = [];
   Map<String, dynamic>? _selectedTopologyIssue;
@@ -1241,6 +1244,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       busFallbackUsed: _busFallbackUsed,
       busFailureCode: _busHttpCode?.toString(),
       objectWorkflowMessage: _objectWorkflowMessageForContext(),
+      busMappingMessage: _currentPhase == ReviewPhase.busMappingReview
+          ? (PowerLensAIService.instance.currentBusMappingGuidance ?? _stageGateMessage)
+          : null,
     );
   }
 
@@ -1645,13 +1651,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       _selectedNode = next;
       _busNumberEditController.text = next.busNumber?.toString() ?? '';
       _stageGateMessage = _canVerifyBusGate
-          ? '모든 모선 번호가 확인됐어요. 결선 검수로 자동 이동합니다.'
+          ? '이제 모든 모선 번호가 정리됐어요.\n전체 도면을 한 번 확인한 뒤\n[모선 검수 완료]를 눌러주세요.'
           : '번호를 적용했어요. 다음 확인 모선을 표시했습니다.';
     });
-    _announceReviewStage();
-    if (_canVerifyBusGate && mounted && !_isLoading) {
-      _verifyBusGateAutomatically();
+    PowerLensAIService.instance.syncBusMappingGuidance(_stageGateMessage!);
+    if (_canVerifyBusGate) {
+      PowerLensAIService.instance.setStageHighlightTarget('bus_gate');
     }
+    _announceReviewStage();
   }
 
   List<ReviewNodeItem> _getConnectedGensForBus(ReviewNodeItem busNode) {
@@ -1716,6 +1723,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   String _getReviewStageSpeechBubbleText() {
     if (_currentPhase == ReviewPhase.objectReview) {
       final canonical = PowerLensAIService.instance.currentObjectWorkflowGuidance;
+      if (canonical != null && canonical.isNotEmpty) return canonical;
+    }
+    if (_currentPhase == ReviewPhase.busMappingReview) {
+      final canonical = PowerLensAIService.instance.currentBusMappingGuidance;
       if (canonical != null && canonical.isNotEmpty) return canonical;
     }
     if (_stageGateMessage != null && _stageGateMessage!.isNotEmpty) {
@@ -2091,20 +2102,33 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       final issueCount = BusReviewGateEvaluator.computeGuideBusIds(
         workingNodes: _workingNodes,
       ).length;
+      final count = issueCount > 0 ? issueCount : blockers.length;
+      final msg = count > 0
+          ? '아직 확인이 필요한 모선이 ${count}개 있어요. 표시된 모선부터 확인해주세요.'
+          : '확인이 필요한 항목이 남아있습니다.';
       setState(() {
-        _stageGateMessage = issueCount > 0
-            ? "아직 번호 확인이 필요한 모선이 ${issueCount}개 있어요. 표시해드릴게요."
-            : (blockers.isNotEmpty ? blockers.first : "확인이 필요한 항목이 남아있습니다.");
+        _stageGateMessage = msg;
       });
+      PowerLensAIService.instance.syncBusMappingGuidance(msg);
       _focusNextReviewTask();
+      _announceReviewStage();
       return;
     }
 
+    _busHumanReviewConfirmed = true;
     await _verifyBusGate();
   }
 
   Future<void> _verifyBusGate() async {
     if (_document == null) return;
+
+    if (!_busHumanReviewConfirmed) {
+      setState(() {
+        _stageGateMessage = '도면의 모선 번호를 확인하신 뒤 [모선 검수 완료]를 눌러주세요.';
+      });
+      _announceReviewStage();
+      return;
+    }
 
     final gateReady = await _runReviewStageGate(
       canProceed: () => _canVerifyBusGate,
@@ -2139,6 +2163,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
       setState(() {
         _isLoading = false;
+        if (isBusVerified) {
+          _isBusVerified = true;
+        }
         _stageGateMessage = isBusVerified
             ? null
             : (gateMsg ?? '모선 Gate에서 다시 확인이 필요해요.');
@@ -2892,7 +2919,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               "③ 결선 검수",
               _currentPhase == ReviewPhase.connectionReview,
               _canVerifyFinalGate,
-              onTap: _activeConnectionLines.isNotEmpty
+              onTap: (_activeConnectionLines.isNotEmpty &&
+                      _isBusVerified &&
+                      _busHumanReviewConfirmed)
                   ? () {
                       setState(() {
                         _currentPhase = ReviewPhase.connectionReview;
@@ -3140,7 +3169,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                         speechBubbleText: _getReviewStageSpeechBubbleText(),
                         coachMessage: _getReviewStageSpeechBubbleText(),
                         useObjectReviewGuidance:
-                            _currentPhase == ReviewPhase.objectReview,
+                            _currentPhase == ReviewPhase.objectReview ||
+                            _currentPhase == ReviewPhase.busMappingReview,
                       ),
                     );
                   }
@@ -3218,7 +3248,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                     _getReviewStageSpeechBubbleText(),
                                 coachMessage: _getReviewStageSpeechBubbleText(),
                                 useObjectReviewGuidance:
-                                    _currentPhase == ReviewPhase.objectReview,
+                                    _currentPhase == ReviewPhase.objectReview ||
+                                    _currentPhase == ReviewPhase.busMappingReview,
                               ),
                             ),
                           ],
@@ -7821,19 +7852,21 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   // --- Phase 2: Bus Number Mapping & Review ---
 
   bool _isLinkingBusNumbers = false;
-  bool _isAutoVerifyingBusGate = false;
   String? _busModelUsed;
   bool _busFallbackUsed = false;
   int? _busHttpCode;
 
   Future<void> _triggerAiBusLinking() async {
     if (_document == null || _isLinkingBusNumbers) return;
-    var shouldAutoVerifyBusGate = false;
+    _busHumanReviewConfirmed = false;
     setState(() {
       _isLinkingBusNumbers = true;
       _busMappingFeedback = BusMappingFeedback.processing(_busNodes.length);
       _stageGateMessage = _busMappingFeedback!.message;
     });
+    PowerLensAIService.instance.syncBusMappingGuidance(
+      '모선 번호를 자동으로 읽고 있어요.\n잠시만 기다려주세요.',
+    );
     _announceReviewStage();
     try {
       final res = await _apiService.linkBusNumbers(
@@ -7929,11 +7962,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             _busNumberEditController.clear();
           }
           _busMappingFeedback = feedback;
-          _stageGateMessage = feedback.message;
+          _busHumanReviewConfirmed = false;
+          final coach = _reviewCoachDecision;
+          _stageGateMessage = coach.coachMessage;
         });
-        shouldAutoVerifyBusGate = feedback.shouldAutoVerifyBusGate(
-          gateReady: _canVerifyBusGate,
-        );
+        PowerLensAIService.instance.syncBusMappingGuidance(_stageGateMessage!);
+        if (_canVerifyBusGate) {
+          PowerLensAIService.instance.setStageHighlightTarget('bus_gate');
+        }
         _announceReviewStage();
         _showBusMappingFeedback(feedback);
       } else {
@@ -7945,8 +7981,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         setState(() {
           _busMappingFeedback = feedback;
           _busHttpCode = code;
-          _stageGateMessage = feedback.message;
+          _busHumanReviewConfirmed = false;
+          final coach = _reviewCoachDecision;
+          _stageGateMessage = coach.coachMessage;
         });
+        PowerLensAIService.instance.syncBusMappingGuidance(_stageGateMessage!);
         _announceReviewStage();
         _showBusMappingFeedback(feedback);
       }
@@ -7955,8 +7994,11 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         final feedback = BusMappingFeedback.failed(total: _busNodes.length);
         setState(() {
           _busMappingFeedback = feedback;
-          _stageGateMessage = feedback.message;
+          _busHumanReviewConfirmed = false;
+          final coach = _reviewCoachDecision;
+          _stageGateMessage = coach.coachMessage;
         });
+        PowerLensAIService.instance.syncBusMappingGuidance(_stageGateMessage!);
         _announceReviewStage();
         _showBusMappingFeedback(feedback);
       }
@@ -7964,22 +8006,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       if (mounted) {
         setState(() => _isLinkingBusNumbers = false);
         _announceReviewStage();
-      }
-    }
-
-    if (shouldAutoVerifyBusGate && mounted) {
-      await _verifyBusGateAutomatically();
-    }
-  }
-
-  Future<void> _verifyBusGateAutomatically() async {
-    if (!mounted || _isLoading || _isAutoVerifyingBusGate) return;
-    setState(() => _isAutoVerifyingBusGate = true);
-    try {
-      await _verifyBusGate();
-    } finally {
-      if (mounted) {
-        setState(() => _isAutoVerifyingBusGate = false);
       }
     }
   }
@@ -8002,6 +8028,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   void _proceedToBusMappingReview() {
     setState(() {
       _currentPhase = ReviewPhase.busMappingReview;
+      _busHumanReviewConfirmed = false;
+      _isBusVerified = false;
       _stageGateMessage = null;
       _objectGateMessage = null;
       _selectedLine = null;
@@ -8019,7 +8047,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       }
     });
 
-    PowerLensAIService.instance.clearObjectReviewGuidance();
+    PowerLensAIService.instance.clearWorkflowGuidance();
     PowerLensAIService.instance.clearFocusTargets();
     _announceReviewStage();
     // Automatically run AI vision grounding on all working buses (including human-added ones)
@@ -9111,67 +9139,30 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             Row(
               children: [
                 Expanded(
-                  child: _isAutoVerifyingBusGate
-                      ? Container(
-                          key: const ValueKey('AutoBusGateProgress'),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 13,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFEFF6FF),
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(
-                              color: const Color(0xFF93C5FD),
-                            ),
-                          ),
-                          child: const Row(
-                            children: [
-                              SizedBox(
-                                width: 15,
-                                height: 15,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              ),
-                              SizedBox(width: 9),
-                              Expanded(
-                                child: Text(
-                                  '모든 모선 번호를 확인했어요. 결선 검수로 이동합니다.',
-                                  style: TextStyle(
-                                    color: Color(0xFF1D4ED8),
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        )
-                      : GlowingTargetWrapper(
-                          targetId: 'bus_gate',
-                          borderRadius: BorderRadius.circular(8),
-                          guideLabel: "✨ 모선 검수 완료",
-                          child: ElevatedButton.icon(
-                            key: const ValueKey('BusCompleteButton'),
-                            onPressed:
-                                _isLinkingBusNumbers || _isLoading
-                                ? null
-                                : _completeBusReview,
-                            icon: const Icon(
-                              Icons.check_circle_outline,
-                              size: 16,
-                            ),
-                            label: const Text("모선 검수 완료"),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: _canVerifyBusGate
-                                  ? const Color(0xFF16A34A)
-                                  : const Color(0xFF2563EB),
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                            ),
-                          ),
-                        ),
+                  child: GlowingTargetWrapper(
+                    targetId: 'bus_gate',
+                    borderRadius: BorderRadius.circular(8),
+                    guideLabel: "✨ 모선 검수 완료",
+                    child: ElevatedButton.icon(
+                      key: const ValueKey('BusCompleteButton'),
+                      onPressed:
+                          _isLinkingBusNumbers || _isLoading
+                          ? null
+                          : _completeBusReview,
+                      icon: const Icon(
+                        Icons.check_circle_outline,
+                        size: 16,
+                      ),
+                      label: const Text("모선 검수 완료"),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _canVerifyBusGate
+                            ? const Color(0xFF16A34A)
+                            : const Color(0xFF2563EB),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                    ),
+                  ),
                 ),
               ],
             ),

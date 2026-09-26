@@ -89,7 +89,8 @@ class _PowerLensAIFloatingButtonState extends State<PowerLensAIFloatingButton>
         builder: (context, child) {
           final bubbleText =
               (widget.useObjectReviewGuidance
-                  ? PowerLensAIService.instance.currentObjectWorkflowGuidance
+                  ? (PowerLensAIService.instance.currentWorkflowGuidance ??
+                      PowerLensAIService.instance.currentObjectWorkflowGuidance)
                   : null) ??
               widget.coachMessage ??
               widget.speechBubbleText ??
