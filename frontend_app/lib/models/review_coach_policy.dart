@@ -59,6 +59,14 @@ class ReviewCoachPolicy {
               'SUSPICIOUS',
         )
         .toList();
+    if (context.unresolvedMissingCandidates > 0) {
+      return const ReviewCoachDecision(
+        coachTarget: 'missing_candidates',
+        coachMessage: ObjectReviewGuidanceMessages.missingCandidates,
+        coachMode: 'GUIDE',
+        highlightTarget: 'missing_candidates',
+      );
+    }
     if (suspicious.isNotEmpty || context.suspiciousObjects > 0) {
       final selectedId = context.selectedNode?['id']?.toString();
       final focus = suspicious.firstWhere(
@@ -74,14 +82,6 @@ class ReviewCoachPolicy {
         coachMode: 'GUIDE',
         highlightTarget: 'object_review_card',
         focusNodeId: context.objectVisualSweepCurrentId ?? id,
-      );
-    }
-    if (context.unresolvedMissingCandidates > 0) {
-      return const ReviewCoachDecision(
-        coachTarget: 'missing_candidates',
-        coachMessage: ObjectReviewGuidanceMessages.missingCandidates,
-        coachMode: 'GUIDE',
-        highlightTarget: 'missing_candidates',
       );
     }
     if (!context.hasDiagram &&
@@ -406,10 +406,12 @@ class ReviewCoachPolicy {
 class ObjectReviewGuidanceMessages {
   static String suspiciousObjects(int count) =>
       '검토가 필요한 객체 ${count}개를 찾았습니다.\n'
-      '현재 강조된 검토 카드를 확인해 주세요.\n'
+      '이제 강조된 객체 검토 카드를 확인해 주세요.\n'
       '인식 결과가 맞으면 [맞음], 잘못됐다면 [수정]을 눌러주세요.';
 
-  static const String missingCandidates = '도면에서 누락 후보를 확인하고 실제 설비인지 검토해주세요.';
+  static const String missingCandidates =
+      '먼저 위에서 강조된 누락 의심 설비를 확인해 주세요.\n'
+      '실제로 누락됐다면 [수동 추가], 문제가 없다면 [문제 없음]을 눌러주세요.';
 
   static String initialBus(int count) {
     return '오른쪽 위의 설비 종류를 하나씩 확인해 주세요.\n'

@@ -66,6 +66,46 @@ void main() {
       );
     });
 
+    test(
+      'Bus leaders terminate at both rectangle boundaries for any direction',
+      () {
+        final busRect = const Rect.fromLTWH(40, 40, 20, 20);
+        final labelRects = [
+          const Rect.fromLTWH(5, 45, 20, 20),
+          const Rect.fromLTWH(100, 45, 20, 20),
+          const Rect.fromLTWH(45, 5, 20, 20),
+          const Rect.fromLTWH(45, 100, 20, 20),
+          const Rect.fromLTWH(100, 100, 20, 20),
+        ];
+
+        for (final labelRect in labelRects) {
+          final points = BusMappingLeaderStyle.boundaryPoints(
+            busRect: busRect,
+            labelRect: labelRect,
+          );
+
+          expect(points, isNotNull);
+          final busPoint = points!.busPoint;
+          final labelPoint = points.labelPoint;
+          expect(
+            busPoint.dx == busRect.left ||
+                busPoint.dx == busRect.right ||
+                busPoint.dy == busRect.top ||
+                busPoint.dy == busRect.bottom,
+            isTrue,
+          );
+          expect(
+            labelPoint.dx == labelRect.left ||
+                labelPoint.dx == labelRect.right ||
+                labelPoint.dy == labelRect.top ||
+                labelPoint.dy == labelRect.bottom,
+            isTrue,
+          );
+          expect((labelPoint - busPoint).distance, greaterThan(0));
+        }
+      },
+    );
+
     // TEST A: VERIFIED Bus만 존재 -> individual approval 없이 Bus Gate PASS 가능.
     test(
       'TEST A: All VERIFIED buses pass Bus Gate without individual approval',

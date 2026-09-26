@@ -12,12 +12,38 @@ class BusMappingLeaderStyle {
 
   static double strokeWidth({required bool emphasized}) =>
       emphasized ? 2.0 : 1.5;
+
+  static ({Offset busPoint, Offset labelPoint})? boundaryPoints({
+    required Rect busRect,
+    required Rect labelRect,
+  }) {
+    if (busRect.isEmpty || labelRect.isEmpty || busRect.overlaps(labelRect)) {
+      return null;
+    }
+    final direction = labelRect.center - busRect.center;
+    if (direction.distanceSquared == 0) return null;
+
+    Offset boundaryPoint(Rect rect, Offset vector) {
+      final horizontalScale = vector.dx == 0
+          ? double.infinity
+          : rect.width / 2 / vector.dx.abs();
+      final verticalScale = vector.dy == 0
+          ? double.infinity
+          : rect.height / 2 / vector.dy.abs();
+      return rect.center + vector * math.min(horizontalScale, verticalScale);
+    }
+
+    return (
+      busPoint: boundaryPoint(busRect, direction),
+      labelPoint: boundaryPoint(labelRect, -direction),
+    );
+  }
 }
 
 class ConnectionReviewVisualColors {
-  static const currentLine = Colors.cyanAccent;
-  static const visitedLine = Color(0xFF67E8F9);
-  static const visitedLineOpacity = 0.78;
+  static const currentLine = Color(0xFFFF6D00);
+  static const visitedLine = Color(0xFFFB923C);
+  static const visitedLineOpacity = 0.58;
   static const visitedLineStrokeWidth = 2.4;
   static const busEndpoint = Color(0xFF2563EB);
   static const equipmentEndpoint = Color(0xFFEAB308);
@@ -40,6 +66,7 @@ class ReviewOverlayView extends StatefulWidget {
   final ReviewNodeItem? selectedNode;
   final String? currentObjectReviewId;
   final bool objectReviewTargetActive;
+  final bool suppressObjectReviewHighlights;
   final Set<String> visitedObjectIds;
 
   /// Optional key attached to the selected node's rendered bounding box so a
@@ -93,6 +120,7 @@ class ReviewOverlayView extends StatefulWidget {
     required this.selectedNode,
     this.currentObjectReviewId,
     this.objectReviewTargetActive = false,
+    this.suppressObjectReviewHighlights = false,
     this.visitedObjectIds = const {},
     this.focusTargetKey,
     required this.onSelectNode,
@@ -618,13 +646,14 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                             widget.isObjectCategorySweepActive &&
                             widget.currentCategoryHighlightKey == null;
                         final bool isGuide =
-                            isCurrentCategory ||
-                            (isBus
-                                ? (widget.guideNodeIds.contains(node.id) ||
-                                      isCurrentObjectTarget)
-                                : (widget.guideNodeIds.contains(node.id) ||
-                                      node.reviewStatus == 'SUSPICIOUS' ||
-                                      isCurrentObjectTarget));
+                            !widget.suppressObjectReviewHighlights &&
+                            (isCurrentCategory ||
+                                (isBus
+                                    ? (widget.guideNodeIds.contains(node.id) ||
+                                          isCurrentObjectTarget)
+                                    : (widget.guideNodeIds.contains(node.id) ||
+                                          node.reviewStatus == 'SUSPICIOUS' ||
+                                          isCurrentObjectTarget)));
                         final bool isCurrentBusGuide =
                             isBus && widget.currentCoachNodeId == node.id;
 
@@ -1378,18 +1407,26 @@ class _LeaderLinePainter extends CustomPainter {
         final labelY = (renderTop + renderHeight / 2 - 8 + node.labelOffsetDy)
             .clamp(2.0, math.max(2.0, size.height - 22))
             .toDouble();
-        final labelAnchor = Offset(
-          labelOnLeft ? labelX + labelWidth : labelX,
-          labelY + 8,
+        final busRect = Rect.fromCenter(
+          center: Offset(cx, cy),
+          width: renderWidth,
+          height: renderHeight,
+        );
+        final labelRect = Rect.fromLTWH(labelX, labelY, labelWidth, 22);
+        final boundaryPoints = BusMappingLeaderStyle.boundaryPoints(
+          busRect: busRect,
+          labelRect: labelRect,
         );
         final emphasized =
             node.id == selectedBusId || node.id == currentCoachNodeId;
-        _drawBusMappingLeader(
-          canvas,
-          Offset(cx, cy),
-          labelAnchor,
-          emphasized: emphasized,
-        );
+        if (boundaryPoints != null) {
+          _drawBusMappingLeader(
+            canvas,
+            boundaryPoints.busPoint,
+            boundaryPoints.labelPoint,
+            emphasized: emphasized,
+          );
+        }
         canvas.drawCircle(
           Offset(cx, cy),
           3.2,
@@ -1470,7 +1507,7 @@ class _LeaderLinePainter extends CustomPainter {
       Paint()
         ..color = Colors.white.withValues(alpha: 0.9)
         ..strokeWidth =
-            BusMappingLeaderStyle.strokeWidth(emphasized: emphasized) + 1.7
+            BusMappingLeaderStyle.strokeWidth(emphasized: emphasized) + 1.1
         ..style = PaintingStyle.stroke,
     );
     canvas.drawPath(

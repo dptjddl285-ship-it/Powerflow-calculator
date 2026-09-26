@@ -110,34 +110,47 @@ void main() {
       expect(decision.coachMessage, isNot(contains('[결선 검수 완료]')));
     });
 
-    test(
-      'Object exceptions explain both actions and highlight the match CTA',
-      () {
-        final suspicious = ReviewNodeItem(
-          id: 'object_1',
-          className: 'load',
-          bbox: const [10, 10, 5, 5],
-          confidence: 0.55,
-          source: 'test',
-          reviewStatus: 'SUSPICIOUS',
-        );
-        final decision = ReviewCoachPolicy.resolve(
-          PowerLensAssistantContext(
-            currentScreen: 'REVIEW_PAGE',
-            workflowStage: 'OBJECT_REVIEW',
-            suspiciousObjects: 1,
-            unresolvedMissingCandidates: 1,
-            workingNodes: [suspicious.toJson()],
-            selectedNode: suspicious.toJson(),
-          ),
-        );
+    test('Object missing candidates take priority over suspicious objects', () {
+      final suspicious = ReviewNodeItem(
+        id: 'object_1',
+        className: 'load',
+        bbox: const [10, 10, 5, 5],
+        confidence: 0.55,
+        source: 'test',
+        reviewStatus: 'SUSPICIOUS',
+      );
+      final decision = ReviewCoachPolicy.resolve(
+        PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'OBJECT_REVIEW',
+          suspiciousObjects: 1,
+          unresolvedMissingCandidates: 1,
+          workingNodes: [suspicious.toJson()],
+          selectedNode: suspicious.toJson(),
+        ),
+      );
 
-        expect(decision.coachMessage, contains('[맞음]'));
-        expect(decision.coachMessage, contains('[수정]'));
-        expect(decision.highlightTarget, 'object_review_card');
-        expect(decision.focusNodeId, 'object_1');
-      },
-    );
+      expect(decision.coachMessage, contains('[수동 추가]'));
+      expect(decision.coachMessage, contains('[문제 없음]'));
+      expect(decision.highlightTarget, 'missing_candidates');
+      expect(decision.coachTarget, 'missing_candidates');
+
+      final suspiciousOnly = ReviewCoachPolicy.resolve(
+        PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'OBJECT_REVIEW',
+          suspiciousObjects: 1,
+          unresolvedMissingCandidates: 0,
+          workingNodes: [suspicious.toJson()],
+          selectedNode: suspicious.toJson(),
+        ),
+      );
+      expect(suspiciousOnly.coachMessage, contains('[맞음]'));
+      expect(suspiciousOnly.coachMessage, contains('[수정]'));
+      expect(suspiciousOnly.coachMessage, contains('이제 강조된 객체 검토 카드'));
+      expect(suspiciousOnly.highlightTarget, 'object_review_card');
+      expect(suspiciousOnly.focusNodeId, 'object_1');
+    });
 
     test(
       'active sweep reports visual progress and only then guides the Gate',

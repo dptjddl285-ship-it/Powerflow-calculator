@@ -149,6 +149,86 @@ void main() {
     },
   );
 
+  test('review session boundaries are typed, distinct, and idempotent', () {
+    const oldBusGuidance = '모선 번호 판독을 마쳤어요. 직접 확인해 주세요.';
+    service.syncBusMappingGuidance(oldBusGuidance);
+    service.setStageHighlightTarget('bus_gate');
+    service.setFocusTargets([
+      {'type': 'BUS', 'id': 'bus_14'},
+    ]);
+
+    expect(service.beginReviewConversationSession(isNewDiagram: false), isTrue);
+    expect(
+      service.beginReviewConversationSession(isNewDiagram: false),
+      isFalse,
+    );
+
+    final restartSeparator = service.messages.singleWhere(
+      (message) => message.type == PowerLensAIMessageType.sessionSeparator,
+    );
+    expect(restartSeparator.sender, 'system');
+    expect(restartSeparator.text, '검수를 처음부터 다시 시작합니다');
+    expect(service.messages.last.text, contains('검수 처음으로 돌아왔어요.'));
+    expect(
+      service.messages.where((message) => message.text == oldBusGuidance),
+      hasLength(1),
+    );
+    expect(service.currentObjectWorkflowGuidance, isNull);
+    expect(service.currentBusMappingGuidance, isNull);
+    expect(service.stageHighlightTarget, isNull);
+    expect(service.activeHighlightTarget.value, isNull);
+    expect(service.lastFocusTargets, isEmpty);
+    expect(service.mascotState, 'idle');
+
+    service.clearHistory();
+    service.beginReviewConversationSession(isNewDiagram: true);
+    final newDiagramSeparator = service.messages.singleWhere(
+      (message) => message.type == PowerLensAIMessageType.sessionSeparator,
+    );
+    expect(newDiagramSeparator.text, '새 도면 검수를 시작합니다');
+    expect(service.messages.last.text, contains('새 도면을 불러왔어요.'));
+  });
+
+  testWidgets('session separator is a neutral divider, not a Lensy bubble', (
+    tester,
+  ) async {
+    service.beginReviewConversationSession(isNewDiagram: true);
+    final separator = service.messages.singleWhere(
+      (message) => message.type == PowerLensAIMessageType.sessionSeparator,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            height: 500,
+            child: PowerLensAIPanel(
+              assistantContext: const PowerLensAssistantContext(
+                currentScreen: 'REVIEW_PAGE',
+                workflowStage: 'HOME',
+              ),
+              onClose: _noop,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final separatorFinder = find.byKey(
+      ValueKey('sessionSeparator_${separator.id}'),
+    );
+    expect(separatorFinder, findsOneWidget);
+    expect(tester.widget<Padding>(separatorFinder).child, isA<Row>());
+    expect(
+      find.ancestor(
+        of: find.text(separator.text),
+        matching: find.byType(PowerLensAIMessageBubble),
+      ),
+      findsNothing,
+    );
+  });
+
   testWidgets(
     'archived guidance appears in history and latest canonical guidance remains only in the virtual tail',
     (tester) async {

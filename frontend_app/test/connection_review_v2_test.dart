@@ -34,7 +34,12 @@ void main() {
   test(
     'Connection overlay palette separates line, Bus, and equipment roles',
     () {
-      expect(ConnectionReviewVisualColors.currentLine, Colors.cyanAccent);
+      expect(ConnectionReviewVisualColors.currentLine, const Color(0xFFFF6D00));
+      expect(ConnectionReviewVisualColors.visitedLine, const Color(0xFFFB923C));
+      expect(
+        ConnectionReviewVisualColors.currentLine,
+        isNot(Colors.cyanAccent),
+      );
       expect(
         ConnectionReviewVisualColors.forEndpointClass('bus'),
         ConnectionReviewVisualColors.busEndpoint,
@@ -47,7 +52,7 @@ void main() {
         ConnectionReviewVisualColors.forEndpointClass('transformer'),
         ConnectionReviewVisualColors.equipmentEndpoint,
       );
-      expect(ConnectionReviewVisualColors.visitedLineOpacity, lessThan(1));
+      expect(ConnectionReviewVisualColors.visitedLineOpacity, lessThan(0.7));
       expect(
         ConnectionReviewVisualColors.visitedLineStrokeWidth,
         lessThan(4.2),

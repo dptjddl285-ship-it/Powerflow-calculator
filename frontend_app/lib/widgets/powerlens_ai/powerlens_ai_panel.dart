@@ -707,6 +707,7 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
         final lastMessageAlreadyShowsGuidance =
             guidance != null &&
             messages.isNotEmpty &&
+            messages.last.type == PowerLensAIMessageType.chat &&
             !messages.last.isUser &&
             messages.last.text == guidance;
         final showGuidanceTail =
@@ -743,6 +744,12 @@ class _PowerLensAIPanelState extends State<PowerLensAIPanel> {
                     (showProcessingStatusOnly ? 1 : 0),
                 itemBuilder: (context, index) {
                   if (index < messages.length) {
+                    if (messages[index].type ==
+                        PowerLensAIMessageType.sessionSeparator) {
+                      return PowerLensAISessionSeparator(
+                        message: messages[index],
+                      );
+                    }
                     return PowerLensAIMessageBubble(
                       message: messages[index],
                       onActionSelected: (act) => _handleSend(act),

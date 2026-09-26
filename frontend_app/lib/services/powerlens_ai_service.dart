@@ -66,6 +66,8 @@ class PowerLensAIService extends ChangeNotifier {
   String? get lastFailedQuery => _lastFailedQuery;
 
   int _requestSerial = 0;
+  bool _reviewSessionBoundaryPending = false;
+  int _reviewSessionSequence = 0;
 
   String? _lastNotifiedStage;
   String? get lastNotifiedStage => _lastNotifiedStage;
@@ -103,6 +105,7 @@ class PowerLensAIService extends ChangeNotifier {
     final stage = context.workflowStage.toUpperCase();
     final index = _messages.lastIndexWhere(
       (message) =>
+          message.type == PowerLensAIMessageType.chat &&
           !message.isUser &&
           message.stage.toUpperCase() == stage &&
           message.id.startsWith('proactive_'),
@@ -126,6 +129,7 @@ class PowerLensAIService extends ChangeNotifier {
       stage: previous.stage,
       suggestedActions: actions,
       agentStatus: previous.agentStatus,
+      type: previous.type,
     );
     notifyListeners();
   }
@@ -1055,6 +1059,45 @@ class PowerLensAIService extends ChangeNotifier {
     notifyListeners();
   }
 
+  bool beginReviewConversationSession({required bool isNewDiagram}) {
+    if (_reviewSessionBoundaryPending) return false;
+    _reviewSessionBoundaryPending = true;
+    scheduleMicrotask(() => _reviewSessionBoundaryPending = false);
+
+    clearReviewStageTransients();
+    final sequence =
+        '${DateTime.now().microsecondsSinceEpoch}_${++_reviewSessionSequence}';
+    final separatorText = isNewDiagram ? '새 도면 검수를 시작합니다' : '검수를 처음부터 다시 시작합니다';
+    final assistantIntro = isNewDiagram
+        ? '새 도면을 불러왔어요.\n'
+              '이전 검수 기록은 위에 남겨두고,\n'
+              '이 도면은 객체 검수부터 새로 시작할게요.'
+        : '검수 처음으로 돌아왔어요.\n'
+              '이전 검수 대화는 위에 그대로 남겨두고,\n'
+              '지금부터 객체 검수부터 다시 안내할게요.';
+
+    _messages.add(
+      PowerLensAIMessageItem(
+        id: 'session_separator_$sequence',
+        sender: 'system',
+        text: separatorText,
+        stage: 'OBJECT_REVIEW',
+        type: PowerLensAIMessageType.sessionSeparator,
+      ),
+    );
+    _messages.add(
+      PowerLensAIMessageItem(
+        id: 'session_intro_$sequence',
+        sender: 'assistant',
+        text: assistantIntro,
+        stage: 'OBJECT_REVIEW',
+        agentStatus: 'LOCAL_SESSION_INTRO',
+      ),
+    );
+    notifyListeners();
+    return true;
+  }
+
   void _archivePreviousWorkflowGuidanceIfChanged({
     required String? oldGuidance,
     required String? newGuidance,
@@ -1067,7 +1110,8 @@ class PowerLensAIService extends ChangeNotifier {
     }
 
     final lastAssistantIndex = _messages.lastIndexWhere(
-      (message) => !message.isUser,
+      (message) =>
+          message.type == PowerLensAIMessageType.chat && !message.isUser,
     );
     if (lastAssistantIndex >= 0 &&
         _messages[lastAssistantIndex].text == oldGuidance) {
@@ -2788,9 +2832,13 @@ class PowerLensAIService extends ChangeNotifier {
   }
 
   List<Map<String, String>> _buildHistoryPayload() {
-    return _messages.take(10).map((m) {
-      return {'role': m.isUser ? 'user' : 'model', 'content': m.text};
-    }).toList();
+    return _messages
+        .where((m) => m.type == PowerLensAIMessageType.chat)
+        .take(10)
+        .map((m) {
+          return {'role': m.isUser ? 'user' : 'model', 'content': m.text};
+        })
+        .toList();
   }
 
   bool _isObjectReviewWorkflowHelpQuery(
@@ -2838,6 +2886,8 @@ class PowerLensAIService extends ChangeNotifier {
   void clearHistory() {
     _requestSerial++;
     _messages.clear();
+    _reviewSessionBoundaryPending = false;
+    _reviewSessionSequence = 0;
     _currentObjectWorkflowGuidance = null;
     _currentBusMappingGuidance = null;
     _lastNotifiedStage = null;

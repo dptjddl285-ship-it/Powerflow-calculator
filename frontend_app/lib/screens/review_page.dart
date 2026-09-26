@@ -790,7 +790,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     );
     setState(() {
       if (!_objectHumanCheckReady) _objectSweep.invalidateHumanComplete();
-      if (unresolved.isNotEmpty) {
+      if (hasOpenCandidates) {
+        _objFilterStatus = 'ALL';
+        _objFilterClass = 'ALL';
+        _selectedNode = null;
+        _stageGateMessage = ObjectReviewGuidanceMessages.missingCandidates;
+      } else if (unresolved.isNotEmpty) {
         _objFilterStatus = 'SUSPICIOUS';
         _objFilterClass = 'ALL';
         _selectedNode = unresolved.first;
@@ -799,10 +804,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         );
       } else {
         _objFilterStatus = 'ALL';
-        if (hasOpenCandidates) {
-          _objFilterClass = 'ALL';
-          _stageGateMessage = ObjectReviewGuidanceMessages.missingCandidates;
-        } else if (_objectSweep.isAllCategoriesReviewed(_workingNodes)) {
+        if (_objectSweep.isAllCategoriesReviewed(_workingNodes)) {
           _runFinalObjectDeterministicCheck();
         } else {
           _objectSweep.selectCategory('bus', _workingNodes);
@@ -1325,11 +1327,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   Future<void> _processImageBytes(Uint8List bytes, String filename) async {
     final service = PowerLensAIService.instance;
-    service.clearReviewStageTransients();
+    service.beginReviewConversationSession(isNewDiagram: true);
     try {
       setState(() {
         _isLoading = true;
         _loadingMessage = "AI 객체 검출 및 근거 수집 중... 🔍";
+        _isChatLoading = false;
         _stageGateMessage = null;
         _selectedNode = null;
         _selectedLine = null;
@@ -1363,10 +1366,15 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _busModelUsed = null;
         _busFallbackUsed = false;
         _busHttpCode = null;
+        _isManualAddMode = false;
+        _isManualAddLineMode = false;
+        _manualLineStartNode = null;
+        _isObjectEditExpanded = false;
         _objFilterStatus = 'ALL';
         _objFilterClass = 'ALL';
         _nodePage = 0;
         _chatHistory.clear();
+        _busNumberEditController.clear();
       });
 
       final doc = await _apiService.detectObjects(bytes, filename);
@@ -2722,15 +2730,31 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   void _resetToReviewBeginning() {
     ScaffoldMessenger.of(context).clearSnackBars();
     final service = PowerLensAIService.instance;
-    service.clearReviewStageTransients();
+    service.beginReviewConversationSession(isNewDiagram: false);
     setState(() {
       _importedExcelData = null;
       _excelMismatchReport = null;
+      _isLoading = false;
+      _loadingMessage = null;
+      _isChatLoading = false;
       _currentPhase = ReviewPhase.objectReview;
       _stageGateMessage = null;
       _connectionVisualSweepStarted = false;
       _connectionVisualSweepComplete = false;
+      _connectionFullOverview = false;
+      _connectionLinesOnlyMode = false;
+      _connectionFastMode = false;
+      _lineFocusOnly = false;
+      _showAllLinesList = false;
       _isObjectVerified = false;
+      _isBusVerified = false;
+      _busHumanReviewConfirmed = false;
+      _isLinkingBusNumbers = false;
+      _busMappingFeedback = null;
+      _isManualAddMode = false;
+      _isManualAddLineMode = false;
+      _manualLineStartNode = null;
+      _isObjectEditExpanded = false;
       _isFinalVerified = false;
       _objectGateMessage = null;
       _humanCompletenessConfirmed = false;
@@ -2741,6 +2765,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       _selectedTopologyIssue = null;
       _selectedLine = null;
       _missingCandidates.clear();
+      _visitedConnectionLineIds.clear();
+      _busModelUsed = null;
+      _busFallbackUsed = false;
+      _busHttpCode = null;
       _completenessAssessment = null;
       _completenessMessageKo = null;
       _objFilterStatus = 'ALL';
@@ -4105,12 +4133,16 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                         objectReviewTargetActive:
                                             _currentPhase ==
                                                 ReviewPhase.objectReview &&
+                                            _unresolvedCandidatesCount == 0 &&
                                             _objectReviewCurrentTarget !=
                                                 null &&
                                             (_objFilterClass.toUpperCase() !=
                                                     'ALL' ||
-                                                _objSuspiciousCount > 0 ||
-                                                _unresolvedCandidatesCount > 0),
+                                                _objSuspiciousCount > 0),
+                                        suppressObjectReviewHighlights:
+                                            _currentPhase ==
+                                                ReviewPhase.objectReview &&
+                                            _unresolvedCandidatesCount > 0,
                                         visitedObjectIds:
                                             _objectSweep.visitedObjectIds,
                                         guideNodeIds:
@@ -4820,17 +4852,12 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                       'REJECTED',
                     ),
                     const SizedBox(width: 4),
-                    GlowingTargetWrapper(
-                      targetId: 'missing_candidates',
-                      borderRadius: BorderRadius.circular(4),
-                      guideLabel: "✨ 누락 후보 확인",
-                      child: _buildMissingCandidateBadge(
-                        "누락 후보",
-                        _unresolvedCandidatesCount,
-                        _unresolvedCandidatesCount > 0
-                            ? const Color(0xFF9333EA)
-                            : const Color(0xFF64748B),
-                      ),
+                    _buildMissingCandidateBadge(
+                      "누락 후보",
+                      _unresolvedCandidatesCount,
+                      _unresolvedCandidatesCount > 0
+                          ? const Color(0xFF9333EA)
+                          : const Color(0xFF64748B),
                     ),
                   ],
                 ),

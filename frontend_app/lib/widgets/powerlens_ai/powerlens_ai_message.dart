@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 
+enum PowerLensAIMessageType { chat, sessionSeparator }
+
 class PowerLensAIMessageItem {
   final String id;
-  final String sender; // 'user' or 'assistant'
+  final String sender; // 'user', 'assistant', or 'system'
   final String text;
   final DateTime timestamp;
   final String stage;
   final List<String> suggestedActions;
   final String? agentStatus;
+  final PowerLensAIMessageType type;
 
   PowerLensAIMessageItem({
     required this.id,
@@ -17,9 +20,42 @@ class PowerLensAIMessageItem {
     this.stage = 'HOME',
     this.suggestedActions = const [],
     this.agentStatus,
+    this.type = PowerLensAIMessageType.chat,
   }) : timestamp = timestamp ?? DateTime.now();
 
   bool get isUser => sender == 'user';
+}
+
+class PowerLensAISessionSeparator extends StatelessWidget {
+  final PowerLensAIMessageItem message;
+
+  const PowerLensAISessionSeparator({super.key, required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      key: ValueKey('sessionSeparator_${message.id}'),
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+      child: Row(
+        children: [
+          const Expanded(child: Divider(color: Color(0xFFCBD5E1))),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Text(
+              message.text,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Color(0xFF64748B),
+                fontSize: 10.5,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          const Expanded(child: Divider(color: Color(0xFFCBD5E1))),
+        ],
+      ),
+    );
+  }
 }
 
 class PowerLensAIMessageBubble extends StatelessWidget {
@@ -34,13 +70,18 @@ class PowerLensAIMessageBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (message.type == PowerLensAIMessageType.sessionSeparator) {
+      return PowerLensAISessionSeparator(message: message);
+    }
+
     final isUser = message.isUser;
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6.0, horizontal: 8.0),
       child: Row(
-        mainAxisAlignment:
-            isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+        mainAxisAlignment: isUser
+            ? MainAxisAlignment.end
+            : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (!isUser) ...[
@@ -70,8 +111,9 @@ class PowerLensAIMessageBubble extends StatelessWidget {
           ],
           Flexible(
             child: Column(
-              crossAxisAlignment:
-                  isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+              crossAxisAlignment: isUser
+                  ? CrossAxisAlignment.end
+                  : CrossAxisAlignment.start,
               children: [
                 Container(
                   padding: const EdgeInsets.symmetric(
@@ -121,7 +163,10 @@ class PowerLensAIMessageBubble extends StatelessWidget {
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                          vertical: 0,
+                        ),
                         visualDensity: VisualDensity.compact,
                         onPressed: () => onActionSelected?.call(action),
                       );
@@ -165,30 +210,29 @@ class PowerLensAIMessageBubble extends StatelessWidget {
 
     for (final match in regex.allMatches(text)) {
       if (match.start > lastIndex) {
-        spans.add(TextSpan(
-          text: text.substring(lastIndex, match.start),
-          style: defaultStyle,
-        ));
+        spans.add(
+          TextSpan(
+            text: text.substring(lastIndex, match.start),
+            style: defaultStyle,
+          ),
+        );
       }
-      spans.add(TextSpan(
-        text: match.group(1),
-        style: defaultStyle.copyWith(
-          fontWeight: FontWeight.w700,
-          color: isUser ? Colors.white : const Color(0xFF1E3A8A),
+      spans.add(
+        TextSpan(
+          text: match.group(1),
+          style: defaultStyle.copyWith(
+            fontWeight: FontWeight.w700,
+            color: isUser ? Colors.white : const Color(0xFF1E3A8A),
+          ),
         ),
-      ));
+      );
       lastIndex = match.end;
     }
 
     if (lastIndex < text.length) {
-      spans.add(TextSpan(
-        text: text.substring(lastIndex),
-        style: defaultStyle,
-      ));
+      spans.add(TextSpan(text: text.substring(lastIndex), style: defaultStyle));
     }
 
-    return SelectableText.rich(
-      TextSpan(children: spans),
-    );
+    return SelectableText.rich(TextSpan(children: spans));
   }
 }

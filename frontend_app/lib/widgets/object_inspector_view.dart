@@ -594,10 +594,11 @@ class ObjectInspectorView extends StatelessWidget {
     if (!isSuspicious) return inspectorCard;
     return GlowingTargetWrapper(
       targetId: 'object_review_card',
-      guideLabel: '현재 강조된 검토 카드를 확인해 주세요',
       highlightColor: const Color(0xFF16A34A),
       borderRadius: BorderRadius.circular(10),
       padding: const EdgeInsets.all(3),
+      subtlePulse: true,
+      showGuideLabel: false,
       child: inspectorCard,
     );
   }
