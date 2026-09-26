@@ -83,25 +83,25 @@ void main() {
 
       service.syncObjectReviewGuidance(loadGuidance);
       service.syncObjectReviewGuidance(loadGuidance);
-      expect(
-        service.messages.map((message) => message.text),
-        [objectBusGuidance],
-      );
+      expect(service.messages.map((message) => message.text), [
+        objectBusGuidance,
+      ]);
 
       service.syncBusMappingGuidance(busReadingGuidance);
-      expect(
-        service.messages.map((message) => message.text),
-        [objectBusGuidance, loadGuidance],
-      );
+      expect(service.messages.map((message) => message.text), [
+        objectBusGuidance,
+        loadGuidance,
+      ]);
       expect(service.currentObjectWorkflowGuidance, isNull);
       expect(service.currentBusMappingGuidance, busReadingGuidance);
 
       service.syncBusMappingGuidance(busCompleteGuidance);
       service.syncBusMappingGuidance(busCompleteGuidance);
-      expect(
-        service.messages.map((message) => message.text),
-        [objectBusGuidance, loadGuidance, busReadingGuidance],
-      );
+      expect(service.messages.map((message) => message.text), [
+        objectBusGuidance,
+        loadGuidance,
+        busReadingGuidance,
+      ]);
       expect(service.currentBusMappingGuidance, busCompleteGuidance);
 
       service.shouldRequestProactive('archive-test', 'CONNECTION_REVIEW');
@@ -113,16 +113,39 @@ void main() {
           documentId: 'archive-test',
         ),
       );
-      expect(
-        service.messages.map((message) => message.text),
-        [
-          objectBusGuidance,
-          loadGuidance,
-          busReadingGuidance,
-          busCompleteGuidance,
-        ],
-      );
+      expect(service.messages.map((message) => message.text), [
+        objectBusGuidance,
+        loadGuidance,
+        busReadingGuidance,
+        busCompleteGuidance,
+      ]);
       expect(service.currentBusMappingGuidance, isNull);
+    },
+  );
+
+  test(
+    're-entering Object Review clears stage transients but keeps history',
+    () {
+      const oldBusGuidance = '모선 번호 판독을 마쳤어요. 직접 확인해 주세요.';
+      const objectGuidance = '현재 강조된 객체를 확인한 뒤 [맞음] 또는 [수정]을 눌러주세요.';
+
+      service.syncBusMappingGuidance(oldBusGuidance);
+      service.setStageHighlightTarget('bus_gate');
+      service.setFocusTargets([
+        {'type': 'BUS', 'id': 'bus_14'},
+      ]);
+
+      service.clearReviewStageTransients();
+      service.syncObjectReviewGuidance(objectGuidance);
+
+      expect(service.currentBusMappingGuidance, isNull);
+      expect(service.currentObjectWorkflowGuidance, objectGuidance);
+      expect(service.currentWorkflowGuidance, objectGuidance);
+      expect(service.messages.map((message) => message.text), [oldBusGuidance]);
+      expect(service.stageHighlightTarget, isNull);
+      expect(service.activeHighlightTarget.value, isNull);
+      expect(service.lastFocusTargets, isEmpty);
+      expect(service.mascotState, 'idle');
     },
   );
 

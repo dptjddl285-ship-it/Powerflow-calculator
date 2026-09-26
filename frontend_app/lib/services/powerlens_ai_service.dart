@@ -945,11 +945,13 @@ class PowerLensAIService extends ChangeNotifier {
 
     // Keep the latest operational guidance canonical; archive only superseded
     // guidance and remove legacy system-generated messages.
-    _messages.removeWhere((m) =>
-        m.stage == 'OBJECT_REVIEW' &&
-        (m.id.startsWith('proactive_') ||
-            m.id == 'msg_welcome' ||
-            m.id.startsWith('workflow_guidance')));
+    _messages.removeWhere(
+      (m) =>
+          m.stage == 'OBJECT_REVIEW' &&
+          (m.id.startsWith('proactive_') ||
+              m.id == 'msg_welcome' ||
+              m.id.startsWith('workflow_guidance')),
+    );
     _archivePreviousWorkflowGuidanceIfChanged(
       oldGuidance: _currentObjectWorkflowGuidance,
       newGuidance: canonicalMessage,
@@ -978,11 +980,13 @@ class PowerLensAIService extends ChangeNotifier {
   void syncBusMappingGuidance(String canonicalMessage, {String? target}) {
     if (canonicalMessage.trim().isEmpty) return;
 
-    _messages.removeWhere((m) =>
-        (m.stage == 'BUS_MAPPING' || m.stage == 'BUS_MAPPING_REVIEW') &&
-        (m.id.startsWith('proactive_') ||
-            m.id == 'msg_welcome' ||
-            m.id.startsWith('workflow_guidance')));
+    _messages.removeWhere(
+      (m) =>
+          (m.stage == 'BUS_MAPPING' || m.stage == 'BUS_MAPPING_REVIEW') &&
+          (m.id.startsWith('proactive_') ||
+              m.id == 'msg_welcome' ||
+              m.id.startsWith('workflow_guidance')),
+    );
     _archivePreviousWorkflowGuidanceIfChanged(
       oldGuidance: _currentObjectWorkflowGuidance,
       newGuidance: null,
@@ -1024,6 +1028,33 @@ class PowerLensAIService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Clears stage-specific UI state while preserving the conversation history.
+  void clearReviewStageTransients() {
+    _requestSerial++;
+    _archivePreviousWorkflowGuidanceIfChanged(
+      oldGuidance: _currentObjectWorkflowGuidance,
+      newGuidance: null,
+      stage: 'OBJECT_REVIEW',
+    );
+    _archivePreviousWorkflowGuidanceIfChanged(
+      oldGuidance: _currentBusMappingGuidance,
+      newGuidance: null,
+      stage: 'BUS_MAPPING',
+    );
+    _currentObjectWorkflowGuidance = null;
+    _currentBusMappingGuidance = null;
+    _highlightTimer?.cancel();
+    _highlightTimer = null;
+    _stageHighlightTarget = null;
+    activeHighlightTarget.value = null;
+    focusTargetsNotifier.value = const [];
+    _lastNotifiedStage = null;
+    _lastFailedQuery = null;
+    _isLoading = false;
+    _mascotState = 'idle';
+    notifyListeners();
+  }
+
   void _archivePreviousWorkflowGuidanceIfChanged({
     required String? oldGuidance,
     required String? newGuidance,
@@ -1045,8 +1076,7 @@ class PowerLensAIService extends ChangeNotifier {
 
     _messages.add(
       PowerLensAIMessageItem(
-        id:
-            'workflow_archive_${DateTime.now().microsecondsSinceEpoch}_${_messages.length}',
+        id: 'workflow_archive_${DateTime.now().microsecondsSinceEpoch}_${_messages.length}',
         sender: 'assistant',
         text: oldGuidance,
         stage: stage,
@@ -1065,7 +1095,8 @@ class PowerLensAIService extends ChangeNotifier {
     PowerLensAssistantContext? context,
   ]) {
     if (stage == 'OBJECT_REVIEW') {
-      final msg = context?.objectWorkflowMessage ?? _currentObjectWorkflowGuidance;
+      final msg =
+          context?.objectWorkflowMessage ?? _currentObjectWorkflowGuidance;
       if (msg != null && msg.isNotEmpty) {
         syncObjectReviewGuidance(msg);
       }
@@ -1133,7 +1164,8 @@ class PowerLensAIService extends ChangeNotifier {
     if (!isBusMappingStage) {
       clearBusMappingGuidance();
     }
-    if ((stage == 'OBJECT_REVIEW' || context?.workflowStage == 'OBJECT_REVIEW') &&
+    if ((stage == 'OBJECT_REVIEW' ||
+            context?.workflowStage == 'OBJECT_REVIEW') &&
         context?.objectWorkflowMessage != null &&
         context!.objectWorkflowMessage!.isNotEmpty) {
       syncObjectReviewGuidance(context.objectWorkflowMessage!);
@@ -1485,7 +1517,7 @@ class PowerLensAIService extends ChangeNotifier {
         final replyText = handled
             ? '모선 확인을 완료했어요. 결선 검수로 이동합니다.'
             : (currentBusMappingGuidance ??
-                _cleanAssistantReply(_getBlockedNextStageReply(context)));
+                  _cleanAssistantReply(_getBlockedNextStageReply(context)));
         _messages.add(
           PowerLensAIMessageItem(
             id: 'ai_bus_confirm_${DateTime.now().millisecondsSinceEpoch}',
@@ -1588,19 +1620,19 @@ class PowerLensAIService extends ChangeNotifier {
       final client = httpClient;
       final response = client != null
           ? await client
-              .post(
-                uri,
-                headers: {'Content-Type': 'application/json'},
-                body: jsonEncode(payload),
-              )
-              .timeout(const Duration(seconds: 15))
+                .post(
+                  uri,
+                  headers: {'Content-Type': 'application/json'},
+                  body: jsonEncode(payload),
+                )
+                .timeout(const Duration(seconds: 15))
           : await http
-              .post(
-                uri,
-                headers: {'Content-Type': 'application/json'},
-                body: jsonEncode(payload),
-              )
-              .timeout(const Duration(seconds: 15));
+                .post(
+                  uri,
+                  headers: {'Content-Type': 'application/json'},
+                  body: jsonEncode(payload),
+                )
+                .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final decoded = jsonDecode(utf8.decode(response.bodyBytes));

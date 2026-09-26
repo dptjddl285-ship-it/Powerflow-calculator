@@ -50,14 +50,6 @@ class ReviewCoachPolicy {
   static ReviewCoachDecision _objectDecision(
     PowerLensAssistantContext context,
   ) {
-    if (context.unresolvedMissingCandidates > 0) {
-      return const ReviewCoachDecision(
-        coachTarget: 'missing_candidates',
-        coachMessage: '도면에서 누락 후보를 확인하고 실제 설비인지 검토해주세요.',
-        coachMode: 'GUIDE',
-        highlightTarget: 'missing_candidates',
-      );
-    }
     final suspicious = context.workingNodes
         .where(
           (node) =>
@@ -76,11 +68,20 @@ class ReviewCoachPolicy {
       final id = focus['id']?.toString();
       return ReviewCoachDecision(
         coachTarget: 'object_bbox',
-        coachMessage:
-            'AI가 확인이 필요한 객체 ${suspicious.length > 0 ? suspicious.length : context.suspiciousObjects}개를 찾았습니다. 먼저 반짝이는 객체부터 확인해 주세요.',
+        coachMessage: ObjectReviewGuidanceMessages.suspiciousObjects(
+          suspicious.isNotEmpty ? suspicious.length : context.suspiciousObjects,
+        ),
         coachMode: 'GUIDE',
-        highlightTarget: null,
+        highlightTarget: 'object_match_button',
         focusNodeId: context.objectVisualSweepCurrentId ?? id,
+      );
+    }
+    if (context.unresolvedMissingCandidates > 0) {
+      return const ReviewCoachDecision(
+        coachTarget: 'missing_candidates',
+        coachMessage: ObjectReviewGuidanceMessages.missingCandidates,
+        coachMode: 'GUIDE',
+        highlightTarget: 'missing_candidates',
       );
     }
     if (!context.hasDiagram &&
@@ -403,6 +404,12 @@ class ReviewCoachPolicy {
 }
 
 class ObjectReviewGuidanceMessages {
+  static String suspiciousObjects(int count) =>
+      '검토가 필요한 객체 ${count}개를 찾았습니다.\n'
+      '현재 강조된 객체를 확인한 뒤 맞게 인식됐다면 [맞음], 아니라면 [수정]을 눌러주세요.';
+
+  static const String missingCandidates = '도면에서 누락 후보를 확인하고 실제 설비인지 검토해주세요.';
+
   static String initialBus(int count) {
     return '오른쪽 위의 설비 종류를 하나씩 확인해 주세요.\n'
         'Bus → Load → Generator → Transformer 순서로 진행합니다.\n'

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/review_models.dart';
+import 'powerlens_ai/glowing_target_wrapper.dart';
 
 /// Object Review V2 Dedicated Inspector View
 /// Displays AI model confidence, evidence reasons, and actions (Confirm/Edit for Suspicious; Info for Normal)
@@ -372,20 +373,29 @@ class ObjectInspectorView extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: ElevatedButton.icon(
-                  key: const ValueKey('ObjectMatchButton'),
-                  onPressed: onMatch,
-                  icon: const Icon(Icons.check, size: 16),
-                  label: const Text(
-                    "맞음",
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF16A34A),
-                    foregroundColor: Colors.white,
-                    minimumSize: const Size(0, 40),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
+                child: GlowingTargetWrapper(
+                  targetId: 'object_match_button',
+                  guideLabel: '맞게 인식됐다면 [맞음]을 눌러주세요',
+                  highlightColor: const Color(0xFF16A34A),
+                  borderRadius: BorderRadius.circular(8),
+                  child: ElevatedButton.icon(
+                    key: const ValueKey('ObjectMatchButton'),
+                    onPressed: onMatch,
+                    icon: const Icon(Icons.check, size: 16),
+                    label: const Text(
+                      "맞음",
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF16A34A),
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size(0, 40),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
                     ),
                   ),
                 ),

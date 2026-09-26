@@ -5,6 +5,7 @@ import 'package:circuit_solver/models/review_models.dart';
 import 'package:circuit_solver/models/powerlens_assistant_context.dart';
 import 'package:circuit_solver/services/powerlens_ai_service.dart';
 import 'package:circuit_solver/widgets/object_inspector_view.dart';
+import 'package:circuit_solver/widgets/powerlens_ai/glowing_target_wrapper.dart';
 import 'package:circuit_solver/widgets/review_overlay.dart';
 
 void main() {
@@ -226,10 +227,10 @@ void main() {
     );
 
     // -------------------------------------------------------------
-    // TEST A: determineTargetForContext returns null for suspicious (never object_approve / object_batch_approve)
+    // TEST A: Suspicious objects target the match CTA, never batch approval.
     // -------------------------------------------------------------
     test(
-      'TEST A: PowerLensAIService.determineTargetForContext() returns null when suspicious, never object_approve/object_batch_approve',
+      'TEST A: PowerLensAIService.determineTargetForContext() highlights the match CTA for suspicious objects',
       () {
         final service = PowerLensAIService.instance;
 
@@ -245,7 +246,7 @@ void main() {
         );
 
         final target = service.determineTargetForContext(suspiciousContext);
-        expect(target, isNull);
+        expect(target, 'object_match_button');
         expect(target, isNot('object_approve'));
         expect(target, isNot('object_batch_approve'));
 
@@ -850,6 +851,14 @@ void main() {
         final matchBtn = find.byKey(const ValueKey('ObjectMatchButton'));
         expect(matchBtn, findsOneWidget);
         expect(find.text("맞음"), findsOneWidget);
+        final matchButtonGlow = tester.widget<GlowingTargetWrapper>(
+          find.ancestor(
+            of: matchBtn,
+            matching: find.byType(GlowingTargetWrapper),
+          ),
+        );
+        expect(matchButtonGlow.targetId, 'object_match_button');
+        expect(matchButtonGlow.highlightColor, const Color(0xFF16A34A));
         await tester.tap(matchBtn);
         expect(matched, isTrue);
 

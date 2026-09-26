@@ -111,6 +111,35 @@ void main() {
     });
 
     test(
+      'Object exceptions explain both actions and highlight the match CTA',
+      () {
+        final suspicious = ReviewNodeItem(
+          id: 'object_1',
+          className: 'load',
+          bbox: const [10, 10, 5, 5],
+          confidence: 0.55,
+          source: 'test',
+          reviewStatus: 'SUSPICIOUS',
+        );
+        final decision = ReviewCoachPolicy.resolve(
+          PowerLensAssistantContext(
+            currentScreen: 'REVIEW_PAGE',
+            workflowStage: 'OBJECT_REVIEW',
+            suspiciousObjects: 1,
+            unresolvedMissingCandidates: 1,
+            workingNodes: [suspicious.toJson()],
+            selectedNode: suspicious.toJson(),
+          ),
+        );
+
+        expect(decision.coachMessage, contains('[맞음]'));
+        expect(decision.coachMessage, contains('[수정]'));
+        expect(decision.highlightTarget, 'object_match_button');
+        expect(decision.focusNodeId, 'object_1');
+      },
+    );
+
+    test(
       'active sweep reports visual progress and only then guides the Gate',
       () {
         final ordered = ConnectionVisualSweep.orderedLines(lines);

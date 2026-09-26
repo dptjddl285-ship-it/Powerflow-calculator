@@ -10,6 +10,7 @@ class GlowingTargetWrapper extends StatefulWidget {
   final BorderRadius? borderRadius;
   final EdgeInsetsGeometry padding;
   final String? guideLabel;
+  final Color? highlightColor;
 
   const GlowingTargetWrapper({
     super.key,
@@ -18,6 +19,7 @@ class GlowingTargetWrapper extends StatefulWidget {
     this.borderRadius,
     this.padding = EdgeInsets.zero,
     this.guideLabel,
+    this.highlightColor,
   });
 
   @override
@@ -93,6 +95,11 @@ class _GlowingTargetWrapperState extends State<GlowingTargetWrapper>
         final pulse = _isHighlighted
             ? (0.5 + 0.5 * math.sin(t * math.pi))
             : 0.0;
+        final highlightColor =
+            widget.highlightColor ?? const Color(0xFF06B6D4);
+        final innerHighlightColor = widget.highlightColor == null
+            ? const Color(0xFF14B8A6)
+            : Color.lerp(highlightColor, Colors.white, 0.45)!;
 
         return Stack(
           fit: StackFit.passthrough,
@@ -107,17 +114,17 @@ class _GlowingTargetWrapperState extends State<GlowingTargetWrapper>
                       ? [
                           // Outer radiant aura
                           BoxShadow(
-                            color: const Color(
-                              0xFF06B6D4,
-                            ).withValues(alpha: 0.35 + 0.35 * pulse),
+                            color: innerHighlightColor.withValues(
+                              alpha: 0.35 + 0.35 * pulse,
+                            ),
                             blurRadius: 12 + 10 * pulse,
                             spreadRadius: 2 + 4 * pulse,
                           ),
                           // Inner bright glow
                           BoxShadow(
-                            color: const Color(
-                              0xFF14B8A6,
-                            ).withValues(alpha: 0.25 + 0.30 * pulse),
+                            color: highlightColor.withValues(
+                              alpha: 0.25 + 0.30 * pulse,
+                            ),
                             blurRadius: 20 + 8 * pulse,
                             spreadRadius: 1 + 2 * pulse,
                           ),
@@ -131,8 +138,8 @@ class _GlowingTargetWrapperState extends State<GlowingTargetWrapper>
                     border: _isHighlighted
                         ? Border.all(
                             color: Color.lerp(
-                              const Color(0xFF06B6D4),
-                              const Color(0xFF14B8A6),
+                              highlightColor,
+                              innerHighlightColor,
                               pulse,
                             )!.withValues(alpha: 0.85 + 0.15 * pulse),
                             width: 2.5,
@@ -160,7 +167,7 @@ class _GlowingTargetWrapperState extends State<GlowingTargetWrapper>
                       borderRadius: BorderRadius.circular(12),
                       boxShadow: [
                         BoxShadow(
-                          color: const Color(0xFF06B6D4).withValues(alpha: 0.6),
+                          color: highlightColor.withValues(alpha: 0.6),
                           blurRadius: 8,
                           offset: const Offset(0, 2),
                         ),

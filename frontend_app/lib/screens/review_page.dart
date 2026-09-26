@@ -596,7 +596,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_handleGlobalReviewKeyEvent);
-    PowerLensAIService.instance.registerActionHandler(_handleAppAction);
+    final service = PowerLensAIService.instance;
+    service.clearReviewStageTransients();
+    service.registerActionHandler(_handleAppAction);
     if (widget.initialImageBytes != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _processImageBytes(
@@ -703,8 +705,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       _focusNextReviewTask();
       if (mounted) {
         setState(() {
-          _stageGateMessage =
-              '남아 있는 의심 항목과 설비 종류별 확인을 마친 뒤 “확인했어”라고 알려주세요.';
+          _stageGateMessage = '남아 있는 의심 항목과 설비 종류별 확인을 마친 뒤 “확인했어”라고 알려주세요.';
         });
       }
       return false;
@@ -793,12 +794,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _objFilterStatus = 'SUSPICIOUS';
         _objFilterClass = 'ALL';
         _selectedNode = unresolved.first;
-        _stageGateMessage =
-            'AI가 확인이 필요한 객체 ${unresolved.length}개를 찾았습니다. 먼저 반짝이는 객체부터 확인해 주세요.';
+        _stageGateMessage = ObjectReviewGuidanceMessages.suspiciousObjects(
+          unresolved.length,
+        );
       } else {
         _objFilterStatus = 'ALL';
         if (hasOpenCandidates) {
           _objFilterClass = 'ALL';
+          _stageGateMessage = ObjectReviewGuidanceMessages.missingCandidates;
         } else if (_objectSweep.isAllCategoriesReviewed(_workingNodes)) {
           _runFinalObjectDeterministicCheck();
         } else {
@@ -824,6 +827,23 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     _announceReviewStage();
   }
 
+  void _enterObjectReviewPhase() {
+    final service = PowerLensAIService.instance;
+    service.clearReviewStageTransients();
+    setState(() {
+      _currentPhase = ReviewPhase.objectReview;
+      _selectedLine = null;
+      _selectedTopologyIssue = null;
+      _stageGateMessage = null;
+      _isObjectEditExpanded = false;
+    });
+    if (_document == null) {
+      _announceReviewStage();
+      return;
+    }
+    _refreshObjectReviewFocus();
+  }
+
   void _selectObjectReviewCategory(String categoryKey) {
     final key = categoryKey.trim().toLowerCase();
     if (!_objectSweep.reviewCategoryKeys(_workingNodes).contains(key)) return;
@@ -833,8 +853,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       _objFilterClass = key;
       _nodePage = 0;
       _selectedNode = null;
-      _stageGateMessage =
-          ObjectReviewGuidanceMessages.revisit(_objectCategoryLabel(key));
+      _stageGateMessage = ObjectReviewGuidanceMessages.revisit(
+        _objectCategoryLabel(key),
+      );
     });
     PowerLensAIService.instance.syncObjectReviewGuidance(_stageGateMessage!);
     _announceReviewStage();
@@ -903,8 +924,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _objFilterClass = prevKey;
         _nodePage = 0;
         _selectedNode = null;
-        _stageGateMessage =
-            ObjectReviewGuidanceMessages.revisit(_objectCategoryLabel(prevKey));
+        _stageGateMessage = ObjectReviewGuidanceMessages.revisit(
+          _objectCategoryLabel(prevKey),
+        );
       }
     });
     if (_stageGateMessage != null) {
@@ -919,8 +941,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       _objFilterClass = 'ALL';
       _nodePage = 0;
       _selectedNode = null;
-      _stageGateMessage =
-          '전체 도면을 표시했습니다. 설비 종류별 확인 순서는 그대로 이어집니다.';
+      _stageGateMessage = '전체 도면을 표시했습니다. 설비 종류별 확인 순서는 그대로 이어집니다.';
     });
     PowerLensAIService.instance.syncObjectReviewGuidance(_stageGateMessage!);
     _announceReviewStage();
@@ -943,7 +964,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           hasOpenMissingCandidates: missing > 0,
         )) {
       setState(() {
-        _stageGateMessage = ObjectReviewGuidanceMessages.allReviewedCompletePass;
+        _stageGateMessage =
+            ObjectReviewGuidanceMessages.allReviewedCompletePass;
         _objectGateMessage = null;
       });
       PowerLensAIService.instance.syncObjectReviewGuidance(
@@ -970,7 +992,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       });
       PowerLensAIService.instance.clearFocusTargets();
       if (suspicious.isNotEmpty) {
-        PowerLensAIService.instance.setStageHighlightTarget('object_review_next');
+        PowerLensAIService.instance.setStageHighlightTarget(
+          'object_review_next',
+        );
       }
       PowerLensAIService.instance.syncObjectReviewGuidance(_stageGateMessage!);
     }
@@ -1135,28 +1159,26 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       case ReviewPhase.objectReview:
         return false;
       case ReviewPhase.busMappingReview:
-        setState(() {
-          _currentPhase = ReviewPhase.objectReview;
-          _selectedLine = null;
-          _objFilterStatus = 'SUSPICIOUS';
-          final nodes = _filteredAndSortedWorkingNodes;
-          _selectedNode = nodes.isNotEmpty
-              ? nodes.first
-              : _workingNodes.firstOrNull;
-        });
+        _enterObjectReviewPhase();
         return true;
       case ReviewPhase.connectionReview:
         setState(() {
           _currentPhase = ReviewPhase.busMappingReview;
+          _stageGateMessage = null;
           _selectedLine = null;
           _busFilterStatus = 'ALL';
           final buses = _filteredAndSortedBusNodes;
           _selectedNode = buses.isNotEmpty ? buses.first : null;
         });
+        PowerLensAIService.instance
+          ..clearFocusTargets()
+          ..clearHighlight();
+        _announceReviewStage();
         return true;
       case ReviewPhase.verifiedFinal:
         setState(() {
           _currentPhase = ReviewPhase.connectionReview;
+          _stageGateMessage = null;
           _connectionFullOverview = false;
           _connectionLinesOnlyMode = false;
           _connectionFastMode = false;
@@ -1169,6 +1191,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           _selectedLine = null;
         });
         FocusManager.instance.primaryFocus?.unfocus();
+        PowerLensAIService.instance
+          ..clearFocusTargets()
+          ..clearHighlight();
+        _announceReviewStage();
         return true;
     }
   }
@@ -1235,9 +1261,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       objectVisualSweepVisited: _objectSweep.reviewedCategoryCount(
         _workingNodes,
       ),
-      objectVisualSweepTotal: _objectSweep.reviewCategoryKeys(
-        _workingNodes,
-      ).length,
+      objectVisualSweepTotal: _objectSweep
+          .reviewCategoryKeys(_workingNodes)
+          .length,
       objectVisualSweepCurrentId: _objectReviewCurrentTarget?.id,
       busMappingAiReading: _isLinkingBusNumbers,
       activeBusId: _selectedNode?.className.toLowerCase() == 'bus'
@@ -1254,7 +1280,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
             },
       objectWorkflowMessage: _objectWorkflowMessageForContext(),
       busMappingMessage: _currentPhase == ReviewPhase.busMappingReview
-          ? (PowerLensAIService.instance.currentBusMappingGuidance ?? _stageGateMessage)
+          ? (PowerLensAIService.instance.currentBusMappingGuidance ??
+                _stageGateMessage)
           : null,
     );
   }
@@ -1271,9 +1298,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     final assistantContext = _buildAssistantContext();
     if (stage == 'OBJECT_REVIEW' &&
         assistantContext.objectWorkflowMessage != null) {
-      service.syncObjectReviewGuidance(
-        assistantContext.objectWorkflowMessage!,
-      );
+      service.syncObjectReviewGuidance(assistantContext.objectWorkflowMessage!);
       return;
     }
     if (stage == 'BUS_MAPPING') {
@@ -1299,23 +1324,42 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
   // --- Step 1: Upload & Object Detection ---
 
   Future<void> _processImageBytes(Uint8List bytes, String filename) async {
+    final service = PowerLensAIService.instance;
+    service.clearReviewStageTransients();
     try {
       setState(() {
         _isLoading = true;
         _loadingMessage = "AI 객체 검출 및 근거 수집 중... 🔍";
+        _stageGateMessage = null;
         _selectedNode = null;
         _selectedLine = null;
+        _selectedTopologyIssue = null;
+        _document = null;
+        _workingNodes.clear();
         _isObjectVerified = false;
         _objectGateMessage = null;
+        _isBusVerified = false;
+        _busHumanReviewConfirmed = false;
+        _isLinkingBusNumbers = false;
+        _busMappingFeedback = null;
         _currentPhase = ReviewPhase.objectReview;
         _workingLines.clear();
         _verifiedSld = null;
+        _isFinalVerified = false;
         _missingCandidates.clear();
         _completenessAssessment = null;
         _completenessMessageKo = null;
         _humanCompletenessConfirmed = false;
         _objectSweep.reset();
+        _connectionVisualSweepStarted = false;
+        _connectionVisualSweepComplete = false;
+        _connectionFullOverview = false;
+        _connectionLinesOnlyMode = false;
+        _connectionFastMode = false;
+        _lineFocusOnly = false;
+        _showAllLinesList = false;
         _visitedConnectionLineIds.clear();
+        _topologyIssues.clear();
         _busModelUsed = null;
         _busFallbackUsed = false;
         _busHttpCode = null;
@@ -1324,7 +1368,6 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         _nodePage = 0;
         _chatHistory.clear();
       });
-      PowerLensAIService.instance.clearFocusTargets();
 
       final doc = await _apiService.detectObjects(bytes, filename);
       PowerLensAIService.instance.setProviderMode(
@@ -1346,15 +1389,15 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           _selectedNode = null;
           final busCount = _objectCategoryCount('bus');
           _stageGateMessage = ObjectReviewGuidanceMessages.initialBus(busCount);
-          PowerLensAIService.instance.syncObjectReviewGuidance(_stageGateMessage!);
+        } else {
+          _stageGateMessage = ObjectReviewGuidanceMessages.suspiciousObjects(
+            suspiciousNodes.length,
+          );
         }
         _isLoading = false;
 
         // Greeting and Proactive Summary in Chat
-        final suspiciousCount = suspiciousNodes.length;
-        final summaryMsg = suspiciousCount == 0
-            ? _stageGateMessage!
-            : 'AI가 확인이 필요한 객체 ${suspiciousCount}개를 찾았습니다. 먼저 반짝이는 객체부터 확인해 주세요.';
+        final summaryMsg = _stageGateMessage!;
 
         _chatHistory.add(
           ChatMessageItem(
@@ -1731,8 +1774,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     if (_stageGateMessage != null && _stageGateMessage!.isNotEmpty) {
       return _stageGateMessage;
     }
-    final canonical =
-        PowerLensAIService.instance.currentObjectWorkflowGuidance;
+    final canonical = PowerLensAIService.instance.currentObjectWorkflowGuidance;
     if (canonical != null && canonical.isNotEmpty) {
       return canonical;
     }
@@ -1741,7 +1783,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   String _getReviewStageSpeechBubbleText() {
     if (_currentPhase == ReviewPhase.objectReview) {
-      final canonical = PowerLensAIService.instance.currentObjectWorkflowGuidance;
+      final canonical =
+          PowerLensAIService.instance.currentObjectWorkflowGuidance;
       if (canonical != null && canonical.isNotEmpty) return canonical;
     }
     if (_currentPhase == ReviewPhase.busMappingReview) {
@@ -2311,7 +2354,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
       });
 
       FocusManager.instance.primaryFocus?.unfocus();
-      PowerLensAIService.instance.clearFocusTargets();
+      PowerLensAIService.instance
+        ..clearFocusTargets()
+        ..clearHighlight();
       _announceReviewStage();
       _triggerTopologyValidation();
     } catch (e) {
@@ -2676,10 +2721,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
 
   void _resetToReviewBeginning() {
     ScaffoldMessenger.of(context).clearSnackBars();
+    final service = PowerLensAIService.instance;
+    service.clearReviewStageTransients();
     setState(() {
       _importedExcelData = null;
       _excelMismatchReport = null;
       _currentPhase = ReviewPhase.objectReview;
+      _stageGateMessage = null;
       _connectionVisualSweepStarted = false;
       _connectionVisualSweepComplete = false;
       _isObjectVerified = false;
@@ -2716,6 +2764,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
         closeIconColor: Colors.white,
       ),
     );
+    _refreshObjectReviewFocus();
   }
 
   // --- Chat Assistant Logic ---
@@ -2900,15 +2949,7 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               "① 객체 검수",
               _currentPhase == ReviewPhase.objectReview,
               _isObjectVerified,
-              onTap: () {
-                setState(() {
-                  _currentPhase = ReviewPhase.objectReview;
-                  _selectedLine = null;
-                  _selectedNode = _workingNodes.isNotEmpty
-                      ? _workingNodes.first
-                      : null;
-                });
-              },
+              onTap: _enterObjectReviewPhase,
             ),
           ),
           const Icon(Icons.arrow_right, color: Color(0xFF94A3B8), size: 14),
@@ -2924,10 +2965,15 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                   ? () {
                       setState(() {
                         _currentPhase = ReviewPhase.busMappingReview;
+                        _stageGateMessage = null;
                         _selectedLine = null;
                         final buses = _filteredAndSortedBusNodes;
                         _selectedNode = buses.isNotEmpty ? buses.first : null;
                       });
+                      PowerLensAIService.instance
+                        ..clearFocusTargets()
+                        ..clearHighlight();
+                      _announceReviewStage();
                     }
                   : null,
             ),
@@ -2941,12 +2987,14 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
               "③ 결선 검수",
               _currentPhase == ReviewPhase.connectionReview,
               _canVerifyFinalGate,
-              onTap: (_activeConnectionLines.isNotEmpty &&
+              onTap:
+                  (_activeConnectionLines.isNotEmpty &&
                       _isBusVerified &&
                       _busHumanReviewConfirmed)
                   ? () {
                       setState(() {
                         _currentPhase = ReviewPhase.connectionReview;
+                        _stageGateMessage = null;
                         _selectedNode = null;
                         _selectedLine = null;
                         _lineFocusOnly = false;
@@ -2957,6 +3005,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                         _connectionLinesOnlyMode = false;
                         _connectionFastMode = false;
                       });
+                      PowerLensAIService.instance
+                        ..clearFocusTargets()
+                        ..clearHighlight();
+                      _announceReviewStage();
                     }
                   : null,
             ),
@@ -3271,7 +3323,8 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                                 coachMessage: _getReviewStageSpeechBubbleText(),
                                 useObjectReviewGuidance:
                                     _currentPhase == ReviewPhase.objectReview ||
-                                    _currentPhase == ReviewPhase.busMappingReview,
+                                    _currentPhase ==
+                                        ReviewPhase.busMappingReview,
                               ),
                             ),
                           ],
@@ -4028,200 +4081,225 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                         child: Stack(
                           children: [
                             Positioned.fill(
-                              child: ValueListenableBuilder<List<Map<String, dynamic>>>(
-                                valueListenable: PowerLensAIService
-                                    .instance
-                                    .focusTargetsNotifier,
-                                builder: (context, focusTargets, _) {
-                                  return ReviewOverlayView(
-                                    focusTargetKey: _reviewFocusTargetKey,
-                                    imageBytes: _document!.rawBytes,
-                                    imageUrl: _apiService.getOriginalImageUrl(
-                                      _document!.documentId,
-                                    ),
-                                    originalWidth: _document!.image.width,
-                                    originalHeight: _document!.image.height,
-                                    nodes: _workingNodes,
-                                    selectedNode: _selectedNode,
-                                    currentObjectReviewId:
-                                        _objectReviewCurrentTarget?.id,
-                                    objectReviewTargetActive:
-                                        _currentPhase ==
-                                            ReviewPhase.objectReview &&
-                                        _objectReviewCurrentTarget != null &&
-                                        (_objFilterClass.toUpperCase() !=
-                                                'ALL' ||
-                                            _objSuspiciousCount > 0 ||
-                                            _unresolvedCandidatesCount > 0),
-                                    visitedObjectIds:
-                                        _objectSweep.visitedObjectIds,
-                                    guideNodeIds:
-                                        (_currentPhase ==
-                                                ReviewPhase.objectReview ||
+                              child:
+                                  ValueListenableBuilder<
+                                    List<Map<String, dynamic>>
+                                  >(
+                                    valueListenable: PowerLensAIService
+                                        .instance
+                                        .focusTargetsNotifier,
+                                    builder: (context, focusTargets, _) {
+                                      return ReviewOverlayView(
+                                        focusTargetKey: _reviewFocusTargetKey,
+                                        imageBytes: _document!.rawBytes,
+                                        imageUrl: _apiService
+                                            .getOriginalImageUrl(
+                                              _document!.documentId,
+                                            ),
+                                        originalWidth: _document!.image.width,
+                                        originalHeight: _document!.image.height,
+                                        nodes: _workingNodes,
+                                        selectedNode: _selectedNode,
+                                        currentObjectReviewId:
+                                            _objectReviewCurrentTarget?.id,
+                                        objectReviewTargetActive:
                                             _currentPhase ==
-                                                ReviewPhase.busMappingReview)
-                                        ? _calculateGuideNodeIds(focusTargets)
-                                        : const {},
-                                    currentCoachNodeId:
-                                        _reviewCoachDecision.focusNodeId,
-                                    isObjectCategorySweepActive:
-                                        _currentPhase ==
+                                                ReviewPhase.objectReview &&
+                                            _objectReviewCurrentTarget !=
+                                                null &&
+                                            (_objFilterClass.toUpperCase() !=
+                                                    'ALL' ||
+                                                _objSuspiciousCount > 0 ||
+                                                _unresolvedCandidatesCount > 0),
+                                        visitedObjectIds:
+                                            _objectSweep.visitedObjectIds,
+                                        guideNodeIds:
+                                            (_currentPhase ==
+                                                    ReviewPhase.objectReview ||
+                                                _currentPhase ==
+                                                    ReviewPhase
+                                                        .busMappingReview)
+                                            ? _calculateGuideNodeIds(
+                                                focusTargets,
+                                              )
+                                            : const {},
+                                        currentCoachNodeId:
+                                            _reviewCoachDecision.focusNodeId,
+                                        isObjectCategorySweepActive:
+                                            _currentPhase ==
                                                 ReviewPhase.objectReview &&
                                             _objSuspiciousCount == 0 &&
                                             _unresolvedCandidatesCount == 0,
-                                    currentCategoryHighlightKey:
-                                        _objFilterClass.toUpperCase() == 'ALL'
-                                        ? null
-                                        : _objFilterClass,
-                                    openMissingCandidates:
-                                        (_currentPhase ==
-                                            ReviewPhase.objectReview)
-                                        ? _missingCandidates
-                                              .where((c) => c.status == 'OPEN')
-                                              .toList()
-                                        : const [],
-                                    onSelectCandidate: (cand) {
-                                      _showMissingCandidatesDialog(
-                                        initialCandidateId: cand.id,
+                                        currentCategoryHighlightKey:
+                                            _objFilterClass.toUpperCase() ==
+                                                'ALL'
+                                            ? null
+                                            : _objFilterClass,
+                                        openMissingCandidates:
+                                            (_currentPhase ==
+                                                ReviewPhase.objectReview)
+                                            ? _missingCandidates
+                                                  .where(
+                                                    (c) => c.status == 'OPEN',
+                                                  )
+                                                  .toList()
+                                            : const [],
+                                        onSelectCandidate: (cand) {
+                                          _showMissingCandidatesDialog(
+                                            initialCandidateId: cand.id,
+                                          );
+                                        },
+                                        onSelectNode: (node) {
+                                          if (_currentPhase ==
+                                              ReviewPhase.objectReview) {
+                                            _selectReviewNode(node);
+                                            return;
+                                          }
+                                          setState(() {
+                                            _selectedNode = node;
+                                            _isObjectEditExpanded = false;
+                                            if (_isManualAddLineMode &&
+                                                _manualLineStartNode == null) {
+                                              _manualLineStartNode = node;
+                                            }
+                                            if (_currentPhase ==
+                                                ReviewPhase.connectionReview) {
+                                              final matchedIssue =
+                                                  _topologyIssues.firstWhere(
+                                                    (i) =>
+                                                        (i['component_ids']
+                                                                    as List? ??
+                                                                [])
+                                                            .map(
+                                                              (e) =>
+                                                                  e.toString(),
+                                                            )
+                                                            .contains(node.id),
+                                                    orElse: () => {},
+                                                  );
+                                              _selectedTopologyIssue =
+                                                  matchedIssue.isNotEmpty
+                                                  ? matchedIssue
+                                                  : null;
+                                              _selectedLine = null;
+                                            }
+                                          });
+                                          if (node.reviewStatus ==
+                                                  'SUSPICIOUS' &&
+                                              node.agentExplanation == null) {
+                                            _triggerAgentReviewNode(node);
+                                          }
+                                        },
+                                        onNodeOffsetChanged: (nodeId, dx, dy) {
+                                          setState(() {
+                                            for (var n in _workingNodes) {
+                                              if (n.id == nodeId) {
+                                                n.labelOffsetDx = dx;
+                                                n.labelOffsetDy = dy;
+                                                break;
+                                              }
+                                            }
+                                          });
+                                        },
+                                        showNodeLabels: _showCanvasLabels,
+                                        showLineLabels: _showCanvasLabels,
+                                        busFocusOnly:
+                                            (_currentPhase ==
+                                                ReviewPhase.busMappingReview &&
+                                            _busFocusOnly),
+                                        busMappingReview:
+                                            _currentPhase ==
+                                            ReviewPhase.busMappingReview,
+                                        lineFocusOnly:
+                                            (_currentPhase ==
+                                                ReviewPhase.connectionReview &&
+                                            _lineFocusOnly),
+                                        linesOnlyMode:
+                                            (_currentPhase ==
+                                                ReviewPhase.connectionReview &&
+                                            _connectionLinesOnlyMode),
+                                        lines:
+                                            (_currentPhase ==
+                                                ReviewPhase.objectReview)
+                                            ? const []
+                                            : _workingLines,
+                                        selectedLine: _selectedLine,
+                                        visitedLineIds:
+                                            _visitedConnectionLineIds,
+                                        onSelectLine: (line) {
+                                          setState(() {
+                                            if (_currentPhase ==
+                                                    ReviewPhase
+                                                        .connectionReview &&
+                                                _selectedLine != null &&
+                                                _selectedLine!.lineId !=
+                                                    line.lineId) {
+                                              _visitedConnectionLineIds.add(
+                                                _selectedLine!.lineId,
+                                              );
+                                            }
+                                            _selectedLine = line;
+                                            if (_currentPhase ==
+                                                ReviewPhase.connectionReview) {
+                                              _selectedNode = null;
+                                              _selectedTopologyIssue = null;
+                                              if (!_filteredAndSortedWorkingLines
+                                                  .any(
+                                                    (l) =>
+                                                        l.lineId == line.lineId,
+                                                  )) {
+                                                _connFilterStatus = 'ALL';
+                                              }
+                                            }
+                                            final index =
+                                                _filteredAndSortedWorkingLines
+                                                    .indexWhere(
+                                                      (item) =>
+                                                          item.lineId ==
+                                                          line.lineId,
+                                                    );
+                                            if (index >= 0) {
+                                              _linePage =
+                                                  index ~/ _linePageSize;
+                                            }
+                                          });
+                                        },
+                                        onLineOffsetChanged: (lineId, dx, dy) {
+                                          setState(() {
+                                            for (var l in _workingLines) {
+                                              if (l.lineId == lineId) {
+                                                l.labelOffsetDx = dx;
+                                                l.labelOffsetDy = dy;
+                                                break;
+                                              }
+                                            }
+                                          });
+                                        },
+                                        isManualAddMode: _isManualAddMode,
+                                        manualAddClass: _manualAddClass,
+                                        onManualAddComplete:
+                                            _handleManualAddComplete,
+                                        isManualAddLineMode:
+                                            _isManualAddLineMode,
+                                        manualLineStartNode:
+                                            _manualLineStartNode,
+                                        onManualAddLineComplete:
+                                            _handleManualAddLineComplete,
+                                        violationNodeIds: _topologyIssues
+                                            .where(
+                                              (i) => i['severity'] == 'error',
+                                            )
+                                            .expand(
+                                              (i) =>
+                                                  (i['component_ids']
+                                                              as List? ??
+                                                          [])
+                                                      .map((e) => e.toString()),
+                                            )
+                                            .toSet(),
                                       );
                                     },
-                                    onSelectNode: (node) {
-                                      if (_currentPhase ==
-                                          ReviewPhase.objectReview) {
-                                        _selectReviewNode(node);
-                                        return;
-                                      }
-                                      setState(() {
-                                        _selectedNode = node;
-                                        _isObjectEditExpanded = false;
-                                        if (_isManualAddLineMode &&
-                                            _manualLineStartNode == null) {
-                                          _manualLineStartNode = node;
-                                        }
-                                        if (_currentPhase ==
-                                            ReviewPhase.connectionReview) {
-                                          final matchedIssue = _topologyIssues
-                                              .firstWhere(
-                                                (i) =>
-                                                    (i['component_ids']
-                                                                as List? ??
-                                                            [])
-                                                        .map(
-                                                          (e) => e.toString(),
-                                                        )
-                                                        .contains(node.id),
-                                                orElse: () => {},
-                                              );
-                                          _selectedTopologyIssue =
-                                              matchedIssue.isNotEmpty
-                                              ? matchedIssue
-                                              : null;
-                                          _selectedLine = null;
-                                        }
-                                      });
-                                      if (node.reviewStatus == 'SUSPICIOUS' &&
-                                          node.agentExplanation == null) {
-                                        _triggerAgentReviewNode(node);
-                                      }
-                                    },
-                                    onNodeOffsetChanged: (nodeId, dx, dy) {
-                                      setState(() {
-                                        for (var n in _workingNodes) {
-                                          if (n.id == nodeId) {
-                                            n.labelOffsetDx = dx;
-                                            n.labelOffsetDy = dy;
-                                            break;
-                                          }
-                                        }
-                                      });
-                                    },
-                                    showNodeLabels: _showCanvasLabels,
-                                    showLineLabels: _showCanvasLabels,
-                                    busFocusOnly:
-                                        (_currentPhase ==
-                                            ReviewPhase.busMappingReview &&
-                                        _busFocusOnly),
-                                    lineFocusOnly:
-                                        (_currentPhase ==
-                                            ReviewPhase.connectionReview &&
-                                        _lineFocusOnly),
-                                    linesOnlyMode:
-                                        (_currentPhase ==
-                                            ReviewPhase.connectionReview &&
-                                        _connectionLinesOnlyMode),
-                                    lines:
-                                        (_currentPhase ==
-                                            ReviewPhase.objectReview)
-                                        ? const []
-                                        : _workingLines,
-                                    selectedLine: _selectedLine,
-                                    visitedLineIds: _visitedConnectionLineIds,
-                                    onSelectLine: (line) {
-                                      setState(() {
-                                        if (_currentPhase ==
-                                                ReviewPhase.connectionReview &&
-                                            _selectedLine != null &&
-                                            _selectedLine!.lineId !=
-                                                line.lineId) {
-                                          _visitedConnectionLineIds.add(
-                                            _selectedLine!.lineId,
-                                          );
-                                        }
-                                        _selectedLine = line;
-                                        if (_currentPhase ==
-                                            ReviewPhase.connectionReview) {
-                                          _selectedNode = null;
-                                          _selectedTopologyIssue = null;
-                                          if (!_filteredAndSortedWorkingLines
-                                              .any(
-                                                (l) => l.lineId == line.lineId,
-                                              )) {
-                                            _connFilterStatus = 'ALL';
-                                          }
-                                        }
-                                        final index =
-                                            _filteredAndSortedWorkingLines
-                                                .indexWhere(
-                                                  (item) =>
-                                                      item.lineId ==
-                                                      line.lineId,
-                                                );
-                                        if (index >= 0) {
-                                          _linePage = index ~/ _linePageSize;
-                                        }
-                                      });
-                                    },
-                                    onLineOffsetChanged: (lineId, dx, dy) {
-                                      setState(() {
-                                        for (var l in _workingLines) {
-                                          if (l.lineId == lineId) {
-                                            l.labelOffsetDx = dx;
-                                            l.labelOffsetDy = dy;
-                                            break;
-                                          }
-                                        }
-                                      });
-                                    },
-                                    isManualAddMode: _isManualAddMode,
-                                    manualAddClass: _manualAddClass,
-                                    onManualAddComplete:
-                                        _handleManualAddComplete,
-                                    isManualAddLineMode: _isManualAddLineMode,
-                                    manualLineStartNode: _manualLineStartNode,
-                                    onManualAddLineComplete:
-                                        _handleManualAddLineComplete,
-                                    violationNodeIds: _topologyIssues
-                                        .where((i) => i['severity'] == 'error')
-                                        .expand(
-                                          (i) =>
-                                              (i['component_ids'] as List? ??
-                                                      [])
-                                                  .map((e) => e.toString()),
-                                        )
-                                        .toSet(),
-                                  );
-                                },
-                              ),
+                                  ),
                             ),
                             // Floating HUD on Canvas: Direct Label & Focus Toggles
                             Positioned(
@@ -4607,18 +4685,22 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     _unresolvedCandidatesCount == 0
                 ? ObjectCategoryReviewBar(
                     totalCount: _workingNodes
-                        .where((n) => n.reviewStatus.toUpperCase() != 'REJECTED')
+                        .where(
+                          (n) => n.reviewStatus.toUpperCase() != 'REJECTED',
+                        )
                         .length,
                     categories: _objectReviewCategoryStatuses,
                     selectedCategoryKey: _objectSweep.currentCategoryKey,
-                    allReviewed:
-                        _objectSweep.isAllCategoriesReviewed(_workingNodes),
+                    allReviewed: _objectSweep.isAllCategoriesReviewed(
+                      _workingNodes,
+                    ),
                     onSelectCategory: _selectObjectReviewCategory,
-                    onConfirmCurrentAndNext: _handleObjectCategoryConfirmAndNext,
+                    onConfirmCurrentAndNext:
+                        _handleObjectCategoryConfirmAndNext,
                     onPreviousCategory:
                         _objectSweep.canGoPrevious(_workingNodes)
-                            ? _handleObjectCategoryPrevious
-                            : null,
+                        ? _handleObjectCategoryPrevious
+                        : null,
                     onSelectAll: _handleObjectCategorySelectAll,
                   )
                 : Wrap(
@@ -7947,14 +8029,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           _busModelUsed = feedback.modelUsed;
           _busFallbackUsed = feedback.fallbackUsed;
           _busHttpCode = feedback.httpCode;
-          final byId = {
-            for (final node in _workingNodes) node.id: node,
-          };
+          final byId = {for (final node in _workingNodes) node.id: node};
           for (int i = 0; i < rawNodes.length; i++) {
             final raw = rawNodes[i];
             if (raw is! Map) continue;
             final id = raw['id']?.toString();
-            final node = (id != null ? byId[id] : null) ??
+            final node =
+                (id != null ? byId[id] : null) ??
                 (i < _workingNodes.length ? _workingNodes[i] : null);
             if (node == null) continue;
             node.busNumber = (raw['bus_number'] as num?)?.toInt();
@@ -8052,7 +8133,9 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
     });
 
     PowerLensAIService.instance.clearWorkflowGuidance();
-    PowerLensAIService.instance.clearFocusTargets();
+    PowerLensAIService.instance
+      ..clearFocusTargets()
+      ..clearHighlight();
     _announceReviewStage();
     // Automatically run AI vision grounding on all working buses (including human-added ones)
     _triggerAiBusLinking();
@@ -9149,14 +9232,10 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
                     guideLabel: "✨ 모선 검수 완료",
                     child: ElevatedButton.icon(
                       key: const ValueKey('BusCompleteButton'),
-                      onPressed:
-                          _isLinkingBusNumbers || _isLoading
+                      onPressed: _isLinkingBusNumbers || _isLoading
                           ? null
                           : _completeBusReview,
-                      icon: const Icon(
-                        Icons.check_circle_outline,
-                        size: 16,
-                      ),
+                      icon: const Icon(Icons.check_circle_outline, size: 16),
                       label: const Text("모선 검수 완료"),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: _canVerifyBusGate

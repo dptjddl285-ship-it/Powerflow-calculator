@@ -405,6 +405,7 @@ void main() {
           busNumber: null,
           busNumberStatus: 'UNCERTAIN',
         );
+        issueBus.labelOffsetDx = 60;
 
         await tester.pumpWidget(
           MaterialApp(
@@ -425,6 +426,7 @@ void main() {
                   onSelectNode: (_) {},
                   onSelectLine: (_) {},
                   busFocusOnly: true,
+                  busMappingReview: true,
                 ),
               ),
             ),
@@ -502,18 +504,21 @@ void main() {
 
     // TEST N & O: clean Bus completion requires human review confirmation;
     // entering Bus Mapping remains behind the Object Gate.
-    test('TEST N & O: clean Bus completion requires human review confirmation', () {
-      final cleanState = BusReviewUiState.fromNodes([bus1, bus2]);
-      expect(cleanState.nextActionText, contains('[모선 검수 완료]'));
-      expect(
-        BusReviewUiPolicy.canEnterBusMapping(objectGateVerified: false),
-        isFalse,
-      );
-      expect(
-        BusReviewUiPolicy.canEnterBusMapping(objectGateVerified: true),
-        isTrue,
-      );
-    });
+    test(
+      'TEST N & O: clean Bus completion requires human review confirmation',
+      () {
+        final cleanState = BusReviewUiState.fromNodes([bus1, bus2]);
+        expect(cleanState.nextActionText, contains('[모선 검수 완료]'));
+        expect(
+          BusReviewUiPolicy.canEnterBusMapping(objectGateVerified: false),
+          isFalse,
+        );
+        expect(
+          BusReviewUiPolicy.canEnterBusMapping(objectGateVerified: true),
+          isTrue,
+        );
+      },
+    );
 
     // TEST P: COMPLETE_CURRENT_STAGE -> resolveIntentActions returns goToNextStage
     test(
@@ -701,12 +706,18 @@ void main() {
     });
 
     // TEST W: clean Bus next action requests human review gate confirmation.
-    test('TEST W: clean Bus next action requests human review gate confirmation', () {
-      final state = BusReviewUiState.fromNodes([bus1, bus2, bus3]);
-      expect(state.issueBuses, 0);
-      expect(state.nextActionText, '모선 번호 확인이 완료되었습니다. 도면 확인 후 [모선 검수 완료]를 눌러주세요.');
-      expect(state.nextActionText, contains('[모선 검수 완료]'));
-    });
+    test(
+      'TEST W: clean Bus next action requests human review gate confirmation',
+      () {
+        final state = BusReviewUiState.fromNodes([bus1, bus2, bus3]);
+        expect(state.issueBuses, 0);
+        expect(
+          state.nextActionText,
+          '모선 번호 확인이 완료되었습니다. 도면 확인 후 [모선 검수 완료]를 눌러주세요.',
+        );
+        expect(state.nextActionText, contains('[모선 검수 완료]'));
+      },
+    );
 
     // TEST X: rejected buses do not enter active totals or focus IDs.
     test('TEST X: rejected Bus is excluded from active UI state', () {
@@ -969,10 +980,7 @@ void main() {
           objectWorkflowMessage: null,
         );
 
-        expect(
-          () => ReviewCoachPolicy.resolve(busContext),
-          returnsNormally,
-        );
+        expect(() => ReviewCoachPolicy.resolve(busContext), returnsNormally);
         final decision = ReviewCoachPolicy.resolve(busContext);
         expect(decision.coachMessage, isNotEmpty);
       },
@@ -982,15 +990,73 @@ void main() {
       'TEST AH: Bus in busFocusOnly mode renders tight blue outline with transparent fill and no glow',
       (tester) async {
         final Uint8List testImageBytes = Uint8List.fromList([
-          0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-          0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-          0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-          0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
-          0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41,
-          0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
-          0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
-          0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
-          0x42, 0x60, 0x82,
+          0x89,
+          0x50,
+          0x4E,
+          0x47,
+          0x0D,
+          0x0A,
+          0x1A,
+          0x0A,
+          0x00,
+          0x00,
+          0x00,
+          0x0D,
+          0x49,
+          0x48,
+          0x44,
+          0x52,
+          0x00,
+          0x00,
+          0x00,
+          0x01,
+          0x00,
+          0x00,
+          0x00,
+          0x01,
+          0x08,
+          0x06,
+          0x00,
+          0x00,
+          0x00,
+          0x1F,
+          0x15,
+          0xC4,
+          0x89,
+          0x00,
+          0x00,
+          0x00,
+          0x0A,
+          0x49,
+          0x44,
+          0x41,
+          0x54,
+          0x78,
+          0x9C,
+          0x63,
+          0x00,
+          0x01,
+          0x00,
+          0x00,
+          0x05,
+          0x00,
+          0x01,
+          0x0D,
+          0x0A,
+          0x2D,
+          0xB4,
+          0x00,
+          0x00,
+          0x00,
+          0x00,
+          0x49,
+          0x45,
+          0x4E,
+          0x44,
+          0xAE,
+          0x42,
+          0x60,
+          0x82,
         ]);
         final horizontalBus = makeBus(
           id: 'h_bus',
@@ -1023,8 +1089,9 @@ void main() {
         );
         await tester.pump();
 
-        final tightBoxFinder =
-            find.byKey(const ValueKey('ObjectTightBox_h_bus'));
+        final tightBoxFinder = find.byKey(
+          const ValueKey('ObjectTightBox_h_bus'),
+        );
         expect(tightBoxFinder, findsOneWidget);
 
         final container = tester.widget<Container>(tightBoxFinder);
