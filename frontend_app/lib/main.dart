@@ -3087,6 +3087,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
     Uint8List? initialImageBytes,
     String? initialFilename,
   }) async {
+    ScaffoldMessenger.of(context).clearSnackBars();
     bool hasApplied = false;
     final result = await Navigator.push<Map<String, dynamic>>(
       context,

@@ -21,7 +21,7 @@ void main() {
   });
 
   test(
-    'workflow guidance stays canonical outside history and help uses the tail bubble',
+    'superseded guidance is archived and help uses the virtual tail bubble',
     () async {
       final originalBaseUrl = PowerLensAIService.baseUrl;
       var agentChatRequests = 0;
@@ -55,12 +55,116 @@ void main() {
 
       service.syncObjectReviewGuidance(nextGuidance);
       expect(service.currentObjectWorkflowGuidance, nextGuidance);
-      expect(service.messages, hasLength(1));
+      expect(service.messages, hasLength(2));
       expect(service.messages.any((message) => message.isUser), isTrue);
+      expect(service.messages.last.text, initialGuidance);
+      expect(service.messages.last.isUser, isFalse);
+
+      service.syncObjectReviewGuidance(nextGuidance);
+      expect(service.messages, hasLength(2));
       expect(
-        service.messages.any((message) => message.text == initialGuidance),
-        isFalse,
+        service.messages.where((message) => message.text == initialGuidance),
+        hasLength(1),
       );
+    },
+  );
+
+  test(
+    'canonical guidance archives once across Object and Bus stages while the new text stays current',
+    () async {
+      const objectBusGuidance = 'Bus를 확인해 주세요.';
+      const loadGuidance = 'Bus 확인을 마쳤어요. Load를 확인해 주세요.';
+      const busReadingGuidance = '모선 번호를 자동으로 읽고 있어요.';
+      const busCompleteGuidance = '모선 번호 판독을 마쳤어요. 직접 확인해 주세요.';
+
+      service.syncObjectReviewGuidance(objectBusGuidance);
+      service.syncObjectReviewGuidance(objectBusGuidance);
+      expect(service.messages, isEmpty);
+
+      service.syncObjectReviewGuidance(loadGuidance);
+      service.syncObjectReviewGuidance(loadGuidance);
+      expect(
+        service.messages.map((message) => message.text),
+        [objectBusGuidance],
+      );
+
+      service.syncBusMappingGuidance(busReadingGuidance);
+      expect(
+        service.messages.map((message) => message.text),
+        [objectBusGuidance, loadGuidance],
+      );
+      expect(service.currentObjectWorkflowGuidance, isNull);
+      expect(service.currentBusMappingGuidance, busReadingGuidance);
+
+      service.syncBusMappingGuidance(busCompleteGuidance);
+      service.syncBusMappingGuidance(busCompleteGuidance);
+      expect(
+        service.messages.map((message) => message.text),
+        [objectBusGuidance, loadGuidance, busReadingGuidance],
+      );
+      expect(service.currentBusMappingGuidance, busCompleteGuidance);
+
+      service.shouldRequestProactive('archive-test', 'CONNECTION_REVIEW');
+      await service.onStageChanged(
+        'CONNECTION_REVIEW',
+        const PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'CONNECTION_REVIEW',
+          documentId: 'archive-test',
+        ),
+      );
+      expect(
+        service.messages.map((message) => message.text),
+        [
+          objectBusGuidance,
+          loadGuidance,
+          busReadingGuidance,
+          busCompleteGuidance,
+        ],
+      );
+      expect(service.currentBusMappingGuidance, isNull);
+    },
+  );
+
+  testWidgets(
+    'archived guidance appears in history and latest canonical guidance remains only in the virtual tail',
+    (tester) async {
+      const previousGuidance = 'Bus 확인을 마쳤어요. Load를 확인해 주세요.';
+      const currentGuidance = 'Load 확인을 마쳤어요. Generator를 확인해 주세요.';
+      service.syncObjectReviewGuidance(previousGuidance);
+      service.syncObjectReviewGuidance(currentGuidance);
+
+      final context = PowerLensAssistantContext(
+        currentScreen: 'REVIEW_PAGE',
+        workflowStage: 'OBJECT_REVIEW',
+        objectWorkflowMessage: currentGuidance,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: PowerLensAIPanel(assistantContext: context, onClose: _noop),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text(previousGuidance), findsOneWidget);
+      expect(find.text(currentGuidance), findsOneWidget);
+      expect(
+        service.messages.where((message) => message.text == previousGuidance),
+        hasLength(1),
+      );
+      expect(
+        service.messages.where((message) => message.text == currentGuidance),
+        isEmpty,
+      );
+      final bubbles = tester.widgetList<PowerLensAIMessageBubble>(
+        find.descendant(
+          of: find.byType(ListView),
+          matching: find.byType(PowerLensAIMessageBubble),
+        ),
+      );
+      expect(bubbles.last.message.text, currentGuidance);
     },
   );
 
@@ -123,6 +227,7 @@ void main() {
             ),
           ),
         );
+        await tester.pumpAndSettle();
         expect(
           find.byKey(const ValueKey('currentWorkflowGuidanceBubble')),
           findsOneWidget,
