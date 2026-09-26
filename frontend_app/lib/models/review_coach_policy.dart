@@ -194,6 +194,26 @@ class ReviewCoachPolicy {
         highlightTarget: null,
       );
     }
+    final failureToken = context.busFailureCode?.trim().toUpperCase();
+    final failureCode = int.tryParse(failureToken ?? '');
+    final hasBusFailure = failureCode != null
+        ? failureCode >= 400
+        : const {
+            'FAILED',
+            'FAILURE',
+            'TIMEOUT',
+            'UNAVAILABLE',
+          }.contains(failureToken);
+    if (hasBusFailure) {
+      return ReviewCoachDecision(
+        coachTarget: 'bus_bbox',
+        coachMessage:
+            'AI 자동 판독을 완료하지 못했어요. 모선 번호를 직접 확인해 적용하면 다음 미확정 모선으로 이동합니다.',
+        coachMode: 'GUIDE',
+        highlightTarget: null,
+        focusNodeId: context.selectedNode?['id']?.toString(),
+      );
+    }
     if (issueIds.isNotEmpty) {
       final selectedId = context.selectedNode?['id']?.toString();
       final id = issueIds.contains(selectedId)
@@ -221,16 +241,6 @@ class ReviewCoachPolicy {
         coachMode: 'GUIDE',
         highlightTarget: null,
         focusNodeId: id,
-      );
-    }
-    if (context.busFailureCode != null && context.busFailureCode!.isNotEmpty) {
-      return ReviewCoachDecision(
-        coachTarget: 'bus_bbox',
-        coachMessage:
-            'AI 자동 판독을 완료하지 못했어요. 모선 번호를 직접 확인해 적용하면 다음 미확정 모선으로 이동합니다.',
-        coachMode: 'GUIDE',
-        highlightTarget: null,
-        focusNodeId: context.selectedNode?['id']?.toString(),
       );
     }
     final total = activeBuses.length;

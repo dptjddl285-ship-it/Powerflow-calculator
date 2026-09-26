@@ -220,6 +220,55 @@ void main() {
       },
     );
 
+    test('Bus coach treats HTTP 200 as successful human review guidance', () {
+      final buses = [
+        makeBus('bus_clean_1', number: 1),
+        makeBus('bus_clean_2', number: 2),
+      ];
+      final decision = ReviewCoachPolicy.resolve(
+        PowerLensAssistantContext(
+          currentScreen: 'REVIEW_PAGE',
+          workflowStage: 'BUS_MAPPING',
+          workingNodes: buses.map((bus) => bus.toJson()).toList(),
+          busFailureCode: '200',
+        ),
+      );
+
+      expect(decision.coachTarget, 'bus_gate');
+      expect(decision.coachMode, 'HUMAN_REVIEW');
+      expect(decision.highlightTarget, 'bus_gate');
+      expect(
+        decision.coachMessage,
+        '모선 번호 자동 판독을 마쳤어요.\n'
+        '2개의 모선 번호를 모두 확인했습니다.\n\n'
+        '제가 먼저 확인했으니,\n'
+        '이번에는 도면의 모선 번호가 실제 번호와 맞는지\n'
+        '직접 한 번 더 눈으로 확인해 주세요.\n\n'
+        '모두 맞다면 저에게\n'
+        '\'다 했어\' 또는 \'확인했어\'라고 말씀하시거나,\n'
+        '아래에서 깜박이고 있는\n'
+        '[모선 검수 완료] 버튼을 눌러주세요.',
+      );
+    });
+
+    test('Bus coach reports HTTP and explicit failure states only', () {
+      final buses = [makeBus('bus_clean', number: 1)];
+      for (final failureCode in ['500', 'TIMEOUT', 'UNAVAILABLE']) {
+        final decision = ReviewCoachPolicy.resolve(
+          PowerLensAssistantContext(
+            currentScreen: 'REVIEW_PAGE',
+            workflowStage: 'BUS_MAPPING',
+            workingNodes: buses.map((bus) => bus.toJson()).toList(),
+            busFailureCode: failureCode,
+          ),
+        );
+
+        expect(decision.coachTarget, 'bus_bbox', reason: failureCode);
+        expect(decision.coachMode, 'GUIDE', reason: failureCode);
+        expect(decision.coachMessage, contains('AI 자동 판독을 완료하지 못했어요.'));
+      }
+    });
+
     test(
       'final state distinguishes Excel upload from matched canvas handoff',
       () {

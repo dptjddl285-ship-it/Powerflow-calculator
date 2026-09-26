@@ -1245,7 +1245,13 @@ class _ObjectReviewPageState extends State<ObjectReviewPage> {
           : null,
       busModelUsed: _busModelUsed,
       busFallbackUsed: _busFallbackUsed,
-      busFailureCode: _busHttpCode?.toString(),
+      busFailureCode: _busHttpCode != null && _busHttpCode! >= 400
+          ? _busHttpCode.toString()
+          : switch (_busMappingFeedback?.kind) {
+              BusMappingFeedbackKind.failed => 'FAILED',
+              BusMappingFeedbackKind.unavailable => 'UNAVAILABLE',
+              _ => null,
+            },
       objectWorkflowMessage: _objectWorkflowMessageForContext(),
       busMappingMessage: _currentPhase == ReviewPhase.busMappingReview
           ? (PowerLensAIService.instance.currentBusMappingGuidance ?? _stageGateMessage)
