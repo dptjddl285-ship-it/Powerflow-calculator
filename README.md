@@ -19,7 +19,7 @@
 > - 👁️ **비전 파이프라인**: [`VISION_PIPELINE.md`](./VISION_PIPELINE.md) — YOLO11 + CV 하이브리드 검출, 포트 인식 선로 추적, Set-of-Mark 모선 번호 인식, 객체 검출 F1 98.01% 검증
 > - 🧪 **기술 검증 보고서**: [`EVALUATION.md`](./EVALUATION.md) — 26장 객체 검출 정밀도(F1 98.01%), AC Newton-Raphson 수렴 및 전력수지 검증, 회귀 테스트
 > - 📐 **시스템 상세 설계**: [`docs/SYSTEM_ARCHITECTURE_AND_TECHNICAL_DOCS.md`](./docs/SYSTEM_ARCHITECTURE_AND_TECHNICAL_DOCS.md) — 모듈별 기술 명세 및 API 규격서
-> - 👥 **팀 인수인계**: [`TEAM_HANDOFF.md`](./TEAM_HANDOFF.md) • 📜 **특허 출원 명세서**: [`PowerLens_특허명세서_공식출원용.md`](./PowerLens_특허명세서_공식출원용.md)
+> - 👥 **팀 인수인계**: [`docs/TEAM_HANDOFF.md`](./docs/TEAM_HANDOFF.md) • 📜 **특허 출원 명세서**: [`docs/patent/PowerLens_특허명세서_공식출원용.md`](./docs/patent/PowerLens_특허명세서_공식출원용.md)
 
 </div>
 
@@ -35,7 +35,7 @@
 2. **4단계 AI-인간 협업 검수 체계**: 100% 자동화의 오류 가능성을 방어하기 위해 객체 검수 → 모선 매핑 → 선로 결선 → 엑셀 대조의 4단계 검증 게이트(Review Gate)를 제공합니다.
 3. **결정론적 Supervisor & 독립 Gemini Assistant**: 결정론적 상태 관리자(`ReviewAgentSupervisor`)와 로컬 플래너(`LocalRulePlanningProvider`)가 2개 특화 도구 실행과 패치 프리뷰(`PatchPreview`)를 안전하게 통제하며, 별도의 Gemini 3.5 기반 어시스턴트(Lensy)가 사용자 질의응답 및 화면 내 25개 이상의 UI 버튼 네온 점등을 안내합니다.
 4. **웹 기반 인터랙티브 CAD 캔버스**: 직관적인 마우스 드래그앤드롭, 방향키 미세 정렬(1px/10px Nudge), `Ctrl+R` 90도 회전 및 라벨 방향 자동 보정(Counter-Rotation) 기능을 지원합니다.
-5. **자체 구현 Full AC Newton-Raphson 수치해석 엔진**: Dense NumPy 배열 기반으로 IEEE 24-bus RTS 표준 계통에서 허용 오차 $10^{-4}$ 이하, 4회 반복 내 수렴 및 전력수지 무결성($\Delta P = 0.0\text{ MW}$)을 검증했습니다.
+5. **자체 구현 Full AC Newton-Raphson 수치해석 엔진**: Dense NumPy 배열 기반으로 단선도 정합 24모선 케이스(`case24_ieee_rts_diagram_aligned.xlsx`) 및 PSS/E 스타일 벤치마크(`case24_psse.xlsx`)에서 허용 오차 $10^{-4}$ 이하, 4회 반복 내 수렴 및 전력수지 무결성($\Delta P = 0.0\text{ MW}$)을 검증했습니다.
 
 ---
 
@@ -90,7 +90,7 @@
   - 특정 계통/모선 번호 하드코딩 없이 복회선 병렬 등가 회로($Z_{eq} = 1/\sum (1/Z_k)$) 자동 합성.
   - Transformer 주변 인입선은 토폴로지 전용 가상 선로(`is_transformer_lead: True`, $rPu=0, xPu=0$)로 식별하여 조류계산 시 일반 송전선로에서 제외(Bypass)함으로써 영임피던스 나눗셈($1/Z$) 발산을 원천 차단.
   - 각 Transformer element에 연결된 Bus 집합과 Excel transformer pair를 교차검증하여 하나 이상의 electrical_branches를 구성할 수 있으며(예: 서브스테이션 내 9-11, 10-11 등 다중 브랜치 매핑), 실제 R, X, B, tap ratio, tapFromBus(방향)는 synthesized electrical branch에 적용되고 인입선 자체는 Ybus branch로 사용하지 않음.
-- **표준 계통 자체 수치해석 검증**: PSS/E나 PowerWorld와의 직접 1:1 비교 대신, IEEE 24-bus RTS 표준 계통 입력 데이터에 대한 자체 AC Newton-Raphson 솔버 수렴성(**4회 반복**, 잔차 $4 \times 10^{-8}$)과 전력 수지 평형($\Delta P_{\text{balance}} = 0.0\text{ MW}$)의 물리적 무결성으로 검증.
+- **수치해석 자체 수렴 및 전력수지 검증**: PSS/E나 PowerWorld와의 직접 1:1 비교 대신, IEEE RTS-24 데이터를 기반으로 제공 단선도와 정합되도록 구성한 diagram-aligned 파생 검증 케이스(`case24_ieee_rts_diagram_aligned.xlsx`, 슬랙 모선 #13) 및 PSS/E 스타일 벤치마크(`case24_psse.xlsx`, 슬랙 모선 #1)에 대해 자체 AC Newton-Raphson 솔버 수렴성(**4회 반복**, 잔차 $10^{-4}$ 이하)과 전력 수지 평형의 물리적 무결성으로 검증.
 
 ### 5. 🎨 웹 기반 인터랙티브 CAD 편집 체계 (Flutter Web)
 - **Direct Drag & Tight Hitbox**: 심볼 몸체를 마우스로 직접 선택하여 이동하는 직관적인 드래그앤드롭 및 기하학적 바운딩 박스 기반의 조작 영역 최적화.
@@ -149,13 +149,25 @@ flowchart TB
 
 ## 🧪 수치해석 검증 및 성능 (Benchmark Validation)
 
-### IEEE 24-bus RTS 표준 계통 수렴 검증
+### 1) Primary E2E Reference: Diagram-aligned 24모선 계통
+- **데이터셋**: `backend_api/sample_cases/case24_ieee_rts_diagram_aligned.xlsx`
+- **목적**: IEEE RTS-24 데이터를 기반으로 제공 단선도(`sample_diagram_ieee24.jpg`)와 정합되도록 구성한 파생 검증 케이스(derived fixture)로, Vision → Topology → Excel → Solver 전체 E2E 파이프라인 무결성을 검증합니다.
+- **주요 파라미터 및 기준 계산 결과**:
+  - 모선: 24개 | 슬랙 모선: **Bus 13** ($V = 1.0200\,\text{pu}, \theta = 0.0^\circ$)
+  - 가시 발전기: 10기 (도면에 미표기된 Bus 14 동기조상기는 임의 자동 생성하지 않음)
+  - 부하: 17개 ($\sum P_d = 2,850.00\,\text{MW}$) | 변압기 전기적 브랜치: 5개 (3-24, 9-11, 9-12, 10-11, 10-12)
+  - 슬랙 발전량: $P \approx 188.25\,\text{MW}$, $Q \approx 94.60\,\text{MVAR}$
+  - 계통 손실: $P_{\text{loss}} \approx 52.25\,\text{MW}$ | 수렴: 4 iterations 내 수렴 (tolerance $10^{-4}$)
 
-| 항목 | 계산 결과 | 비고 |
+### 2) Secondary Solver Benchmark: PSS/E 스타일 레거시 24모선
+- **데이터셋**: `backend_api/sample_cases/case24_psse.xlsx`
+- **목적**: PSS/E-style 24-bus solver regression fixture로, 엑셀 파서 및 솔버 단독 회귀 검증용 벤치마크 (슬랙 모선: #1, 발전기 11기).
+
+| 검증 항목 | 계산 결과 | 비고 |
 | :--- | :--- | :--- |
 | **모선 수 (Buses)** | 24개 | 슬랙 모선: #1 (1.0 pu, 0.0°) |
 | **유효 브랜치 수 (Branches)** | 34개 | 송전선로 29개 + 탭 변압기 5개 (인입선 제외) |
-| **발전기 수 (Generators)** | 11기 | 동기조상기(SC) 포함 |
+| **발전기 수 (Generators)** | 11기 | PSS/E 엑셀 정의 기준 |
 | **수렴 반복 횟수 (Iterations)** | **4회** | 허용 오차: $10^{-4}$ (최대 잔차: $4 \times 10^{-8}$) |
 | **총 발전량 (Total Generation)** | **1,694.655 MW** / -44.542 MVAR | 유효/무효 전력 수렴 기준 만족 |
 | **총 부하량 (Total Load)** | **1,672.000 MW** / 336.000 MVAR | 계통 부하 조건 충족 |
@@ -171,21 +183,23 @@ PowerLens/
 │   ├── agent/                   # Gemini LLM Provider, 시스템 지식, 증거 추출기
 │   ├── core/                    # AC Newton-Raphson 솔버, 비전 로직, 엑셀 파서
 │   ├── review/                  # 4단계 검수 게이트 API (staged_api.py)
-│   ├── sample_cases/            # 표준 검증 케이스 (case24_psse.xlsx 등)
+│   ├── sample_cases/            # 검증 케이스 (case24_ieee_rts_diagram_aligned.xlsx 등)
 │   ├── tests/                   # 백엔드 및 수치해석 테스트
 │   └── main_server.py           # FastAPI 메인 서버 엔트리포인트
 ├── frontend_app/                # Flutter Web CAD 프론트엔드
 │   ├── lib/
 │   │   ├── models/              # 도면 요소 및 검수 모델 (review_models.dart 등)
 │   │   ├── widgets/             # 인스펙터 및 Lensy AI 컴포넌트 (powerlens_ai/)
-│   │   ├── screens/             # 4단계 검수(review_page.dart) 및 메인 캔버스
-│   │   └── services/            # 프론트엔드 AI 서비스 (powerlens_ai_service.dart)
 │   ├── test/                    # 네온 하이라이트 및 UI 인터랙션 테스트
 │   └── build/web/               # 컴파일 완료된 프로덕션 웹 아티팩트
 ├── docs/                        # 시스템 상세 설계 및 기술 문서
-├── PowerLens_특허명세서_공식출원용.md # 공식 특허 출원 명세서
-├── TEAM_HANDOFF.md              # 팀 인수인계 문서
-├── run_powerlens.bat            # 윈도우 원클릭 실행 스크립트
+│   ├── SYSTEM_ARCHITECTURE_AND_TECHNICAL_DOCS.md # 시스템 상세 아키텍처
+│   ├── TEAM_HANDOFF.md          # 팀 인수인계 문서
+│   ├── patent/                  # 공식 특허 출원 명세서
+│   ├── handoff/screenshots/     # UI 대표 스크린샷 8종
+│   └── internal/                # 프로젝트 개발 불변 규칙
+├── scripts/                     # 통합 실행 및 서버 런처 스크립트
+├── run.bat                      # 윈도우 원클릭 실행 스크립트
 └── README.md                    # 프로젝트 대표 문서
 ```
 

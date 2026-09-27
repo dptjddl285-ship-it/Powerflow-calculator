@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PowerLens / Architecture & Live Demo</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+</head>
+<body>
+
+  <!-- Minimal Persistent Top Counter -->
+  <div class="top-counter">
+    <span class="curr" id="currentNumber">01</span> / 05
+  </div>
+
+  <!-- Subtle Keyboard Hint -->
+  <div class="bottom-hint">
+    [ ← / → 키 또는 Space로 이동 · F 키로 전체화면 ]
+  </div>
+
+  <!-- Persistent Bottom Navigation Controls -->
+  <div class="deck-controls" id="deckControls">
+    <button class="ctrl-btn" id="prevBtn" type="button" aria-label="이전 슬라이드">PREV</button>
+    <button class="ctrl-btn primary" id="nextBtn" type="button" aria-label="다음 슬라이드">NEXT</button>
+  </div>
+
+  <!-- 16:9 Master Viewport -->
+  <div class="presentation-viewport">
+    <div class="stage-16-9">
+
+      <!-- ================================================================
+           SCENE 1: TITLE (Minimal Engineering Poster)
+           ================================================================ -->
+      <section class="scene active" data-scene="1" id="scene-1">
+        <div class="scene-content">
+          <div class="s1-poster">
+            <div class="s1-copy-col">
+              <h1 class="s1-wordmark">POWERLENS</h1>
+              <div class="s1-accent-rule"></div>
+              <p class="s1-subtitle">
+                단선도 인식부터 검수·조류계산까지 연결하는<br>
+                Agentic AI 기반 전력계통 분석 시스템
+              </p>
+              <div class="s1-meta-box">
+                <div>국립부경대학교 전기공학전공</div>
+                <div>발표자 : [실제 발표자 이름]</div>
+              </div>
+            </div>
+
+            <div class="s1-diagram-col">
+              <div class="s1-blueprint-frame">
+                <span class="s1-frame-tag">SINGLE-LINE DIAGRAM</span>
+                <img src="assets/sample_diagram_ieee24.jpg" alt="IEEE 24 Single-Line Diagram">
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================
+           SCENE 2: WHY (개발 배경 및 문제 정의)
+           ================================================================ -->
+      <section class="scene" data-scene="2" id="scene-2">
+        <div class="scene-title-bar">
+          <h2 class="scene-h1">개발 배경 및 문제 정의</h2>
+          <span class="scene-step-badge" id="s2-step-badge">STEP 0 / 5 · 개요</span>
+        </div>
+
+        <div class="scene-content">
+          <div class="s2-layout">
+            <!-- Top: Legacy Manual Process Bar -->
+            <div class="s2-process-bar" id="s2-process-bar">
+              <div class="s2-bar-title">기존 수작업 공정 흐름</div>
+              <div class="s2-process-steps">
+                <div class="s2-step-node" data-s2-step="1">01. 단선도 판독</div>
+                <div class="s2-step-arrow" data-s2-arrow="1">➔</div>
+                <div class="s2-step-node" data-s2-step="2">02. 연결 확인</div>
+                <div class="s2-step-arrow" data-s2-arrow="2">➔</div>
+                <div class="s2-step-node" data-s2-step="3">03. 제원 입력</div>
+                <div class="s2-step-arrow" data-s2-arrow="3">➔</div>
+                <div class="s2-step-node" data-s2-step="4">04. 검수 재작업</div>
+                <div class="s2-step-arrow" data-s2-arrow="4">➔</div>
+                <div class="s2-step-node final-node" data-s2-step="5">05. 조류계산 시뮬레이션</div>
+              </div>
+            </div>
+
+            <!-- Middle: 3 Core Bottlenecks Horizontal Columns -->
+            <div class="s2-three-cards">
+              <div class="s2-card" id="s2-card-1">
+                <div>
+                  <span class="s2-card-num">PROBLEM 01</span>
+                  <div class="s2-card-h2">반복적인 수작업</div>
+                </div>
+                <p class="s2-card-desc">수십 개 모선과 선로의 연결 관계를 엔지니어가 수기로 일일이 확인하고 전산화하는 과도한 수작업 피로도</p>
+              </div>
+
+              <div class="s2-card" id="s2-card-2">
+                <div>
+                  <span class="s2-card-num">PROBLEM 02</span>
+                  <div class="s2-card-h2">도면 ↔ 데이터 불일치</div>
+                </div>
+                <p class="s2-card-desc">시각적 단선도에 표현된 가시 설비 구성과 엑셀 계통 제원 간의 누락 설비 및 규격 차이 발생</p>
+              </div>
+
+              <div class="s2-card alert" id="s2-card-3">
+                <div>
+                  <span class="s2-card-num">PROBLEM 03</span>
+                  <div class="s2-card-h2">검수 및 오류 추적 부담</div>
+                </div>
+                <p class="s2-card-desc">사소한 결선 오류 발생 시 조류계산 수렴 실패 및 어느 구간에서 오차가 생겼는지 원인 역추적 난항</p>
+              </div>
+            </div>
+
+            <!-- Bottom: Core Takeaway Banner -->
+            <div class="s2-bottom-banner" id="s2-bottom-banner">
+              <span>💡 <strong>핵심 정의</strong> : 단선도를 읽는 것만으로는 부족하며, 도면의 연결 구조와 계통 제원을 함께 검증해야 계산 가능한 모델이 완성됩니다.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================
+           SCENE 3: SYSTEM ARCHITECTURE (Graphviz Reference Style Inline SVG)
+           ================================================================ -->
+      <section class="scene" data-scene="3" id="scene-3">
+        <div class="scene-title-bar">
+          <h2 class="scene-h1">전체 시스템 아키텍처 및 파이프라인</h2>
+          <span class="scene-step-badge" id="s3-step-badge">STEP 0 / 7 · 전체 구조</span>
+        </div>
+
+        <div class="scene-content">
+          <div class="svg-flowchart-stage">
+            <svg viewBox="0 0 1500 620" preserveAspectRatio="xMidYMid meet" id="scene-3-svg">
+              <defs>
+                <!-- Arrow Markers -->
+                <marker id="arr-navy" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 1 L 9 5 L 0 9 z" fill="#0f172a" />
+                </marker>
+                <marker id="arr-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 1 L 9 5 L 0 9 z" fill="#0284c7" />
+                </marker>
+                <marker id="arr-purple" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 1 L 9 5 L 0 9 z" fill="#7c3aed" />
+                </marker>
+                <marker id="arr-amber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 1 L 9 5 L 0 9 z" fill="#d97706" />
+                </marker>
+                <marker id="arr-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 1 L 9 5 L 0 9 z" fill="#059669" />
+                </marker>
+              </defs>
+
+              <!-- ========================================================
+                   EXTERNAL EXCEL INPUT NODE (Above Node ④)
+                   ======================================================== -->
+              <g id="s3-node-excel" class="s3-elem">
+                <rect x="940" y="20" width="220" height="52" rx="6" fill="#f1f5f9" stroke="#475569" stroke-width="1.5" />
+                <text x="1050" y="42" text-anchor="middle" class="fc-title">Excel 계통 제원</text>
+                <text x="1050" y="58" text-anchor="middle" class="fc-caption">Bus / Branch / Gen 제원</text>
+              </g>
+
+              <!-- Excel to Node ④ Connector Line -->
+              <path id="s3-path-excel" class="s3-path" d="M 1050 72 L 1050 120" fill="none" stroke="#475569" stroke-width="2" marker-end="url(#arr-navy)" />
+              <text id="s3-txt-excel" class="s3-elem fc-line-txt" x="1060" y="100" fill="#475569">제원 유입</text>
+
+              <!-- ========================================================
+                   MAIN PROCESS SPINE (Nodes ① ~ ⑤)
+                   Y = 120, Height = 64
+                   ======================================================== -->
+              <!-- Node ①: 단선도 입력 -->
+              <g id="s3-node-1" class="s3-elem">
+                <rect x="40" y="120" width="200" height="64" rx="6" fill="#ffffff" stroke="#0f172a" stroke-width="2" />
+                <text x="140" y="146" text-anchor="middle" class="fc-title">① 단선도 입력</text>
+                <text x="140" y="166" text-anchor="middle" class="fc-caption">도면 이미지 업로드</text>
+              </g>
+
+              <!-- Arrow ① -> ② -->
+              <path id="s3-path-1-2" class="s3-path" d="M 240 152 L 290 152" fill="none" stroke="#0f172a" stroke-width="2" marker-end="url(#arr-navy)" />
+
+              <!-- Node ②: 객체 인식 -->
+              <g id="s3-node-2" class="s3-elem">
+                <rect x="290" y="120" width="230" height="64" rx="6" fill="#f0f9ff" stroke="#0284c7" stroke-width="2" />
+                <text x="405" y="146" text-anchor="middle" class="fc-title">② 객체 인식</text>
+                <text x="405" y="166" text-anchor="middle" class="fc-caption">Bus · Gen · Load · Tr</text>
+              </g>
+
+              <!-- Arrow ② -> ③ -->
+              <path id="s3-path-2-3" class="s3-path" d="M 520 152 L 590 152" fill="none" stroke="#0f172a" stroke-width="2" marker-end="url(#arr-navy)" />
+
+              <!-- Node ③: 결선 및 모선번호 복원 -->
+              <g id="s3-node-3" class="s3-elem">
+                <rect x="590" y="120" width="240" height="64" rx="6" fill="#f0f9ff" stroke="#0284c7" stroke-width="2" />
+                <text x="710" y="146" text-anchor="middle" class="fc-title">③ 결선 및 모선번호 복원</text>
+                <text x="710" y="166" text-anchor="middle" class="fc-caption">Bus Number · Line Connectivity</text>
+              </g>
+
+              <!-- Arrow ③ -> ④ -->
+              <path id="s3-path-3-4" class="s3-path" d="M 830 152 L 920 152" fill="none" stroke="#0f172a" stroke-width="2" marker-end="url(#arr-navy)" />
+
+              <!-- Node ④: 검증 계통 모델 -->
+              <g id="s3-node-4" class="s3-elem">
+                <rect x="920" y="120" width="260" height="64" rx="6" fill="#ecfdf5" stroke="#059669" stroke-width="2" />
+                <text x="1050" y="146" text-anchor="middle" class="fc-title">④ 검증 계통 모델</text>
+                <text x="1050" y="166" text-anchor="middle" class="fc-caption">Diagram ↔ Excel 교차검증</text>
+              </g>
+
+              <!-- Arrow ④ -> ⑤ -->
+              <path id="s3-path-4-5" class="s3-path" d="M 1180 152 L 1260 152" fill="none" stroke="#0f172a" stroke-width="2" marker-end="url(#arr-navy)" />
+
+              <!-- Node ⑤: AC 조류계산 -->
+              <g id="s3-node-5" class="s3-elem">
+                <rect x="1260" y="120" width="200" height="64" rx="6" fill="#0f172a" stroke="#0f172a" stroke-width="2" />
+                <text x="1360" y="146" text-anchor="middle" class="fc-title-dark">⑤ AC 조류계산</text>
+                <text x="1360" y="166" text-anchor="middle" class="fc-caption-dark">Newton-Raphson 솔버</text>
+              </g>
+
+              <!-- ========================================================
+                   STAGE 2 BRANCH: 객체 인식 검수 루프
+                   Node ② CenterX = 405
+                   ======================================================== -->
+              <!-- Arrow ② down to AI Review 1 -->
+              <path id="s3-path-b2-in" class="s3-path" d="M 405 184 L 405 240" fill="none" stroke="#7c3aed" stroke-width="2" marker-end="url(#arr-purple)" />
+              <text id="s3-txt-b2-in" class="s3-elem fc-line-txt" x="415" y="215" fill="#7c3aed">이상 감지</text>
+
+              <!-- AI Review 1 Node -->
+              <g id="s3-node-b2-ai" class="s3-elem">
+                <rect x="295" y="240" width="220" height="58" rx="6" fill="#faf5ff" stroke="#7c3aed" stroke-width="2" />
+                <text x="405" y="264" text-anchor="middle" class="fc-title" fill="#581c87">🟣 AI 에이전트 검토</text>
+                <text x="405" y="282" text-anchor="middle" class="fc-caption">누락 · 의심 객체 확인</text>
+              </g>
+
+              <!-- Arrow to Diamond 1 -->
+              <path id="s3-path-b2-dia" class="s3-path" d="M 405 298 L 405 340" fill="none" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#arr-purple)" />
+
+              <!-- Diamond 1: 검토 필요? (Center: 405, 375, Radius: 55, 35) -->
+              <g id="s3-node-b2-dia" class="s3-elem">
+                <polygon points="405,340 460,375 405,410 350,375" fill="#ffffff" stroke="#475569" stroke-width="2" />
+                <text x="405" y="380" text-anchor="middle" class="fc-diamond-txt">검토 필요?</text>
+              </g>
+
+              <!-- Diamond 1 -> NO Path (Normal Green Line) -> joins Main line entering Node ③ -->
+              <path id="s3-path-b2-no" class="s3-path" d="M 460 375 L 555 375 L 555 162 L 582 162" fill="none" stroke="#059669" stroke-width="2" marker-end="url(#arr-green)" />
+              <text id="s3-txt-b2-no" class="s3-elem fc-line-txt" x="475" y="367" fill="#059669">NO (정상)</text>
+
+              <!-- Diamond 1 -> YES Path (Orange Line) down to Human Review 1 -->
+              <path id="s3-path-b2-yes" class="s3-path" d="M 405 410 L 405 460" fill="none" stroke="#d97706" stroke-width="2" marker-end="url(#arr-amber)" />
+              <text id="s3-txt-b2-yes" class="s3-elem fc-line-txt" x="415" y="438" fill="#d97706">YES</text>
+
+              <!-- Human Review 1 Node -->
+              <g id="s3-node-b2-human" class="s3-elem">
+                <rect x="295" y="460" width="220" height="58" rx="6" fill="#fffbeb" stroke="#d97706" stroke-width="2" />
+                <text x="405" y="484" text-anchor="middle" class="fc-title" fill="#78350f">🟠 사용자 객체 검수</text>
+                <text x="405" y="502" text-anchor="middle" class="fc-caption">승인 · 수정 · 추가</text>
+              </g>
+
+              <!-- Feedback Line from Human Review 1 -> AI Review 1 (Purple Dashed) -->
+              <path id="s3-path-b2-feed" class="s3-path" data-is-dashed="true" d="M 295 489 L 260 489 L 260 269 L 287 269" fill="none" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arr-purple)" />
+              <text id="s3-txt-b2-feed" class="s3-elem fc-line-txt" x="250" y="390" text-anchor="end" fill="#7c3aed">재검토</text>
+
+              <!-- Normal Approved Line from Human Review 1 -> Node ③ (Green Solid) -->
+              <path id="s3-path-b2-appr" class="s3-path" d="M 515 489 L 565 489 L 565 170 L 582 170" fill="none" stroke="#059669" stroke-width="2" marker-end="url(#arr-green)" />
+              <text id="s3-txt-b2-appr" class="s3-elem fc-line-txt" x="525" y="480" fill="#059669">승인 완료</text>
+
+              <!-- ========================================================
+                   STAGE 3 BRANCH: 결선 복원 검수 루프
+                   Node ③ CenterX = 710
+                   ======================================================== -->
+              <!-- Arrow ③ down to AI Review 2 -->
+              <path id="s3-path-b3-in" class="s3-path" d="M 710 184 L 710 240" fill="none" stroke="#7c3aed" stroke-width="2" marker-end="url(#arr-purple)" />
+              <text id="s3-txt-b3-in" class="s3-elem fc-line-txt" x="720" y="215" fill="#7c3aed">이상 감지</text>
+
+              <!-- AI Review 2 Node -->
+              <g id="s3-node-b3-ai" class="s3-elem">
+                <rect x="600" y="240" width="220" height="58" rx="6" fill="#faf5ff" stroke="#7c3aed" stroke-width="2" />
+                <text x="710" y="264" text-anchor="middle" class="fc-title" fill="#581c87">🟣 AI 결선 검토</text>
+                <text x="710" y="282" text-anchor="middle" class="fc-caption">의심 · 누락 연결 판단</text>
+              </g>
+
+              <!-- Arrow to Diamond 2 -->
+              <path id="s3-path-b3-dia" class="s3-path" d="M 710 298 L 710 340" fill="none" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#arr-purple)" />
+
+              <!-- Diamond 2: 결선 문제? (Center: 710, 375, Radius: 55, 35) -->
+              <g id="s3-node-b3-dia" class="s3-elem">
+                <polygon points="710,340 765,375 710,410 655,375" fill="#ffffff" stroke="#475569" stroke-width="2" />
+                <text x="710" y="380" text-anchor="middle" class="fc-diamond-txt">결선 문제?</text>
+              </g>
+
+              <!-- Diamond 2 -> NO Path (Normal Green Line) -> joins Main line entering Node ④ -->
+              <path id="s3-path-b3-no" class="s3-path" d="M 765 375 L 870 375 L 870 162 L 912 162" fill="none" stroke="#059669" stroke-width="2" marker-end="url(#arr-green)" />
+              <text id="s3-txt-b3-no" class="s3-elem fc-line-txt" x="780" y="367" fill="#059669">NO (정상)</text>
+
+              <!-- Diamond 2 -> YES Path (Orange Line) down to Human Review 2 -->
+              <path id="s3-path-b3-yes" class="s3-path" d="M 710 410 L 710 460" fill="none" stroke="#d97706" stroke-width="2" marker-end="url(#arr-amber)" />
+              <text id="s3-txt-b3-yes" class="s3-elem fc-line-txt" x="720" y="438" fill="#d97706">YES</text>
+
+              <!-- Human Review 2 Node -->
+              <g id="s3-node-b3-human" class="s3-elem">
+                <rect x="600" y="460" width="220" height="58" rx="6" fill="#fffbeb" stroke="#d97706" stroke-width="2" />
+                <text x="710" y="484" text-anchor="middle" class="fc-title" fill="#78350f">🟠 사용자 결선 검수</text>
+                <text x="710" y="502" text-anchor="middle" class="fc-caption">승인 · 제외 · 재연결</text>
+              </g>
+
+              <!-- Feedback Line from Human Review 2 -> AI Review 2 (Purple Dashed) -->
+              <path id="s3-path-b3-feed" class="s3-path" data-is-dashed="true" d="M 600 489 L 580 489 L 580 269 L 592 269" fill="none" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="4,4" marker-end="url(#arr-purple)" />
+              <text id="s3-txt-b3-feed" class="s3-elem fc-line-txt" x="570" y="390" text-anchor="end" fill="#7c3aed">재검토</text>
+
+              <!-- Normal Approved Line from Human Review 2 -> Node ④ (Green Solid) -->
+              <path id="s3-path-b3-appr" class="s3-path" d="M 820 489 L 880 489 L 880 170 L 912 170" fill="none" stroke="#059669" stroke-width="2" marker-end="url(#arr-green)" />
+              <text id="s3-txt-b3-appr" class="s3-elem fc-line-txt" x="830" y="480" fill="#059669">승인 완료</text>
+
+            </svg>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================
+           SCENE 4: AGENTIC REVIEW (Pure Loop Flowchart SVG)
+           ================================================================ -->
+      <section class="scene" data-scene="4" id="scene-4">
+        <div class="scene-title-bar">
+          <h2 class="scene-h1">핵심 기술 상세: Agentic Review 순환 루프</h2>
+          <span class="scene-step-badge" id="s4-step-badge">STEP 0 / 7 · 이상 감지</span>
+        </div>
+
+        <div class="scene-content">
+          <div class="svg-flowchart-stage">
+            <svg viewBox="0 0 1500 580" preserveAspectRatio="xMidYMid meet" id="scene-4-svg">
+              <defs>
+                <marker id="s4-arr-navy" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 1 L 9 5 L 0 9 z" fill="#0f172a" />
+                </marker>
+                <marker id="s4-arr-purple" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 1 L 9 5 L 0 9 z" fill="#7c3aed" />
+                </marker>
+                <marker id="s4-arr-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 1 L 9 5 L 0 9 z" fill="#059669" />
+                </marker>
+                <marker id="s4-arr-coral" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M 0 1 L 9 5 L 0 9 z" fill="#e11d48" />
+                </marker>
+              </defs>
+
+              <!-- Central Main Loop Flow: X = 320 -->
+              <!-- 1. Issue Detected -->
+              <g id="s4-node-1" class="s4-elem">
+                <rect x="220" y="30" width="220" height="54" rx="6" fill="#ffffff" stroke="#0f172a" stroke-width="2" />
+                <text x="330" y="52" text-anchor="middle" class="fc-title">Issue Detected</text>
+                <text x="330" y="70" text-anchor="middle" class="fc-caption">신뢰도 미달 결선 / 이상 감지</text>
+              </g>
+
+              <!-- Arrow 1 -> 2 -->
+              <path id="s4-path-1-2" class="s4-path" d="M 330 84 L 330 120" fill="none" stroke="#0f172a" stroke-width="2" marker-end="url(#s4-arr-navy)" />
+
+              <!-- 2. Plan 수립 -->
+              <g id="s4-node-2" class="s4-elem">
+                <rect x="220" y="120" width="220" height="54" rx="6" fill="#f0f9ff" stroke="#0284c7" stroke-width="2" />
+                <text x="330" y="142" text-anchor="middle" class="fc-title">Plan 수립</text>
+                <text x="330" y="160" text-anchor="middle" class="fc-caption">결정론적 로컬 규칙 플래너</text>
+              </g>
+
+              <!-- Arrow 2 -> 3 -->
+              <path id="s4-path-2-3" class="s4-path" d="M 330 174 L 330 210" fill="none" stroke="#0f172a" stroke-width="2" marker-end="url(#s4-arr-navy)" />
+
+              <!-- 3. Tool 실행 -->
+              <g id="s4-node-3" class="s4-elem">
+                <rect x="220" y="210" width="220" height="54" rx="6" fill="#faf5ff" stroke="#7c3aed" stroke-width="2" />
+                <text x="330" y="232" text-anchor="middle" class="fc-title" fill="#581c87">Tool 실행</text>
+                <text x="330" y="250" text-anchor="middle" class="fc-caption">등록 비전 도구 재추적</text>
+              </g>
+
+              <!-- Arrow 3 -> 4 -->
+              <path id="s4-path-3-4" class="s4-path" d="M 330 264 L 330 300" fill="none" stroke="#0f172a" stroke-width="2" marker-end="url(#s4-arr-navy)" />
+
+              <!-- 4. Evaluate -->
+              <g id="s4-node-4" class="s4-elem">
+                <rect x="220" y="300" width="220" height="54" rx="6" fill="#ecfdf5" stroke="#059669" stroke-width="2" />
+                <text x="330" y="322" text-anchor="middle" class="fc-title" fill="#065f46">Evaluate</text>
+                <text x="330" y="340" text-anchor="middle" class="fc-caption">가상 토폴로지 점수 비교</text>
+              </g>
+
+              <!-- Arrow 4 -> Diamond -->
+              <path id="s4-path-4-dia" class="s4-path" d="M 330 354 L 330 390" fill="none" stroke="#0f172a" stroke-width="2" marker-end="url(#s4-arr-navy)" />
+
+              <!-- Diamond: Improved? (Center: 330, 425; points: 330,390 395,425 330,460 265,425) -->
+              <g id="s4-node-dia" class="s4-elem">
+                <polygon points="330,390 395,425 330,460 265,425" fill="#ffffff" stroke="#475569" stroke-width="2" />
+                <text x="330" y="430" text-anchor="middle" class="fc-diamond-txt">Improved?</text>
+              </g>
+
+              <!-- ========================================================
+                   NO PATH: Bounded Retry Loop back to Plan (Purple Dashed)
+                   ======================================================== -->
+              <path id="s4-path-retry" class="s4-path" data-is-dashed="true" d="M 265 425 L 120 425 L 120 147 L 212 147" fill="none" stroke="#7c3aed" stroke-width="2" stroke-dasharray="4,4" marker-end="url(#s4-arr-purple)" />
+              <text id="s4-txt-retry" class="s4-elem fc-line-txt" x="130" y="270" fill="#7c3aed">NO: Retry (Attempt &lt; 2)</text>
+
+              <!-- Fallback to UNRESOLVED when Attempt >= 2 -->
+              <path id="s4-path-unresolved" class="s4-path" d="M 120 425 L 120 495" fill="none" stroke="#e11d48" stroke-width="2" marker-end="url(#s4-arr-coral)" />
+              <g id="s4-node-unresolved" class="s4-elem">
+                <rect x="40" y="495" width="160" height="44" rx="6" fill="#fff1f2" stroke="#e11d48" stroke-width="1.5" />
+                <text x="120" y="522" text-anchor="middle" class="fc-title" font-size="12" fill="#9f1239">UNRESOLVED</text>
+              </g>
+
+              <!-- ========================================================
+                   YES PATH: Advances to PatchPreview -> Apply / Reject
+                   ======================================================== -->
+              <path id="s4-path-improved" class="s4-path" d="M 395 425 L 590 425" fill="none" stroke="#059669" stroke-width="2" marker-end="url(#s4-arr-green)" />
+              <text id="s4-txt-improved" class="s4-elem fc-line-txt" x="460" y="415" fill="#059669">YES: Improved</text>
+
+              <!-- 5. PatchPreview -->
+              <g id="s4-node-patch" class="s4-elem">
+                <rect x="590" y="398" width="240" height="54" rx="6" fill="#ecfdf5" stroke="#059669" stroke-width="2" />
+                <text x="710" y="420" text-anchor="middle" class="fc-title" fill="#065f46">PatchPreview 생성</text>
+                <text x="710" y="438" text-anchor="middle" class="fc-caption">안전한 격리 패치 제안</text>
+              </g>
+
+              <!-- Arrow 5 -> 6 -->
+              <path id="s4-path-patch-gate" class="s4-path" d="M 830 425 L 940 425" fill="none" stroke="#0f172a" stroke-width="2" marker-end="url(#s4-arr-navy)" />
+
+              <!-- 6. Apply / Reject -->
+              <g id="s4-node-gate" class="s4-elem">
+                <rect x="940" y="386" width="360" height="78" rx="6" fill="#fffbeb" stroke="#d97706" stroke-width="2" />
+                <text x="1120" y="412" text-anchor="middle" class="fc-title" fill="#78350f">Apply / Reject Gate</text>
+                <text x="1120" y="430" text-anchor="middle" class="fc-caption">엔지니어의 명시적 선택 시에만 도면 반영</text>
+                
+                <!-- Sub Button Visuals within Node 6 -->
+                <rect id="s4-btn-apply" x="970" y="438" width="130" height="20" rx="3" fill="#059669" />
+                <text x="1035" y="452" text-anchor="middle" font-size="10" font-weight="800" fill="#ffffff">Apply (도면 반영)</text>
+
+                <rect id="s4-btn-reject" x="1140" y="438" width="130" height="20" rx="3" fill="#94a3b8" />
+                <text x="1205" y="452" text-anchor="middle" font-size="10" font-weight="800" fill="#ffffff">Reject (기각)</text>
+              </g>
+
+              <!-- ========================================================
+                   BOTTOM ANNOTATIONS: Registered Tools & Lensy Assistant
+                   ======================================================== -->
+              <line id="s4-anno-line" class="s4-elem" x1="40" y1="560" x2="1460" y2="560" stroke="#0f172a" stroke-width="1" stroke-dasharray="2,2" opacity="0.3" />
+
+              <text id="s4-anno-tools" class="s4-elem fc-caption" x="60" y="580" font-size="12">
+                <tspan font-weight="800" fill="#0f172a">Registered Tools</tspan> : port_aware_retry (포트 기반 선로 재추적) · roi_reanalysis (국소 비전 재분석)
+              </text>
+
+              <text id="s4-anno-lensy" class="s4-elem fc-caption" x="820" y="580" font-size="12">
+                <tspan font-weight="800" fill="#0f172a">Conversational Assistant</tspan> : Gemini Lensy (설명 및 UI 가이드 전담, 도면 직접 수정 권한 배제)
+              </text>
+            </svg>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================================================================
+           SCENE 5: VALIDATION + LIVE DEMO (Dominant Numbers)
+           ================================================================ -->
+      <section class="scene" data-scene="5" id="scene-5">
+        <div class="scene-title-bar">
+          <h2 class="scene-h1">정량 검증 지표 및 라이브 시연</h2>
+        </div>
+
+        <div class="scene-content">
+          <div class="s5-layout">
+            <!-- 3 Dominant Big Numbers -->
+            <div class="s5-numbers-row">
+              <div class="s5-num-card highlight" id="s5-card-1">
+                <div class="s5-val">98.01%</div>
+                <div>
+                  <div class="s5-label">Object Detection F1</div>
+                  <div class="s5-sub">독립 홀드아웃 26장 정답셋 심볼 인식 성능</div>
+                </div>
+              </div>
+
+              <div class="s5-num-card" id="s5-card-2">
+                <div class="s5-val">136 / 136</div>
+                <div>
+                  <div class="s5-label">Backend Regression Tests</div>
+                  <div class="s5-sub">파서·비전·토폴로지·에이전트·솔버 전 모듈 통과</div>
+                </div>
+              </div>
+
+              <div class="s5-num-card highlight" id="s5-card-3">
+                <div class="s5-val">24-Bus</div>
+                <div>
+                  <div class="s5-label">Diagram-Aligned E2E Reference</div>
+                  <div class="s5-sub">4 iterations 내 수렴 (Tolerance 10⁻⁴, ΔP = 0.0 MW)</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Big Live Demo Action Banner -->
+            <div class="s5-demo-banner" id="s5-demo-banner">
+              <div class="s5-banner-text">
+                <div class="s5-banner-h2">이어지는 7분 라이브 시연</div>
+                <div class="s5-banner-p">
+                  실제 단선도 업로드부터 4단계 검수 및 전력조류계산 시뮬레이션까지
+                </div>
+              </div>
+
+              <button type="button" class="s5-launch-btn" id="launchDemoBtn">
+                <span>LIVE DEMO ➔</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="assets/vendor/anime.min.js"></script>
+  <script src="animations.js"></script>
+  <script src="deck.js"></script>
+</body>
+</html>

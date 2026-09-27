@@ -78,7 +78,15 @@ PowerLens는 표준 전력계통 해석용 엑셀 파일(.xlsx)의 입력과 계
 ---
 
 ## 3. 📁 제공 샘플 파일 목록
-1. **`case24_psse.xlsx`**: IEEE 24-Bus RTS 표준 계통 입력 엑셀 (138kV/230kV 연계 변압기 및 동기조상기 포함)
-2. **`ac_case25.xlsx`**: 25모선 표준 계통 입력 엑셀
-3. **`sample_case3.xlsx`**: 3모선 표준 계통 입력 엑셀
-4. **`user_case3.xlsx`**: 사용자 지정 3모선 계통 입력 엑셀
+1. **`case24_ieee_rts_diagram_aligned.xlsx`** (Primary E2E Reference):
+   - **정의**: IEEE RTS-24 데이터를 기반으로 제공 단선도(`sample_diagram_ieee24.jpg`)와 정합되도록 구성한 diagram-aligned 파생 검증 케이스 (derived fixture).
+   - **목적**: `Image → Vision → Bus Number Linking → Topology → Excel Mapping → Transformer Electrical Branch Synthesis → AC Newton-Raphson` 전체 E2E 파이프라인 무결성 검증.
+   - **주요 제원**: 24모선, 가시 발전기 10기, 유효 부하 17기, 탭 변압기 5개 브랜치 (3-24, 9-11, 9-12, 10-11, 10-12), 기준 슬랙 모선: #13 ($V = 1.0200\,\text{pu}, \theta = 0.0^\circ$), Base MVA: 100.
+   - **설비 처리 원칙**: 제공 단선도에 발전기/동기조상기 기호가 보이지 않는 Bus 14는 임의 자동 생성하지 않고 제공 단선도에 표현된 가시 설비 구성과 정합되도록 구성한 diagram-aligned derived fixture의 형태를 유지.
+2. **`case24_psse.xlsx`** (Secondary / Legacy Solver Benchmark):
+   - **정의**: PSS/E-style 24-bus solver regression fixture로, 엑셀 파서 및 순수 수치해석 솔버 회귀 검증용 벤치마크 케이스.
+   - **주요 제원**: 슬랙 모선: #1 ($V = 1.0\,\text{pu}, \theta = 0.0^\circ$), 발전기 11기, 34 브랜치.
+3. **`ac_case25.xlsx`**: 25모선 표준 계통 입력 엑셀 (솔버 다모선 검증용).
+4. **`sample_case3.xlsx`**: 3모선 표준 계통 튜토리얼 엑셀 (슬랙 모선: #1, 수작업 계산 검증용).
+5. **`user_case3.xlsx`**: 사용자 지정 3모선 계통 입력 엑셀.
+6. **`sample_diagram_ieee24.jpg`**: E2E 테스트 및 비전 파이프라인 검증용 IEEE 24 RTS 단선도 원본 래스터 이미지.

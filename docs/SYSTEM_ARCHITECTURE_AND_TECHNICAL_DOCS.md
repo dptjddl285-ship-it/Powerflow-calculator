@@ -200,7 +200,7 @@ sequenceDiagram
   - **엄격한 규칙: 모선(Bus), 송전선로(Line), 변압기(Transformer)는 절대로 자동 생성하거나 보완하지 않음.**
 * **서브스테이션 변압기 토폴로지 매핑 및 리드선 바이패스**:
   - 도면의 변압기 심볼과 양단 물리 리드선(`is_transformer_lead: True`, $rPu=0, xPu=0$)을 식별하여 `conn_buses`를 추출.
-  - 엑셀 `transformer` 시트의 제원(`from_bus`, `to_bus`, `tap_ratio`, `tapFromBus`, $r_{pu}, x_{pu}, b_{pu}$)과 매칭하여 `electrical_branches` 단위로 매핑 (예: IEEE-24의 3-24, 9-11, 9-12, 10-11, 10-12 총 5개 브랜치).
+  - 엑셀 `transformer` 시트의 제원(`from_bus`, `to_bus`, `tap_ratio`, `tapFromBus`, $r_{pu}, x_{pu}, b_{pu}$)과 매칭하여 `electrical_branches` 단위로 매핑 (예: IEEE RTS-24 기반 diagram-aligned 케이스의 3-24, 9-11, 9-12, 10-11, 10-12 총 5개 브랜치).
   - 리드선은 토폴로지 증거로만 사용되며 조류계산 시 일반 송전선로 브랜치에서 제외(Bypass)하여 영임피던스($1/Z$) 발산을 원천 방지.
   - *(한계 명시: 현재 개별 심볼의 `conn_buses` 기반 매핑은 도면상 분리된 2-Port 심볼 간의 가상 교차 브랜치 자동 합성을 수행하지 않음)*
 * **비교 분석 리포트 (`compare_elements_with_excel`)**:
@@ -342,11 +342,11 @@ sequenceDiagram
 | :--- | :--- | :--- | :---: |
 | **전기 파라미터 무결성 테스트** | `backend_api/tests/test_electrical_parameters_and_fallbacks.py` | 임의의 R/X/B fallback 배제, 제로 임피던스 $1/Z$ 발산 방지, 미정의 선로 사전 차단 | **Pass (10/10)** |
 | **일반화 회로 및 변압기 테스트** | `backend_api/tests/test_generalized_circuits_and_transformers.py` | 복회선 병렬 합성, 변압기 리드선 바이패스, 탭비 방향 보존 | **Pass (7/7)** |
-| **변압기 토폴로지 해석 테스트** | `backend_api/tests/test_transformer_topology_resolution.py` | 5개 변압기 브랜치(3-24, 9-11, 9-12, 10-11, 10-12) 매핑 및 $Y_{\text{bus}}$ 스탬핑 | **Pass (7/7)** |
+| **변압기 토폴로지 해석 테스트** | `backend_api/tests/test_transformer_topology_resolution.py` | IEEE RTS-24 기반 diagram-aligned 케이스(5개 브랜치: 3-24, 9-11, 9-12, 10-11, 10-12) 매핑, $Y_{\text{bus}}$ 스탬핑 및 수치해석 검증 | **Pass (7/7)** |
 | **Excel 케이스 파서 테스트** | `backend_api/tests/test_excel_case_importer.py` | PSSE/Matpower 시트 파싱, 다중 Sbase(100/50/200/KV) 파싱, 슬랙 탐색 | **Pass (9/9)** |
 | **발전기/부하 수리 제안 검증** | `backend_api/tests/test_excel_generator_auto_supplement.py` | 도면 미검출 발전기/부하 수리제안 생성, 사용자 Apply/Reject 게이트, Bus/Line/Tr 자동생성 제외 | **Pass (10/10)** |
 | **Excel 불일치 검증기 단위 테스트** | `backend_api/tests/test_excel_discrepancy_checker.py` | 100% 일치 케이스 검증, 모선/선로 누락 감지, 부하/발전기 독립성 및 누락 수리제안 검증 | **Pass (4/4)** |
-| **AC Newton-Raphson Solver 검증** | `backend_api/tests/test_power_flow_solver.py` | IEEE 24 RTS 및 3-Bus 케이스에 대한 4회 반복 수렴 및 전력수지 보존 검증 | **Pass (10/10)** |
+| **AC Newton-Raphson Solver 검증** | `backend_api/tests/test_power_flow_solver.py` | 24모선(case24_ieee_rts_diagram_aligned, case24_psse) 및 3-Bus 케이스에 대한 4회 반복 수렴 및 전력수지 보존 검증 | **Pass (10/10)** |
 | **Flutter Web 프론트엔드 빌드** | `frontend_app/` | 다트 컴파일 오류 없는 프로덕션 웹 빌드 (`flutter build web`) | **Pass (Exit 0)** |
 
 ---
