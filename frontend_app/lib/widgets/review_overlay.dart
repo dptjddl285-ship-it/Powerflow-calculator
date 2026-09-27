@@ -1,7 +1,70 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import '../models/object_visual_sweep.dart';
 import '../models/review_models.dart';
+
+class BusMappingLeaderStyle {
+  static bool shouldDrawLeader({
+    required ReviewNodeItem node,
+    required bool busMappingReview,
+  }) => busMappingReview && node.className.trim().toLowerCase() == 'bus';
+
+  static double strokeWidth({required bool emphasized}) =>
+      emphasized ? 2.0 : 1.5;
+
+  static ({Offset busPoint, Offset labelPoint})? boundaryPoints({
+    required Rect busRect,
+    required Rect labelRect,
+  }) {
+    if (busRect.isEmpty || labelRect.isEmpty || busRect.overlaps(labelRect)) {
+      return null;
+    }
+    final direction = labelRect.center - busRect.center;
+    if (direction.distanceSquared == 0) return null;
+
+    Offset boundaryPoint(Rect rect, Offset vector) {
+      final horizontalScale = vector.dx == 0
+          ? double.infinity
+          : rect.width / 2 / vector.dx.abs();
+      final verticalScale = vector.dy == 0
+          ? double.infinity
+          : rect.height / 2 / vector.dy.abs();
+      return rect.center + vector * math.min(horizontalScale, verticalScale);
+    }
+
+    return (
+      busPoint: boundaryPoint(busRect, direction),
+      labelPoint: boundaryPoint(labelRect, -direction),
+    );
+  }
+}
+
+class ConnectionReviewVisualColors {
+  static const currentLine = Colors.cyanAccent;
+  static const visitedLine = Color(0xFFFF6D00);
+  static const visitedLineOpacity = 1.0;
+  static const visitedLineStrokeWidth = 3.2;
+  static const busEndpoint = Color(0xFF2563EB);
+  static const equipmentEndpoint = Color(0xFFEAB308);
+
+  static bool isVisitedLine({
+    required bool visitedBefore,
+    required bool isCurrent,
+  }) => visitedBefore && !isCurrent;
+
+  static Color? overlayColorForLine({
+    required bool isCurrent,
+    required bool visitedBefore,
+  }) {
+    if (isCurrent) return currentLine;
+    if (visitedBefore) return visitedLine;
+    return null;
+  }
+
+  static Color forEndpointClass(String className) =>
+      className.trim().toLowerCase() == 'bus' ? busEndpoint : equipmentEndpoint;
+}
 
 class ReviewOverlayView extends StatefulWidget {
   final Uint8List? imageBytes;
@@ -10,6 +73,11 @@ class ReviewOverlayView extends StatefulWidget {
   final int originalHeight;
   final List<ReviewNodeItem> nodes;
   final ReviewNodeItem? selectedNode;
+  final String? currentObjectReviewId;
+  final bool objectReviewTargetActive;
+  final bool suppressObjectReviewHighlights;
+  final Set<String> visitedObjectIds;
+
   /// Optional key attached to the selected node's rendered bounding box so a
   /// coaching companion can follow the actual on-screen target.
   final GlobalKey? focusTargetKey;
@@ -18,6 +86,7 @@ class ReviewOverlayView extends StatefulWidget {
   final bool showNodeLabels;
   final bool showLineLabels;
   final bool busFocusOnly;
+  final bool busMappingReview;
   final bool lineFocusOnly;
   final bool linesOnlyMode;
 
@@ -26,6 +95,7 @@ class ReviewOverlayView extends StatefulWidget {
   final ReviewLineItem? selectedLine;
   final Function(ReviewLineItem)? onSelectLine;
   final Function(String lineId, double dx, double dy)? onLineOffsetChanged;
+  final Set<String> visitedLineIds;
 
   // Manual Object Mode
   final bool isManualAddMode;
@@ -41,6 +111,14 @@ class ReviewOverlayView extends StatefulWidget {
   // Topology Violation Nodes for Warning Visual Cues
   final Set<String> violationNodeIds;
 
+  // Guide Box & Missing Candidate Additions (Object Review V2)
+  final Set<String> guideNodeIds;
+  final String? currentCoachNodeId;
+  final List<MissingCandidateItem> openMissingCandidates;
+  final Function(MissingCandidateItem)? onSelectCandidate;
+  final bool isObjectCategorySweepActive;
+  final String? currentCategoryHighlightKey;
+
   const ReviewOverlayView({
     super.key,
     required this.imageBytes,
@@ -49,18 +127,24 @@ class ReviewOverlayView extends StatefulWidget {
     required this.originalHeight,
     required this.nodes,
     required this.selectedNode,
+    this.currentObjectReviewId,
+    this.objectReviewTargetActive = false,
+    this.suppressObjectReviewHighlights = false,
+    this.visitedObjectIds = const {},
     this.focusTargetKey,
     required this.onSelectNode,
     this.onNodeOffsetChanged,
     this.showNodeLabels = true,
     this.showLineLabels = true,
     this.busFocusOnly = false,
+    this.busMappingReview = false,
     this.lineFocusOnly = false,
     this.linesOnlyMode = false,
     this.lines = const [],
     this.selectedLine,
     this.onSelectLine,
     this.onLineOffsetChanged,
+    this.visitedLineIds = const {},
     this.isManualAddMode = false,
     this.manualAddClass = 'bus',
     this.onManualAddComplete,
@@ -68,6 +152,12 @@ class ReviewOverlayView extends StatefulWidget {
     this.manualLineStartNode,
     this.onManualAddLineComplete,
     this.violationNodeIds = const {},
+    this.guideNodeIds = const {},
+    this.currentCoachNodeId,
+    this.openMissingCandidates = const [],
+    this.onSelectCandidate,
+    this.isObjectCategorySweepActive = false,
+    this.currentCategoryHighlightKey,
   });
 
   @override
@@ -318,6 +408,9 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                             lines: widget.lines,
                             scaleX: scaleX,
                             scaleY: scaleY,
+                            busMappingReview: widget.busMappingReview,
+                            selectedBusId: widget.selectedNode?.id,
+                            currentCoachNodeId: widget.currentCoachNodeId,
                             lineFocusOnly: widget.lineFocusOnly,
                             linesOnlyMode: widget.linesOnlyMode,
                             selectedLineId: widget.selectedLine?.lineId,
@@ -331,12 +424,13 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                         Positioned.fill(
                           child: CustomPaint(
                             painter: _ConnectionOverlayPainter(
+                              nodes: widget.nodes,
                               lines: widget.lines,
                               selectedLine: widget.selectedLine,
                               scaleX: scaleX,
                               scaleY: scaleY,
                               pulseValue: pulseVal,
-                              lineFocusOnly: widget.lineFocusOnly,
+                              visitedLineIds: widget.visitedLineIds,
                             ),
                           ),
                         ),
@@ -413,6 +507,93 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                           );
                         }),
 
+                      // 4.5. Broad Candidate Guide Regions (for OPEN missing candidates with approximateRegion)
+                      if (widget.openMissingCandidates.isNotEmpty)
+                        ...widget.openMissingCandidates
+                            .where(
+                              (c) =>
+                                  c.status == 'OPEN' &&
+                                  c.approximateRegion != null &&
+                                  c.approximateRegion!.length >= 4,
+                            )
+                            .map((cand) {
+                              final region = cand.approximateRegion!;
+                              final double cx = region[0];
+                              final double cy = region[1];
+                              final double w = region[2];
+                              final double h = region[3];
+
+                              final double renderLeft = (cx - w / 2.0) * scaleX;
+                              final double renderTop = (cy - h / 2.0) * scaleY;
+                              final double renderW = math.max(20.0, w * scaleX);
+                              final double renderH = math.max(20.0, h * scaleY);
+
+                              final double padX = math.max(8.0, renderW * 0.15);
+                              final double padY = math.max(8.0, renderH * 0.15);
+
+                              return Positioned(
+                                left: renderLeft - padX,
+                                top: renderTop - padY,
+                                width: renderW + 2 * padX,
+                                height: renderH + 2 * padY,
+                                child: GestureDetector(
+                                  onTap: () =>
+                                      widget.onSelectCandidate?.call(cand),
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      color: Colors.purpleAccent.withValues(
+                                        alpha: 0.08 + 0.05 * pulseVal,
+                                      ),
+                                      borderRadius: BorderRadius.circular(4),
+                                      border: Border.all(
+                                        color: Colors.purpleAccent.withValues(
+                                          alpha: 0.85,
+                                        ),
+                                        width: 1.5,
+                                      ),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.purpleAccent.withValues(
+                                            alpha: 0.3 * pulseVal,
+                                          ),
+                                          blurRadius: 8.0,
+                                          spreadRadius: 2.0,
+                                        ),
+                                      ],
+                                    ),
+                                    child: Align(
+                                      alignment: Alignment.topLeft,
+                                      child: Container(
+                                        margin: const EdgeInsets.only(
+                                          top: 1,
+                                          left: 2,
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 4,
+                                          vertical: 1,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.purple.shade900
+                                              .withValues(alpha: 0.9),
+                                          borderRadius: BorderRadius.circular(
+                                            2,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          '누락 의심: ${cand.suspectedClass.toUpperCase()}',
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 7.5,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            }),
+
                       // 5. Bounding Box & Draggable Label for each node
                       ...widget.nodes.map((node) {
                         final bbox = node.bbox;
@@ -430,15 +611,78 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
 
                         final bool isSelected =
                             widget.selectedNode?.id == node.id;
+                        final bool isCurrentObjectTarget =
+                            widget.objectReviewTargetActive &&
+                            widget.currentObjectReviewId == node.id;
+                        final bool isVisitedObject =
+                            widget.objectReviewTargetActive &&
+                            widget.visitedObjectIds.contains(node.id) &&
+                            !isCurrentObjectTarget;
+                        final bool isSelectedForNodeStyle =
+                            widget.objectReviewTargetActive
+                            ? isCurrentObjectTarget
+                            : isSelected;
+                        final Color selectionColor =
+                            widget.objectReviewTargetActive
+                            ? Colors.cyanAccent
+                            : node.className.trim().toLowerCase() == 'bus'
+                            ? ConnectionReviewVisualColors.busEndpoint
+                            : Colors.yellowAccent;
                         final bool isEndpointOfSelectedLine =
                             lineEndpointNodeIds.contains(node.id);
                         final bool isViolation = widget.violationNodeIds
                             .contains(node.id);
-
                         final bool isBus =
                             node.className.toLowerCase() == 'bus';
-                        final double nodeDimOpacity =
-                            (widget.linesOnlyMode)
+                        final Color endpointHighlightColor =
+                            ConnectionReviewVisualColors.forEndpointClass(
+                              node.className,
+                            );
+                        final Color nodeLabelForeground =
+                            isBus && (isSelected || isEndpointOfSelectedLine)
+                            ? Colors.white
+                            : (isSelected || isEndpointOfSelectedLine)
+                            ? Colors.black87
+                            : Colors.white;
+                        final bool isCurrentCategory =
+                            widget.isObjectCategorySweepActive &&
+                            widget.currentCategoryHighlightKey != null &&
+                            node.className.toLowerCase() ==
+                                widget.currentCategoryHighlightKey!
+                                    .toLowerCase();
+                        final bool isAllCategoryOverview =
+                            widget.isObjectCategorySweepActive &&
+                            widget.currentCategoryHighlightKey == null;
+                        final bool isGuide =
+                            !widget.suppressObjectReviewHighlights &&
+                            (isCurrentCategory ||
+                                (isBus
+                                    ? (widget.guideNodeIds.contains(node.id) ||
+                                          isCurrentObjectTarget)
+                                    : (widget.guideNodeIds.contains(node.id) ||
+                                          node.reviewStatus == 'SUSPICIOUS' ||
+                                          isCurrentObjectTarget)));
+                        final bool isCurrentBusGuide =
+                            isBus && widget.currentCoachNodeId == node.id;
+
+                        double padX;
+                        double padY;
+                        if (isCurrentCategory) {
+                          padX = (renderW * 0.18).clamp(8.0, 14.0);
+                          padY = (renderH * 0.18).clamp(8.0, 14.0);
+                        } else if (isBus) {
+                          padX = 0.0;
+                          padY = 0.0;
+                        } else {
+                          padX = math.max(6.0, renderW * 0.15);
+                          padY = math.max(6.0, renderH * 0.15);
+                        }
+                        final double guideLeft = renderLeft - padX;
+                        final double guideTop = renderTop - padY;
+                        final double guideW = renderW + 2 * padX;
+                        final double guideH = renderH + 2 * padY;
+
+                        final double nodeDimOpacity = (widget.linesOnlyMode)
                             ? (isBus ? 0.12 : 0.025)
                             : (widget.busFocusOnly && !isBus)
                             ? 0.02
@@ -447,6 +691,10 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                   !isEndpointOfSelectedLine &&
                                   !isSelected)
                             ? 0.0
+                            : (widget.isObjectCategorySweepActive &&
+                                  widget.currentCategoryHighlightKey != null &&
+                                  !isCurrentCategory)
+                            ? 0.38
                             : 1.0;
 
                         final Color classColor = _getClassColor(node.className);
@@ -454,14 +702,30 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                           node.reviewStatus,
                         );
 
-                        final double labelBaseX =
-                            renderLeft + node.labelOffsetDx;
-                        final double labelBaseY =
-                            renderTop -
-                            (widget.busFocusOnly && isBus && isSelected
-                                ? 20
-                                : 12) +
-                            node.labelOffsetDy;
+                        final bool isBusCallout = isBus;
+                        double labelBaseX = isBusCallout
+                            ? renderLeft + renderW + 8 + node.labelOffsetDx
+                            : renderLeft + node.labelOffsetDx;
+                        double labelBaseY = isBusCallout
+                            ? renderTop + renderH / 2 - 8 + node.labelOffsetDy
+                            : renderTop -
+                                  (isCurrentCategory
+                                      ? (padY + 16)
+                                      : (widget.busFocusOnly &&
+                                                isBus &&
+                                                isSelected
+                                            ? 20
+                                            : 12)) +
+                                  node.labelOffsetDy;
+                        if (isBusCallout && labelBaseX + 112 > renderedW) {
+                          labelBaseX = renderLeft - 112 + node.labelOffsetDx;
+                        }
+                        labelBaseX = labelBaseX
+                            .clamp(2.0, math.max(2.0, renderedW - 112))
+                            .toDouble();
+                        labelBaseY = labelBaseY
+                            .clamp(2.0, math.max(2.0, renderedH - 22))
+                            .toDouble();
 
                         final bool isHumanAdded = node.source.contains(
                           'human_added',
@@ -471,9 +735,188 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                         return Stack(
                           clipBehavior: Clip.none,
                           children: [
+                            // AI Guide Box (Padded soft glowing highlight for suspicious / focus targets)
+                            if (isGuide)
+                              Positioned(
+                                key: ValueKey('ObjectGuideBox_${node.id}'),
+                                left: guideLeft,
+                                top: guideTop,
+                                width: guideW,
+                                height: guideH,
+                                child: GestureDetector(
+                                  key: isBus
+                                      ? ValueKey('BusGuideBox_${node.id}')
+                                      : null,
+                                  onTap: () => widget.onSelectNode(node),
+                                  child: isCurrentCategory
+                                      ? Stack(
+                                          clipBehavior: Clip.none,
+                                          children: [
+                                            CustomPaint(
+                                              size: Size(guideW, guideH),
+                                              painter: _ObjectGuideBoxPainter(
+                                                borderColor:
+                                                    objectCategoryColor(
+                                                      node.className,
+                                                    ),
+                                                glowColor: objectCategoryColor(
+                                                  node.className,
+                                                ),
+                                                borderWidth: isSelected
+                                                    ? 3.2
+                                                    : 2.2,
+                                                pulseVal: pulseVal,
+                                                borderRadius: 4.0,
+                                              ),
+                                            ),
+                                            if (isSelected)
+                                              Positioned(
+                                                top: -6,
+                                                right: -6,
+                                                child: Container(
+                                                  padding:
+                                                      const EdgeInsets.symmetric(
+                                                        horizontal: 4,
+                                                        vertical: 1.5,
+                                                      ),
+                                                  decoration: BoxDecoration(
+                                                    color: objectCategoryColor(
+                                                      node.className,
+                                                    ),
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          4,
+                                                        ),
+                                                    boxShadow: [
+                                                      BoxShadow(
+                                                        color: Colors.black
+                                                            .withValues(
+                                                              alpha: 0.35,
+                                                            ),
+                                                        blurRadius: 3,
+                                                      ),
+                                                    ],
+                                                  ),
+                                                  child: const Text(
+                                                    '선택됨',
+                                                    style: TextStyle(
+                                                      color: Colors.white,
+                                                      fontSize: 8,
+                                                      fontWeight:
+                                                          FontWeight.w800,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
+                                        )
+                                      : Container(
+                                          decoration: BoxDecoration(
+                                            borderRadius: BorderRadius.circular(
+                                              2,
+                                            ),
+                                            border: Border.all(
+                                              color:
+                                                  (isCurrentObjectTarget ||
+                                                      isCurrentBusGuide)
+                                                  ? const Color(0xFF06B6D4)
+                                                  : isBus
+                                                  ? (widget.busFocusOnly
+                                                        ? Colors.transparent
+                                                        : const Color(
+                                                            0xFF2563EB,
+                                                          ))
+                                                  : Colors.amberAccent,
+                                              width: isBus ? 1.4 : 1.6,
+                                            ),
+                                            boxShadow: isBus
+                                                ? const <BoxShadow>[]
+                                                : [
+                                                    BoxShadow(
+                                                      color:
+                                                          (isCurrentObjectTarget ||
+                                                                      isCurrentBusGuide
+                                                                  ? const Color(
+                                                                      0xFF06B6D4,
+                                                                    )
+                                                                  : Colors
+                                                                        .amberAccent)
+                                                              .withValues(
+                                                                alpha:
+                                                                    0.3 +
+                                                                    0.35 *
+                                                                        pulseVal,
+                                                              ),
+                                                      blurRadius:
+                                                          6.0 + 4.0 * pulseVal,
+                                                      spreadRadius: 1.5,
+                                                    ),
+                                                  ],
+                                          ),
+                                          child: Align(
+                                            alignment: Alignment.topRight,
+                                            child: Container(
+                                              margin: const EdgeInsets.only(
+                                                top: 1,
+                                                right: 2,
+                                              ),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 3,
+                                                    vertical: 0.5,
+                                                  ),
+                                              decoration: BoxDecoration(
+                                                color: isCurrentObjectTarget
+                                                    ? const Color(0xFF0891B2)
+                                                    : isCurrentBusGuide
+                                                    ? const Color(0xFF0891B2)
+                                                    : isBus
+                                                    ? const Color(0xFF2563EB)
+                                                    : const Color(0xFFD97706),
+                                                borderRadius:
+                                                    BorderRadius.circular(2),
+                                              ),
+                                              child: FittedBox(
+                                                fit: BoxFit.scaleDown,
+                                                child: Row(
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    const Icon(
+                                                      Icons.help_outline,
+                                                      size: 7.5,
+                                                      color: Colors.white,
+                                                    ),
+                                                    const SizedBox(width: 1.5),
+                                                    Text(
+                                                      isCurrentObjectTarget
+                                                          ? '현재 확인할 객체'
+                                                          : isCurrentBusGuide
+                                                          ? 'Lensy가 가리키는 모선'
+                                                          : isBus
+                                                          ? '번호 확인 필요'
+                                                          : '확인 필요',
+                                                      style: const TextStyle(
+                                                        color: Colors.white,
+                                                        fontSize: 6.8,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                ),
+                              ),
+
                             // Bounding Box Rect
                             Positioned(
-                              key: isSelected ? widget.focusTargetKey : null,
+                              key: isSelectedForNodeStyle
+                                  ? widget.focusTargetKey
+                                  : null,
                               left: renderLeft,
                               top: renderTop,
                               child: Opacity(
@@ -497,84 +940,135 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                     }
                                   },
                                   child: Container(
+                                    key: ValueKey('ObjectTightBox_${node.id}'),
                                     width: renderW,
                                     height: renderH,
                                     decoration: BoxDecoration(
-                                      color: isSelected
-                                          ? Colors.yellowAccent.withValues(
-                                              alpha: 0.2 + 0.15 * pulseVal,
-                                            )
-                                          : (isViolation
-                                                ? Colors.redAccent.withValues(
+                                      color:
+                                          (widget.isObjectCategorySweepActive ||
+                                              isAllCategoryOverview ||
+                                              (widget.busFocusOnly && isBus))
+                                          ? Colors.transparent
+                                          : (isSelectedForNodeStyle
+                                                ? selectionColor.withValues(
                                                     alpha:
-                                                        0.25 + 0.2 * pulseVal,
+                                                        0.2 + 0.15 * pulseVal,
                                                   )
-                                                : (isEndpointOfSelectedLine
-                                                      ? Colors.cyanAccent
+                                                : (isViolation
+                                                      ? Colors.redAccent
                                                             .withValues(
                                                               alpha:
                                                                   0.25 +
                                                                   0.2 *
                                                                       pulseVal,
                                                             )
-                                                      : classColor.withValues(
-                                                          alpha: 0.08,
-                                                        ))),
+                                                      : (isEndpointOfSelectedLine
+                                                            ? endpointHighlightColor
+                                                                  .withValues(
+                                                                    alpha:
+                                                                        0.25 +
+                                                                        0.2 *
+                                                                            pulseVal,
+                                                                  )
+                                                            : (isVisitedObject
+                                                                  ? const Color(
+                                                                      0xFFF59E0B,
+                                                                    ).withValues(
+                                                                      alpha:
+                                                                          0.08,
+                                                                    )
+                                                                  : classColor
+                                                                        .withValues(
+                                                                          alpha:
+                                                                              0.08,
+                                                                        ))))),
                                       border: Border.all(
-                                        color: isSelected
-                                            ? Colors.yellowAccent
-                                            : (isViolation
-                                                  ? Colors.redAccent
-                                                  : (isEndpointOfSelectedLine
-                                                        ? Colors.cyanAccent
-                                                        : (isRejected
-                                                              ? Colors.redAccent
-                                                              : classColor))),
-                                        width: isSelected
-                                            ? (2.0 + 1.2 * pulseVal)
-                                            : (isViolation
-                                                  ? (2.2 + 1.5 * pulseVal)
-                                                  : (isEndpointOfSelectedLine
-                                                        ? (2.2 + 1.8 * pulseVal)
-                                                        : 1.2)),
+                                        color: (widget.busFocusOnly && isBus)
+                                            ? const Color(0xFF2563EB)
+                                            : (isAllCategoryOverview
+                                                  ? classColor
+                                                  : (widget.isObjectCategorySweepActive
+                                                        ? (isCurrentCategory
+                                                              ? (isSelected
+                                                                    ? objectCategoryColor(
+                                                                        node.className,
+                                                                      )
+                                                                    : objectCategoryColor(
+                                                                        node.className,
+                                                                      ).withValues(
+                                                                        alpha:
+                                                                            0.4,
+                                                                      ))
+                                                              : classColor
+                                                                    .withValues(
+                                                                      alpha:
+                                                                          0.25,
+                                                                    ))
+                                                        : (isSelectedForNodeStyle
+                                                              ? selectionColor
+                                                              : (isViolation
+                                                                    ? Colors
+                                                                          .redAccent
+                                                                    : (isEndpointOfSelectedLine
+                                                                          ? endpointHighlightColor
+                                                                          : (isRejected
+                                                                                ? Colors.redAccent
+                                                                                : (isVisitedObject
+                                                                                      ? const Color(
+                                                                                          0xFFF59E0B,
+                                                                                        )
+                                                                                      : classColor))))))),
+                                        width: (widget.busFocusOnly && isBus)
+                                            ? (isSelected ? 2.2 : 1.4)
+                                            : (isAllCategoryOverview
+                                                  ? 1.5
+                                                  : (widget.isObjectCategorySweepActive
+                                                        ? (isCurrentCategory
+                                                              ? 1.0
+                                                              : 0.8)
+                                                        : (isSelectedForNodeStyle
+                                                              ? (2.0 +
+                                                                    1.2 *
+                                                                        pulseVal)
+                                                              : (isVisitedObject
+                                                                    ? 1.5
+                                                                    : (isViolation
+                                                                          ? (2.2 +
+                                                                                1.5 *
+                                                                                    pulseVal)
+                                                                          : (isEndpointOfSelectedLine
+                                                                                ? (2.2 +
+                                                                                      1.8 *
+                                                                                          pulseVal)
+                                                                                : 1.2)))))),
                                       ),
                                       borderRadius: BorderRadius.circular(2),
-                                      boxShadow: isSelected
-                                          ? [
-                                              BoxShadow(
-                                                color: Colors.yellowAccent
-                                                    .withValues(
-                                                      alpha:
-                                                          0.5 + 0.4 * pulseVal,
-                                                    ),
-                                                blurRadius:
-                                                    6.0 + 6.0 * pulseVal,
-                                                spreadRadius:
-                                                    1.0 + 1.5 * pulseVal,
-                                              ),
-                                            ]
-                                          : (isViolation
+                                      boxShadow:
+                                          (widget.isObjectCategorySweepActive ||
+                                              isAllCategoryOverview ||
+                                              (widget.busFocusOnly && isBus))
+                                          ? const <BoxShadow>[]
+                                          : (isSelectedForNodeStyle
                                                 ? [
                                                     BoxShadow(
-                                                      color: Colors.redAccent
+                                                      color: selectionColor
                                                           .withValues(
                                                             alpha:
-                                                                0.6 +
-                                                                0.35 * pulseVal,
+                                                                0.5 +
+                                                                0.4 * pulseVal,
                                                           ),
                                                       blurRadius:
-                                                          8.0 + 8.0 * pulseVal,
+                                                          6.0 + 6.0 * pulseVal,
                                                       spreadRadius:
-                                                          2.0 + 2.0 * pulseVal,
+                                                          1.0 + 1.5 * pulseVal,
                                                     ),
                                                   ]
-                                                : (isEndpointOfSelectedLine
+                                                : (isViolation
                                                       ? [
                                                           BoxShadow(
-                                                            color:
-                                                                const Color(
-                                                                  0xFF00E5FF,
-                                                                ).withValues(
+                                                            color: Colors
+                                                                .redAccent
+                                                                .withValues(
                                                                   alpha:
                                                                       0.6 +
                                                                       0.35 *
@@ -588,7 +1082,27 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                                 2.0 * pulseVal,
                                                           ),
                                                         ]
-                                                      : null)),
+                                                      : (isEndpointOfSelectedLine
+                                                            ? [
+                                                                BoxShadow(
+                                                                  color: endpointHighlightColor
+                                                                      .withValues(
+                                                                        alpha:
+                                                                            0.6 +
+                                                                            0.35 *
+                                                                                pulseVal,
+                                                                      ),
+                                                                  blurRadius:
+                                                                      8.0 +
+                                                                      8.0 *
+                                                                          pulseVal,
+                                                                  spreadRadius:
+                                                                      2.0 +
+                                                                      2.0 *
+                                                                          pulseVal,
+                                                                ),
+                                                              ]
+                                                            : null))),
                                     ),
                                   ),
                                 ),
@@ -598,7 +1112,8 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                             // Draggable Label Badge
                             if (widget.showNodeLabels &&
                                 !widget.linesOnlyMode &&
-                                (nodeDimOpacity >= 0.5 || isSelected))
+                                (nodeDimOpacity >= 0.5 ||
+                                    isSelectedForNodeStyle))
                               Positioned(
                                 left: labelBaseX,
                                 top: labelBaseY,
@@ -636,13 +1151,12 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                   isBus &&
                                                   isSelected)
                                               ? const Color(0xFF2563EB)
-                                              : (isSelected
-                                                    ? Colors.yellowAccent
+                                              : (isSelectedForNodeStyle
+                                                    ? selectionColor
                                                     : (isViolation
                                                           ? Colors.redAccent
                                                           : (isEndpointOfSelectedLine
-                                                                ? Colors
-                                                                      .cyanAccent
+                                                                ? endpointHighlightColor
                                                                 : classColor
                                                                       .withValues(
                                                                         alpha:
@@ -652,7 +1166,7 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                             4,
                                           ),
                                           border: Border.all(
-                                            color: isSelected
+                                            color: isSelectedForNodeStyle
                                                 ? (widget.busFocusOnly && isBus
                                                       ? Colors.white
                                                       : Colors.orangeAccent)
@@ -661,7 +1175,7 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                       : (isEndpointOfSelectedLine
                                                             ? Colors.white
                                                             : statusColor)),
-                                            width: isSelected
+                                            width: isSelectedForNodeStyle
                                                 ? 1.5
                                                 : (isViolation ||
                                                           isEndpointOfSelectedLine
@@ -689,9 +1203,7 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                               (isViolation
                                                                       ? Colors
                                                                             .redAccent
-                                                                      : const Color(
-                                                                          0xFF00E5FF,
-                                                                        ))
+                                                                      : endpointHighlightColor)
                                                                   .withValues(
                                                                     alpha:
                                                                         0.6 *
@@ -715,15 +1227,7 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                       isSelected)
                                                   ? 12.0
                                                   : 8.0,
-                                              color:
-                                                  (widget.busFocusOnly &&
-                                                      isBus &&
-                                                      isSelected)
-                                                  ? Colors.white
-                                                  : ((isSelected ||
-                                                            isEndpointOfSelectedLine)
-                                                        ? Colors.black87
-                                                        : Colors.white),
+                                              color: nodeLabelForeground,
                                             ),
                                             const SizedBox(width: 2.0),
                                             Text(
@@ -733,15 +1237,7 @@ class _ReviewOverlayViewState extends State<ReviewOverlayView>
                                                   ? "Bus #${node.busNumber ?? node.id}"
                                                   : node.effectiveDisplayLabel,
                                               style: TextStyle(
-                                                color:
-                                                    (widget.busFocusOnly &&
-                                                        isBus &&
-                                                        isSelected)
-                                                    ? Colors.white
-                                                    : ((isSelected ||
-                                                              isEndpointOfSelectedLine)
-                                                          ? Colors.black87
-                                                          : Colors.white),
+                                                color: nodeLabelForeground,
                                                 fontSize:
                                                     (widget.busFocusOnly &&
                                                         isBus &&
@@ -851,6 +1347,9 @@ class _LeaderLinePainter extends CustomPainter {
   final List<ReviewLineItem> lines;
   final double scaleX;
   final double scaleY;
+  final bool busMappingReview;
+  final String? selectedBusId;
+  final String? currentCoachNodeId;
   final bool lineFocusOnly;
   final bool linesOnlyMode;
   final String? selectedLineId;
@@ -861,6 +1360,9 @@ class _LeaderLinePainter extends CustomPainter {
     required this.lines,
     required this.scaleX,
     required this.scaleY,
+    this.busMappingReview = false,
+    this.selectedBusId,
+    this.currentCoachNodeId,
     this.lineFocusOnly = false,
     this.linesOnlyMode = false,
     this.selectedLineId,
@@ -881,51 +1383,151 @@ class _LeaderLinePainter extends CustomPainter {
     // Draw Node Leader Lines
     for (var node in nodes) {
       if (linesOnlyMode) continue;
+      final isBus = node.className.trim().toLowerCase() == 'bus';
+      if (busMappingReview && !isBus) continue;
       if (lineFocusOnly &&
           selectedLineId != null &&
           !endpointNodeIds.contains(node.id)) {
         continue;
       }
-      if (node.labelOffsetDx.abs() > 6 || node.labelOffsetDy.abs() > 6) {
-        final bbox = node.bbox;
-        if (bbox.length < 4) continue;
-        final double cx = bbox[0] * scaleX;
-        final double cy = bbox[1] * scaleY;
-        final double renderLeft = (bbox[0] - bbox[2] / 2.0) * scaleX;
-        final double renderTop = (bbox[1] - bbox[3] / 2.0) * scaleY;
+      final bbox = node.bbox;
+      if (bbox.length < 4) continue;
+      final double cx = bbox[0] * scaleX;
+      final double cy = bbox[1] * scaleY;
+      final double renderLeft = (bbox[0] - bbox[2] / 2.0) * scaleX;
+      final double renderTop = (bbox[1] - bbox[3] / 2.0) * scaleY;
 
+      if (BusMappingLeaderStyle.shouldDrawLeader(
+        node: node,
+        busMappingReview: busMappingReview,
+      )) {
+        const labelWidth = 112.0;
+        final renderWidth = math.max(6.0, bbox[2] * scaleX);
+        final renderHeight = math.max(6.0, bbox[3] * scaleY);
+        var labelX = renderLeft + renderWidth + 8 + node.labelOffsetDx;
+        final labelOnLeft = labelX + labelWidth > size.width;
+        if (labelOnLeft) {
+          labelX = renderLeft - labelWidth + node.labelOffsetDx;
+        }
+        labelX = labelX
+            .clamp(2.0, math.max(2.0, size.width - labelWidth))
+            .toDouble();
+        final labelY = (renderTop + renderHeight / 2 - 8 + node.labelOffsetDy)
+            .clamp(2.0, math.max(2.0, size.height - 22))
+            .toDouble();
+        final busRect = Rect.fromCenter(
+          center: Offset(cx, cy),
+          width: renderWidth,
+          height: renderHeight,
+        );
+        final labelRect = Rect.fromLTWH(labelX, labelY, labelWidth, 22);
+        final boundaryPoints = BusMappingLeaderStyle.boundaryPoints(
+          busRect: busRect,
+          labelRect: labelRect,
+        );
+        final emphasized =
+            node.id == selectedBusId || node.id == currentCoachNodeId;
+        if (boundaryPoints != null) {
+          _drawBusMappingLeader(
+            canvas,
+            boundaryPoints.busPoint,
+            boundaryPoints.labelPoint,
+            emphasized: emphasized,
+          );
+        }
+        canvas.drawCircle(
+          Offset(cx, cy),
+          3.2,
+          Paint()
+            ..color = Colors.white
+            ..style = PaintingStyle.fill,
+        );
+        canvas.drawCircle(
+          Offset(cx, cy),
+          2.0,
+          Paint()
+            ..color = Colors.black
+            ..style = PaintingStyle.fill,
+        );
+      } else if (node.labelOffsetDx.abs() > 6 || node.labelOffsetDy.abs() > 6) {
         final double labelX = renderLeft + node.labelOffsetDx + 12;
         final double labelY = renderTop - 12 + node.labelOffsetDy;
-
         canvas.drawCircle(Offset(cx, cy), 2.5, dotPaint);
         canvas.drawLine(Offset(cx, cy), Offset(labelX, labelY), leaderPaint);
       }
     }
 
     // Draw Line Leader Lines
-    for (var line in lines) {
-      if (lineFocusOnly &&
-          selectedLineId != null &&
-          line.lineId != selectedLineId) {
-        continue;
-      }
-      if (line.labelOffsetDx.abs() > 6 || line.labelOffsetDy.abs() > 6) {
-        if (line.path.length < 2) continue;
-        final midIdx = line.path.length ~/ 2;
-        final double baseMidX = line.path[midIdx][0] * scaleX;
-        final double baseMidY = line.path[midIdx][1] * scaleY;
+    if (!busMappingReview) {
+      for (var line in lines) {
+        if (lineFocusOnly &&
+            selectedLineId != null &&
+            line.lineId != selectedLineId) {
+          continue;
+        }
+        if (line.labelOffsetDx.abs() > 6 || line.labelOffsetDy.abs() > 6) {
+          if (line.path.length < 2) continue;
+          final midIdx = line.path.length ~/ 2;
+          final double baseMidX = line.path[midIdx][0] * scaleX;
+          final double baseMidY = line.path[midIdx][1] * scaleY;
 
-        final double labelX = baseMidX + line.labelOffsetDx;
-        final double labelY = baseMidY - 12 + line.labelOffsetDy;
+          final double labelX = baseMidX + line.labelOffsetDx;
+          final double labelY = baseMidY - 12 + line.labelOffsetDy;
 
-        canvas.drawCircle(Offset(baseMidX, baseMidY), 2.5, dotPaint);
-        canvas.drawLine(
-          Offset(baseMidX, baseMidY),
-          Offset(labelX, labelY),
-          leaderPaint,
-        );
+          canvas.drawCircle(Offset(baseMidX, baseMidY), 2.5, dotPaint);
+          canvas.drawLine(
+            Offset(baseMidX, baseMidY),
+            Offset(labelX, labelY),
+            leaderPaint,
+          );
+        }
       }
     }
+  }
+
+  void _drawBusMappingLeader(
+    Canvas canvas,
+    Offset start,
+    Offset end, {
+    required bool emphasized,
+  }) {
+    final delta = end - start;
+    final distance = delta.distance;
+    if (distance == 0) return;
+
+    final dashedPath = Path();
+    const dashLength = 4.5;
+    const dashAndGap = 7.5;
+    for (var offset = 0.0; offset < distance; offset += dashAndGap) {
+      final dashEnd = math.min(offset + dashLength, distance);
+      dashedPath
+        ..moveTo(
+          start.dx + delta.dx * (offset / distance),
+          start.dy + delta.dy * (offset / distance),
+        )
+        ..lineTo(
+          start.dx + delta.dx * (dashEnd / distance),
+          start.dy + delta.dy * (dashEnd / distance),
+        );
+    }
+    canvas.drawPath(
+      dashedPath,
+      Paint()
+        ..color = Colors.white.withValues(alpha: 0.9)
+        ..strokeWidth =
+            BusMappingLeaderStyle.strokeWidth(emphasized: emphasized) + 1.1
+        ..style = PaintingStyle.stroke,
+    );
+    canvas.drawPath(
+      dashedPath,
+      Paint()
+        ..color = Colors.black
+        ..strokeWidth = BusMappingLeaderStyle.strokeWidth(
+          emphasized: emphasized,
+        )
+        ..strokeCap = StrokeCap.round
+        ..style = PaintingStyle.stroke,
+    );
   }
 
   @override
@@ -933,20 +1535,22 @@ class _LeaderLinePainter extends CustomPainter {
 }
 
 class _ConnectionOverlayPainter extends CustomPainter {
+  final List<ReviewNodeItem> nodes;
   final List<ReviewLineItem> lines;
   final ReviewLineItem? selectedLine;
   final double scaleX;
   final double scaleY;
   final double pulseValue;
-  final bool lineFocusOnly;
+  final Set<String> visitedLineIds;
 
   _ConnectionOverlayPainter({
+    required this.nodes,
     required this.lines,
     required this.selectedLine,
     required this.scaleX,
     required this.scaleY,
     required this.pulseValue,
-    this.lineFocusOnly = false,
+    this.visitedLineIds = const {},
   });
 
   @override
@@ -955,24 +1559,14 @@ class _ConnectionOverlayPainter extends CustomPainter {
       if (line.path.length < 2) continue;
 
       final bool isSelected = selectedLine?.lineId == line.lineId;
-      final status = line.reviewStatus.toUpperCase();
-
-      Color strokeColor;
-      double strokeWidth;
-
-      if (isSelected) {
-        strokeColor = const Color(0xFF00E5FF); // Bright cyan for focused line
-        strokeWidth = 4.2 + pulseValue * 1.5;
-      } else if (lineFocusOnly && selectedLine != null) {
-        strokeColor = Colors.grey.withValues(alpha: 0.18);
-        strokeWidth = 1.0;
-      } else if (status == 'REJECTED') {
-        strokeColor = Colors.grey.withValues(alpha: 0.4);
-        strokeWidth = 1.5;
-      } else {
-        strokeColor = const Color(0xFFE00000); // Solid red for active lines
-        strokeWidth = status == 'AMBIGUOUS' ? 3.2 : 2.6;
-      }
+      final strokeColor = ConnectionReviewVisualColors.overlayColorForLine(
+        isCurrent: isSelected,
+        visitedBefore: visitedLineIds.contains(line.lineId),
+      );
+      if (strokeColor == null) continue;
+      final strokeWidth = isSelected
+          ? 4.2 + pulseValue * 1.5
+          : ConnectionReviewVisualColors.visitedLineStrokeWidth;
 
       final paint = Paint()
         ..color = strokeColor
@@ -984,7 +1578,7 @@ class _ConnectionOverlayPainter extends CustomPainter {
       // Glow effect for selected line with Pulse
       if (isSelected) {
         final glowPaint = Paint()
-          ..color = Colors.yellowAccent.withValues(
+          ..color = ConnectionReviewVisualColors.currentLine.withValues(
             alpha: 0.3 + pulseValue * 0.4,
           )
           ..strokeWidth = 8.0 + pulseValue * 6.0
@@ -1007,10 +1601,6 @@ class _ConnectionOverlayPainter extends CustomPainter {
       canvas.drawPath(linePath, paint);
 
       // Draw endpoint port markers
-      final dotPaint = Paint()
-        ..color = strokeColor
-        ..style = PaintingStyle.fill;
-
       final startPt = Offset(
         line.path.first[0] * scaleX,
         line.path.first[1] * scaleY,
@@ -1020,19 +1610,97 @@ class _ConnectionOverlayPainter extends CustomPainter {
         line.path.last[1] * scaleY,
       );
 
-      canvas.drawCircle(
-        startPt,
-        isSelected ? (4.0 + pulseValue * 1.5) : 3.0,
-        dotPaint,
-      );
-      canvas.drawCircle(
-        endPt,
-        isSelected ? (4.0 + pulseValue * 1.5) : 3.0,
-        dotPaint,
-      );
+      if (isSelected) {
+        final endpointRadius = 4.0 + pulseValue * 1.5;
+        final endpointRingPaint = Paint()
+          ..color = Colors.white
+          ..style = PaintingStyle.fill;
+        for (final entry in [
+          (point: startPt, color: _endpointColor(line, 0)),
+          (point: endPt, color: _endpointColor(line, 1)),
+        ]) {
+          final endpointFillPaint = Paint()
+            ..color = entry.color
+            ..style = PaintingStyle.fill;
+          final point = entry.point;
+          canvas.drawCircle(point, endpointRadius + 1.8, endpointRingPaint);
+          canvas.drawCircle(point, endpointRadius, endpointFillPaint);
+        }
+      } else {
+        for (final entry in [
+          (point: startPt, color: _endpointColor(line, 0)),
+          (point: endPt, color: _endpointColor(line, 1)),
+        ]) {
+          canvas.drawCircle(
+            entry.point,
+            3.0,
+            Paint()
+              ..color = entry.color
+              ..style = PaintingStyle.fill,
+          );
+        }
+      }
     }
+  }
+
+  Color _endpointColor(ReviewLineItem line, int endpointIndex) {
+    if (endpointIndex >= line.connectedTo.length) {
+      return ConnectionReviewVisualColors.equipmentEndpoint;
+    }
+    final endpointId = line.connectedTo[endpointIndex];
+    for (final node in nodes) {
+      if (node.id == endpointId) {
+        return ConnectionReviewVisualColors.forEndpointClass(node.className);
+      }
+    }
+    return ConnectionReviewVisualColors.equipmentEndpoint;
   }
 
   @override
   bool shouldRepaint(covariant _ConnectionOverlayPainter oldDelegate) => true;
+}
+
+class _ObjectGuideBoxPainter extends CustomPainter {
+  final Color borderColor;
+  final Color glowColor;
+  final double borderWidth;
+  final double pulseVal;
+  final double borderRadius;
+
+  const _ObjectGuideBoxPainter({
+    required this.borderColor,
+    required this.glowColor,
+    required this.borderWidth,
+    required this.pulseVal,
+    this.borderRadius = 4.0,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final rrect = RRect.fromRectAndRadius(rect, Radius.circular(borderRadius));
+
+    // Outer glow ONLY with BlurStyle.outer: interior remains 100% transparent!
+    final glowPaint = Paint()
+      ..color = glowColor.withValues(alpha: 0.35 + 0.35 * pulseVal)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = borderWidth + 1.2
+      ..maskFilter = MaskFilter.blur(BlurStyle.outer, 5.0 + 4.0 * pulseVal);
+    canvas.drawRRect(rrect, glowPaint);
+
+    // Sharp outer border
+    final borderPaint = Paint()
+      ..color = borderColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = borderWidth;
+    canvas.drawRRect(rrect, borderPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _ObjectGuideBoxPainter oldDelegate) {
+    return oldDelegate.pulseVal != pulseVal ||
+        oldDelegate.borderColor != borderColor ||
+        oldDelegate.glowColor != glowColor ||
+        oldDelegate.borderWidth != borderWidth;
+  }
 }

@@ -60,7 +60,14 @@ class ExcelDiscrepancyAgent:
         if not api_key:
             return None
 
-        model_name = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
+        from core.model_config import get_gemini_model_name, get_gemini_fallback_model_name
+
+        primary_model = get_gemini_model_name()
+        fallback_model = get_gemini_fallback_model_name()
+        models_to_try = [primary_model]
+        if fallback_model and fallback_model != primary_model:
+            models_to_try.append(fallback_model)
+
         system_instruction = (
             "당신은 전력 계통(Power System) 도면 및 단선도(SLD) 검증 전문가 AI 에이전트입니다.\n"
             "사용자가 도면을 캔버스에 구성한 후 엑셀 계통 데이터를 적용했으나 불일치가 발생했습니다.\n"
@@ -71,7 +78,7 @@ class ExcelDiscrepancyAgent:
             "- 도면 이미지 인식(OCR 미인식, 선로 끊김, 번호 오인식) 또는 엑셀 케이스 불일치 원인\n\n"
             "【해결 가이드】\n"
             "1. 캔버스에서 어떻게 수정해야 하는지 단계별 안내\n"
-            "2. 발전기/부하 누락의 경우 상단 제안 카드의 [적용] 버튼을 눌러 안전하게 보완할 수 있음을 안내\n"
+            "2. '누락 요소 자동 추가' 버튼을 눌러 엑셀 사양대로 자동 보정할 수 있음을 안내\n"
         )
 
         user_content = (
@@ -81,39 +88,41 @@ class ExcelDiscrepancyAgent:
             f"- 상세 불일치: {json.dumps(mismatch_report.get('details', {}), ensure_ascii=False)}\n"
         )
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         payload = {
             "system_instruction": {"parts": [{"text": system_instruction}]},
             "contents": [{"role": "user", "parts": [{"text": user_content}]}],
             "generationConfig": {"temperature": 0.2, "maxOutputTokens": 800},
         }
 
-        try:
+        for idx, m_name in enumerate(models_to_try):
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={api_key}"
             req = urllib.request.Request(
                 url,
                 data=json.dumps(payload).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=8.0) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                candidates = data.get("candidates", [])
-                if candidates:
-                    reply = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-                    if reply.strip():
-                        return {
-                            "status": "mismatch",
-                            "agent_provider": "GEMINI_LLM",
-                            "headline": "⚠️ 도면과 엑셀 데이터가 일치하지 않습니다!",
-                            "advice_ko": reply.strip(),
-                            "suggested_actions": [
-                                "캔버스에서 누락된 모선/선로 번호 점검",
-                                "우측 하단 '누락 요소 자동 보정'으로 자동 완성",
-                                "도면에 맞는 올바른 엑셀 케이스 파일 재업로드",
-                            ],
-                        }
-        except Exception as e:
-            print(f"[ExcelDiscrepancyAgent Gemini Call Failed]: {e}")
+            try:
+                with urllib.request.urlopen(req, timeout=10.0) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        reply = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                        if reply.strip():
+                            return {
+                                "status": "mismatch",
+                                "agent_provider": "GEMINI_LLM",
+                                "headline": "⚠️ 도면과 엑셀 데이터가 일치하지 않습니다!",
+                                "advice_ko": reply.strip(),
+                                "suggested_actions": [
+                                    "캔버스에서 누락된 모선/선로 번호 점검",
+                                    "우측 하단 '누락 요소 자동 보정'으로 자동 완성",
+                                    "도면에 맞는 올바른 엑셀 케이스 파일 재업로드",
+                                ],
+                            }
+            except Exception as e:
+                print(f"[ExcelDiscrepancyAgent {m_name} Attempt {idx+1} Error]: {e}")
+                continue
 
         return None
 
@@ -171,7 +180,7 @@ class ExcelDiscrepancyAgent:
         actions.append("1. 캔버스에서 모선 번호 라벨(예: 1, 2, 14 등)이 정확한지 확인하고 수정하세요.")
         if missing_branches:
             actions.append("2. 누락된 선로의 경우, 캔버스 선로 그리기 툴로 양쪽 모선 사이에 선을 다시 그어주세요.")
-        actions.append("3. 발전기나 부하 심볼이 누락된 경우 상단의 '교차검증 설비 제안'에서 [적용] 버튼을 눌러 선택적으로 보완할 수 있습니다.")
+        actions.append("3. 하단의 [누락 요소 자동 추가] 또는 발전기/부하 교차검증 제안의 [적용]을 통해 엑셀 데이터를 바탕으로 누락 요소를 안전하게 보강할 수 있습니다.")
         actions.append("4. 현재 도면과 일치하는 올바른 엑셀 파일(예: IEEE 24-bus)이 맞는지 확인해 주세요.")
 
         sections.append("\n【해결 가이드】\n" + "\n".join(actions))
@@ -183,7 +192,7 @@ class ExcelDiscrepancyAgent:
             "advice_ko": "\n".join(sections),
             "suggested_actions": [
                 "모선 번호 및 선로 결선 수동 점검",
-                "발전기/부하 교차검증 제안 검토 및 적용",
+                "누락 요소 자동 추가 / 설비 제안 적용",
                 "계통 엑셀 파일 재확인",
             ],
         }

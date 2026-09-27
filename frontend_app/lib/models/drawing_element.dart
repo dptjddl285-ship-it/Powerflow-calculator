@@ -19,6 +19,7 @@ class DrawingElement {
 
   List<Offset>? aiPath;
   List<Offset>? rawAiPath;
+  List<Offset>? sourceAiPath;
 
   bool showInfo = false;
 
@@ -35,11 +36,18 @@ class DrawingElement {
   String? busType;
   String? source;
   int? busNumber;
+  int? connectedBusNumber;
+  int? fromBus;
+  int? toBus;
+  String? verifiedClass;
+  String? parameterStatus;
+  List<String> parameterMissingFields;
+  List<String> parameterInputFields;
   bool isEquipmentLead = false;
   bool isGenLead = false;
   bool isTransformerLead = false;
   bool electricalBranch = true;
-  List<Map<String, dynamic>>? electricalBranches;
+  List<Map<String, dynamic>> electricalBranches;
 
   bool get isAutoAddedFromExcel =>
       source == 'excel_auto' || source == 'excel_review_applied' || id.startsWith('gen_auto_');
@@ -56,7 +64,12 @@ class DrawingElement {
     if (isSynchronousCondenserExplicit != null) {
       return isSynchronousCondenserExplicit!;
     }
-    if (label.startsWith("SC_") || label.startsWith("SC ") || label == "SC" || label.contains("동기조상기") || id.startsWith("sc_") || id.startsWith("SC_")) {
+    if (label.startsWith("SC_") ||
+        label.startsWith("SC ") ||
+        label == "SC" ||
+        label.contains("동기조상기") ||
+        id.startsWith("sc_") ||
+        id.startsWith("SC_")) {
       return true;
     }
     return false;
@@ -84,29 +97,45 @@ class DrawingElement {
     this.infoOffset = const Offset(40, -40),
     this.aiPath,
     this.rawAiPath,
+    this.sourceAiPath,
     this.circuitCount,
     this.busType,
     this.source,
     this.isSynchronousCondenserExplicit,
     this.busNumber,
+    this.connectedBusNumber,
+    this.fromBus,
+    this.toBus,
+    this.verifiedClass,
+    this.parameterStatus,
+    this.parameterMissingFields = const [],
+    this.parameterInputFields = const [],
     this.isEquipmentLead = false,
     this.isGenLead = false,
     this.isTransformerLead = false,
     this.electricalBranch = true,
-    this.electricalBranches,
+    this.electricalBranches = const [],
   }) {
+    parameterMissingFields = List<String>.from(parameterMissingFields);
+    parameterInputFields = List<String>.from(parameterInputFields);
+    electricalBranches = electricalBranches
+        .map((branch) => Map<String, dynamic>.from(branch))
+        .toList();
     if (type == Tool.generator && isSynchronousCondenserExplicit == null) {
-      if (label.startsWith("SC_") || label.startsWith("SC ") || label == "SC" || label.contains("동기조상기") || id.startsWith("sc_") || id.startsWith("SC_")) {
-        isSynchronousCondenserExplicit = true;
-      } else {
-        isSynchronousCondenserExplicit = false;
+      if (label.startsWith("SC_") ||
+          label.startsWith("SC ") ||
+          label == "SC" ||
+          label.contains("동기조상기") ||
+          id.startsWith("sc_") ||
+          id.startsWith("SC_")) {
+        isSynchronousCondenser = true;
       }
     }
   }
 
-  DrawingElement copy() {
+  DrawingElement clone({String? newId}) {
     return DrawingElement(
-      id: id,
+      id: newId ?? id,
       type: type,
       position: position,
       midPosition: midPosition,
@@ -123,19 +152,25 @@ class DrawingElement {
       infoOffset: infoOffset,
       aiPath: aiPath != null ? List.from(aiPath!) : null,
       rawAiPath: rawAiPath != null ? List.from(rawAiPath!) : null,
+      sourceAiPath: sourceAiPath != null ? List.from(sourceAiPath!) : null,
       circuitCount: circuitCount,
       busType: busType,
       source: source,
       busNumber: busNumber,
+      connectedBusNumber: connectedBusNumber,
+      fromBus: fromBus,
+      toBus: toBus,
+      verifiedClass: verifiedClass,
+      parameterStatus: parameterStatus,
+      parameterMissingFields: List<String>.from(parameterMissingFields),
+      parameterInputFields: List<String>.from(parameterInputFields),
       isEquipmentLead: isEquipmentLead,
       isGenLead: isGenLead,
       isTransformerLead: isTransformerLead,
       electricalBranch: electricalBranch,
-      electricalBranches: electricalBranches != null
-          ? List<Map<String, dynamic>>.from(
-              electricalBranches!.map((e) => Map<String, dynamic>.from(e)),
-            )
-          : null,
+      electricalBranches: electricalBranches
+          .map((branch) => Map<String, dynamic>.from(branch))
+          .toList(),
     )
       ..showInfo = showInfo
       ..isSlack = isSlack
@@ -151,6 +186,8 @@ class DrawingElement {
       ..source = source;
   }
 
+  DrawingElement copy({String? newId}) => clone(newId: newId);
+
   Map<String, dynamic> toJson() {
     return {
       'id': id,
@@ -164,19 +201,26 @@ class DrawingElement {
       'angle': angle,
       'bus_number': busNumber,
       'busNumber': busNumber,
+      'connected_bus_number': connectedBusNumber,
       'parentBusId': parentBusId,
       'startElementId': startElementId,
       'endElementId': endElementId,
       'isSlack': isSlack,
       'isSynchronousCondenser': isSynchronousCondenser,
-      'vPu': vPu,
+      'vPu': _isParameterMissing('vPu') ? null : vPu,
       'thetaDeg': thetaDeg,
-      'pPu': pPu,
-      'qPu': qPu,
-      'rPu': rPu,
-      'xPu': xPu,
-      'bPu': bPu,
-      'tapRatio': tapRatio,
+      'pPu': _isParameterMissing('pPu') ? null : pPu,
+      'qPu': _isParameterMissing('qPu') ? null : qPu,
+      'rPu': _isParameterMissing('rPu') ? null : rPu,
+      'xPu': _isParameterMissing('xPu') ? null : xPu,
+      'bPu': _isParameterMissing('bPu') ? null : bPu,
+      'tapRatio': _isParameterMissing('tapRatio') ? null : tapRatio,
+      'parameterStatus': parameterStatus,
+      'parameterMissingFields': parameterMissingFields,
+      'parameterInputFields': parameterInputFields,
+      'from_bus': fromBus,
+      'to_bus': toBus,
+      'verifiedClass': verifiedClass,
       'circuitCount': circuitCount,
       'bus_type': busType,
       'source': source,
@@ -184,33 +228,55 @@ class DrawingElement {
       'isGenLead': isGenLead,
       'isTransformerLead': isTransformerLead,
       'electricalBranch': electricalBranch,
-      if (electricalBranches != null) 'electricalBranches': electricalBranches,
-      if (electricalBranches != null) 'electrical_branches': electricalBranches,
+      'electrical_branches': electricalBranches
+          .map((branch) => Map<String, dynamic>.from(branch))
+          .toList(),
+      if (electricalBranches.isNotEmpty) 'electricalBranches': electricalBranches,
     };
+  }
+
+  bool _isParameterMissing(String field) =>
+      parameterMissingFields.contains(field) ||
+      (parameterStatus == 'MISSING' && parameterMissingFields.isEmpty);
+
+  void markParameterInput(String field) {
+    if (!parameterInputFields.contains(field)) parameterInputFields.add(field);
+    parameterMissingFields.remove(field);
+    if (parameterStatus == 'MISSING' && parameterMissingFields.isEmpty) {
+      parameterStatus = 'MANUAL';
+    }
   }
 
   void updateFromJson(Map<String, dynamic> json) {
     if (json.containsKey('label') && json['label'] != null) {
       label = json['label'].toString();
     }
-    if (json.containsKey('isSynchronousCondenser') && json['isSynchronousCondenser'] != null) {
+    if (json.containsKey('isSynchronousCondenser') &&
+        json['isSynchronousCondenser'] != null) {
       isSynchronousCondenser = json['isSynchronousCondenser'] == true;
-    } else if (json.containsKey('is_synchronous_condenser') && json['is_synchronous_condenser'] != null) {
+    } else if (json.containsKey('is_synchronous_condenser') &&
+        json['is_synchronous_condenser'] != null) {
       isSynchronousCondenser = json['is_synchronous_condenser'] == true;
-    } else if (label.startsWith("SC_") || label.startsWith("SC ") || label == "SC" || label.contains("동기조상기") || id.startsWith("SC_") || id.startsWith("sc_")) {
+    } else if (label.startsWith("SC_") ||
+        label.startsWith("SC ") ||
+        label == "SC" ||
+        label.contains("동기조상기") ||
+        id.startsWith("SC_") ||
+        id.startsWith("sc_")) {
       isSynchronousCondenser = true;
     } else if (type == Tool.generator) {
       isSynchronousCondenser = false;
     }
+
     if (json.containsKey('isSlack') && json['isSlack'] != null) {
       isSlack = json['isSlack'] == true;
-    } else if (json.containsKey('is_slack') && json['is_slack'] != null) {
-      isSlack = json['is_slack'] == true;
     }
     if (json.containsKey('vPu') && json['vPu'] != null) {
       vPu = (json['vPu'] as num).toDouble();
+      parameterMissingFields.remove('vPu');
     } else if (json.containsKey('v_pu') && json['v_pu'] != null) {
       vPu = (json['v_pu'] as num).toDouble();
+      parameterMissingFields.remove('vPu');
     }
     if (json.containsKey('thetaDeg') && json['thetaDeg'] != null) {
       thetaDeg = (json['thetaDeg'] as num).toDouble();
@@ -219,23 +285,31 @@ class DrawingElement {
     }
     if (json.containsKey('pPu') && json['pPu'] != null) {
       pPu = (json['pPu'] as num).toDouble();
+      parameterMissingFields.remove('pPu');
     } else if (json.containsKey('p_pu') && json['p_pu'] != null) {
       pPu = (json['p_pu'] as num).toDouble();
+      parameterMissingFields.remove('pPu');
     }
     if (json.containsKey('qPu') && json['qPu'] != null) {
       qPu = (json['qPu'] as num).toDouble();
+      parameterMissingFields.remove('qPu');
     } else if (json.containsKey('q_pu') && json['q_pu'] != null) {
       qPu = (json['q_pu'] as num).toDouble();
+      parameterMissingFields.remove('qPu');
     }
     if (json.containsKey('rPu') && json['rPu'] != null) {
       rPu = (json['rPu'] as num).toDouble();
+      parameterMissingFields.remove('rPu');
     } else if (json.containsKey('r_pu') && json['r_pu'] != null) {
       rPu = (json['r_pu'] as num).toDouble();
+      parameterMissingFields.remove('rPu');
     }
     if (json.containsKey('xPu') && json['xPu'] != null) {
       xPu = (json['xPu'] as num).toDouble();
+      parameterMissingFields.remove('xPu');
     } else if (json.containsKey('x_pu') && json['x_pu'] != null) {
       xPu = (json['x_pu'] as num).toDouble();
+      parameterMissingFields.remove('xPu');
     }
     if (json.containsKey('bPu') && json['bPu'] != null) {
       bPu = (json['bPu'] as num).toDouble();
@@ -262,6 +336,33 @@ class DrawingElement {
     if (json.containsKey('endElementId') && json['endElementId'] != null) {
       endElementId = json['endElementId'].toString();
     }
+    if (json.containsKey('from_bus') && json['from_bus'] != null) {
+      fromBus = (json['from_bus'] as num).toInt();
+    } else if (json.containsKey('fromBus') && json['fromBus'] != null) {
+      fromBus = (json['fromBus'] as num).toInt();
+    }
+    if (json.containsKey('to_bus') && json['to_bus'] != null) {
+      toBus = (json['to_bus'] as num).toInt();
+    } else if (json.containsKey('toBus') && json['toBus'] != null) {
+      toBus = (json['toBus'] as num).toInt();
+    }
+    if (json.containsKey('parameterStatus') &&
+        json['parameterStatus'] != null) {
+      parameterStatus = json['parameterStatus'].toString();
+    }
+    if (json['parameterMissingFields'] is List) {
+      parameterMissingFields = (json['parameterMissingFields'] as List)
+          .map((field) => field.toString())
+          .toList();
+    }
+    if (json['parameterInputFields'] is List) {
+      parameterInputFields = (json['parameterInputFields'] as List)
+          .map((field) => field.toString())
+          .toList();
+    }
+    if (json.containsKey('verifiedClass') && json['verifiedClass'] != null) {
+      verifiedClass = json['verifiedClass'].toString();
+    }
     if (json.containsKey('source') && json['source'] != null) {
       source = json['source'].toString();
     }
@@ -270,7 +371,15 @@ class DrawingElement {
     } else if (json.containsKey('busNumber') && json['busNumber'] != null) {
       busNumber = (json['busNumber'] as num).toInt();
     }
-    if (json.containsKey('isEquipmentLead') && json['isEquipmentLead'] != null) {
+    if (json.containsKey('connected_bus_number') &&
+        json['connected_bus_number'] != null) {
+      connectedBusNumber = (json['connected_bus_number'] as num).toInt();
+    } else if (json.containsKey('connectedBusNumber') &&
+        json['connectedBusNumber'] != null) {
+      connectedBusNumber = (json['connectedBusNumber'] as num).toInt();
+    }
+    if (json.containsKey('isEquipmentLead') &&
+        json['isEquipmentLead'] != null) {
       isEquipmentLead = json['isEquipmentLead'] == true;
     }
     if (json.containsKey('isGenLead') && json['isGenLead'] != null) {
@@ -281,17 +390,17 @@ class DrawingElement {
     } else if (json.containsKey('is_transformer_lead') && json['is_transformer_lead'] != null) {
       isTransformerLead = json['is_transformer_lead'] == true;
     }
-    if (json.containsKey('electricalBranch') && json['electricalBranch'] != null) {
+    if (json.containsKey('electricalBranch') &&
+        json['electricalBranch'] != null) {
       electricalBranch = json['electricalBranch'] == true;
     }
-    if (json.containsKey('electricalBranches') && json['electricalBranches'] != null) {
-      electricalBranches = List<Map<String, dynamic>>.from(
-        (json['electricalBranches'] as List).map((e) => Map<String, dynamic>.from(e as Map)),
-      );
-    } else if (json.containsKey('electrical_branches') && json['electrical_branches'] != null) {
-      electricalBranches = List<Map<String, dynamic>>.from(
-        (json['electrical_branches'] as List).map((e) => Map<String, dynamic>.from(e as Map)),
-      );
+    final rawElectricalBranches =
+        json['electrical_branches'] ?? json['electricalBranches'];
+    if (rawElectricalBranches is List) {
+      electricalBranches = rawElectricalBranches
+          .whereType<Map>()
+          .map((branch) => Map<String, dynamic>.from(branch))
+          .toList();
     }
   }
 
@@ -318,8 +427,12 @@ class DrawingElement {
       id: json['id']?.toString() ?? 'unknown',
       type: parseTool(json['type']?.toString()),
       position: parseOffset(json['position']),
-      midPosition: json['midPosition'] != null ? parseOffset(json['midPosition']) : null,
-      endPosition: json['endPosition'] != null ? parseOffset(json['endPosition']) : null,
+      midPosition: json['midPosition'] != null
+          ? parseOffset(json['midPosition'])
+          : null,
+      endPosition: json['endPosition'] != null
+          ? parseOffset(json['endPosition'])
+          : null,
       width: (json['width'] as num?)?.toDouble() ?? 120.0,
       height: (json['height'] as num?)?.toDouble() ?? 10.0,
       angle: (json['angle'] as num?)?.toDouble() ?? 0.0,
@@ -330,7 +443,9 @@ class DrawingElement {
       circuitCount: (json['circuitCount'] as num?)?.toInt(),
       busType: json['bus_type']?.toString(),
       source: json['source']?.toString(),
-      busNumber: (json['bus_number'] as num?)?.toInt() ?? (json['busNumber'] as num?)?.toInt(),
+      busNumber:
+          (json['bus_number'] as num?)?.toInt() ??
+          (json['busNumber'] as num?)?.toInt(),
       isEquipmentLead: json['isEquipmentLead'] == true,
       isGenLead: json['isGenLead'] == true,
       isTransformerLead: json['isTransformerLead'] == true || json['is_transformer_lead'] == true,

@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import '../../services/powerlens_ai_service.dart';
 
 class PowerLensAIFloatingButton extends StatefulWidget {
   final VoidCallback onPressed;
@@ -14,7 +15,11 @@ class PowerLensAIFloatingButton extends StatefulWidget {
   /// value lets the mascot show a matching pointing cue.
   final String coachTarget;
   final String? coachMessage;
+  final bool useObjectReviewGuidance;
   final ValueChanged<Offset>? onDragDelta;
+  final VoidCallback? onDragStart;
+  final VoidCallback? onDragEnd;
+  final VoidCallback? onResetPosition;
 
   const PowerLensAIFloatingButton({
     super.key,
@@ -26,7 +31,11 @@ class PowerLensAIFloatingButton extends StatefulWidget {
     this.presenceState = 'idle',
     this.coachTarget = 'floating',
     this.coachMessage,
+    this.useObjectReviewGuidance = false,
     this.onDragDelta,
+    this.onDragStart,
+    this.onDragEnd,
+    this.onResetPosition,
   });
 
   @override
@@ -44,7 +53,7 @@ class _PowerLensAIFloatingButtonState extends State<PowerLensAIFloatingButton>
     super.initState();
     _animController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 2400),
+      duration: const Duration(milliseconds: 1600),
     )..repeat();
   }
 
@@ -56,222 +65,253 @@ class _PowerLensAIFloatingButtonState extends State<PowerLensAIFloatingButton>
 
   @override
   Widget build(BuildContext context) {
-    final bubbleText =
-        widget.coachMessage ??
-        widget.speechBubbleText ??
-        "도면 사진으로 시작할까요? 샘플로 체험할까요? ⚡";
     final presenceColor = _presenceColor;
 
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
+      onPanStart: widget.onDragDelta == null
+          ? null
+          : (_) => widget.onDragStart?.call(),
       onPanUpdate: widget.onDragDelta == null
           ? null
           : (details) => widget.onDragDelta!(details.delta),
+      onPanEnd: widget.onDragDelta == null
+          ? null
+          : (_) => widget.onDragEnd?.call(),
+      onPanCancel: widget.onDragDelta == null
+          ? null
+          : () => widget.onDragEnd?.call(),
       child: AnimatedBuilder(
-        animation: _animController,
+        animation: Listenable.merge([
+          _animController,
+          PowerLensAIService.instance,
+        ]),
         builder: (context, child) {
-        final double t = _animController.value;
-        // Floating hover offset (-7px to +7px)
-        final state = widget.presenceState.toLowerCase();
-        final double hoverY = state == 'thinking'
-            ? -3.0 * math.sin(t * 4 * math.pi)
-            : (state == 'success'
-                  ? -10.0 * math.sin(t * 2 * math.pi)
-                  : -7.0 * math.sin(t * 2 * math.pi));
-        // Shadow scale: larger when close to ground, smaller when floating high
-        final double shadowScale = 0.85 + 0.15 * math.cos(t * 2 * math.pi);
-        // Blinking phase (blinks closed for 10% of cycle)
-        final bool isBlinking = (t > 0.45 && t < 0.52);
+          final bubbleText =
+              (widget.useObjectReviewGuidance
+                  ? (PowerLensAIService.instance.currentWorkflowGuidance ??
+                      PowerLensAIService.instance.currentObjectWorkflowGuidance)
+                  : null) ??
+              widget.coachMessage ??
+              widget.speechBubbleText ??
+              "도면 사진으로 시작할까요? 샘플로 체험할까요? ⚡";
+          final double t = _animController.value;
+          // Subtle idle motion keeps the companion calm while the panel moves.
+          final state = widget.presenceState.toLowerCase();
+          final double hoverY = state == 'thinking'
+              ? -3.0 * math.sin(t * 4 * math.pi)
+              : (state == 'success'
+                    ? -5.0 * math.sin(t * 2 * math.pi)
+                    : -5.0 * math.sin(t * 2 * math.pi));
+          // Shadow scale: larger when close to ground, smaller when floating high
+          final double shadowScale = 0.85 + 0.15 * math.cos(t * 2 * math.pi);
+          // Blinking phase (blinks closed for 10% of cycle)
+          final bool isBlinking = (t > 0.45 && t < 0.52);
 
-        return Row(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            // Speech Bubble (shown if not open and not dismissed)
-            if (!widget.isOpen && !_speechDismissed) ...[
-              GestureDetector(
-                onTap: widget.onPressed,
-                child: Container(
-                  margin: const EdgeInsets.only(right: 12, bottom: 12),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 10,
-                  ),
-                  constraints: BoxConstraints(
-                    maxWidth: widget.isMobile ? 210 : 270,
-                  ),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF0F172A),
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(18),
-                      topRight: Radius.circular(18),
-                      bottomLeft: Radius.circular(18),
-                      bottomRight: Radius.circular(4),
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFF2563EB).withValues(alpha: 0.25),
-                        blurRadius: 14,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                    border: Border.all(
-                      color: const Color(0xFF38BDF8),
-                      width: 1.2,
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(4),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1E293B),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.tips_and_updates,
-                          size: 14,
-                          color: Colors.amberAccent,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Flexible(
-                        child: Text(
-                          bubbleText,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            height: 1.35,
-                          ),
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      GestureDetector(
-                        onTap: () => setState(() => _speechDismissed = true),
-                        child: const Padding(
-                          padding: EdgeInsets.all(2.0),
-                          child: Icon(
-                            Icons.close,
-                            size: 14,
-                            color: Colors.white54,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-
-            // Living Mascot Character
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Floating Robot
-                Transform.translate(
-                  offset: Offset(0, hoverY),
-                  child: GestureDetector(
-                    onTap: widget.onPressed,
-                    child: Tooltip(
-                      message: "PowerLens AI 도우미 (클릭하여 대화하기)",
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 6,
-                        ),
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [Color(0xFF1E293B), Color(0xFF0F172A)],
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                          ),
-                          borderRadius: BorderRadius.circular(28),
-                          border: Border.all(color: presenceColor, width: 1.8),
-                          boxShadow: [
-                            BoxShadow(
-                              color: presenceColor.withValues(alpha: 0.45),
-                              blurRadius: 16,
-                              spreadRadius: 2,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            // Lensy stays a recognizable full-body companion.
-                            // The desktop default intentionally has no permanent
-                            // title/card copy; the contextual speech bubble is
-                            // the only explanatory surface.
-                            _buildRobotCharacter(t, isBlinking),
-                            const SizedBox(width: 4),
-                            Container(
-                              width: 7,
-                              height: 7,
-                              decoration: BoxDecoration(
-                                color: presenceColor,
-                                shape: BoxShape.circle,
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: presenceColor.withValues(alpha: 0.75),
-                                    blurRadius: 7,
-                                  ),
-                                ],
-                              ),
-                            ),
-
-                            if (widget.alertCount != null &&
-                                widget.alertCount! > 0) ...[
-                              const SizedBox(width: 6),
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 6,
-                                  vertical: 2,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: Colors.amberAccent,
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: Text(
-                                  "${widget.alertCount}",
-                                  style: const TextStyle(
-                                    color: Color(0xFF0F172A),
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 10,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-
-                const SizedBox(height: 4),
-
-                // Ground Soft Hover Shadow
-                Transform.scale(
-                  scaleX: shadowScale,
-                  scaleY: 0.6,
+          return Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              // Speech Bubble (shown if not open and not dismissed)
+              if (!widget.isOpen && !_speechDismissed) ...[
+                GestureDetector(
+                  onTap: widget.onPressed,
                   child: Container(
-                    width: widget.isMobile ? 36 : 60,
-                    height: 8,
+                    margin: const EdgeInsets.only(right: 12, bottom: 12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                    constraints: BoxConstraints(
+                      maxWidth: widget.isMobile ? 210 : 270,
+                    ),
                     decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.35 * shadowScale),
-                      borderRadius: BorderRadius.circular(20),
+                      color: const Color(0xFF0F172A),
+                      borderRadius: const BorderRadius.only(
+                        topLeft: Radius.circular(18),
+                        topRight: Radius.circular(18),
+                        bottomLeft: Radius.circular(18),
+                        bottomRight: Radius.circular(4),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(
+                            0xFF2563EB,
+                          ).withValues(alpha: 0.25),
+                          blurRadius: 14,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                      border: Border.all(
+                        color: const Color(0xFF38BDF8),
+                        width: 1.2,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1E293B),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.tips_and_updates,
+                            size: 14,
+                            color: Colors.amberAccent,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            bubbleText,
+                            key: widget.useObjectReviewGuidance
+                                ? const ValueKey(
+                                    'objectReviewLensyGuidanceBubble',
+                                  )
+                                : null,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              height: 1.35,
+                            ),
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        GestureDetector(
+                          onTap: () => setState(() => _speechDismissed = true),
+                          child: const Padding(
+                            padding: EdgeInsets.all(2.0),
+                            child: Icon(
+                              Icons.close,
+                              size: 14,
+                              color: Colors.white54,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
               ],
-            ),
-          ],
-        );
+
+              // Living Mascot Character
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Floating Robot
+                  Transform.translate(
+                    offset: Offset(0, hoverY),
+                    child: GestureDetector(
+                      onTap: widget.onPressed,
+                      onDoubleTap: widget.onResetPosition,
+                      child: Tooltip(
+                        message: "PowerLens AI 도우미 (클릭하여 대화하기)",
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFF1E293B), Color(0xFF0F172A)],
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                            ),
+                            borderRadius: BorderRadius.circular(28),
+                            border: Border.all(
+                              color: presenceColor,
+                              width: 1.8,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: presenceColor.withValues(alpha: 0.45),
+                                blurRadius: 16,
+                                spreadRadius: 2,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              // Lensy stays a recognizable full-body companion.
+                              // The desktop default intentionally has no permanent
+                              // title/card copy; the contextual speech bubble is
+                              // the only explanatory surface.
+                              _buildRobotCharacter(t, isBlinking),
+                              const SizedBox(width: 4),
+                              Container(
+                                width: 7,
+                                height: 7,
+                                decoration: BoxDecoration(
+                                  color: presenceColor,
+                                  shape: BoxShape.circle,
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: presenceColor.withValues(
+                                        alpha: 0.75,
+                                      ),
+                                      blurRadius: 7,
+                                    ),
+                                  ],
+                                ),
+                              ),
+
+                              if (widget.alertCount != null &&
+                                  widget.alertCount! > 0) ...[
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.amberAccent,
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Text(
+                                    "${widget.alertCount}",
+                                    style: const TextStyle(
+                                      color: Color(0xFF0F172A),
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 10,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 4),
+
+                  // Ground Soft Hover Shadow
+                  Transform.scale(
+                    scaleX: shadowScale,
+                    scaleY: 0.6,
+                    child: Container(
+                      width: widget.isMobile ? 36 : 60,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(
+                          alpha: 0.35 * shadowScale,
+                        ),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          );
         },
       ),
     );
@@ -281,6 +321,8 @@ class _PowerLensAIFloatingButtonState extends State<PowerLensAIFloatingButton>
     switch (widget.presenceState.toLowerCase()) {
       case 'thinking':
         return const Color(0xFFF59E0B);
+      case 'warning':
+        return const Color(0xFFF97316);
       case 'speaking':
         return const Color(0xFF38BDF8);
       case 'pointing':
@@ -404,6 +446,7 @@ class _PowerLensAIFloatingButtonState extends State<PowerLensAIFloatingButton>
     final isThinking = state == 'thinking';
     final isSpeaking = state == 'speaking';
     final isSuccess = state == 'success';
+    final isWarning = state == 'warning';
 
     return SizedBox(
       width: 44,
@@ -515,6 +558,16 @@ class _PowerLensAIFloatingButtonState extends State<PowerLensAIFloatingButton>
               right: -8,
               top: -1,
               child: Icon(Icons.check_circle, size: 14, color: stateColor),
+            ),
+          if (isWarning)
+            Positioned(
+              right: -8,
+              top: -1,
+              child: Icon(
+                Icons.warning_amber_rounded,
+                size: 14,
+                color: stateColor,
+              ),
             ),
 
           // Ear bolts

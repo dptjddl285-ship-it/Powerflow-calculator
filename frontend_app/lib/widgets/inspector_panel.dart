@@ -76,24 +76,56 @@ class _InspectorPanelState extends State<InspectorPanel> {
       return;
     }
 
-    labelCtrl = TextEditingController(text: e.label.isNotEmpty ? e.label : e.id);
-    vCtrl = TextEditingController(text: e.vPu.toString());
+    labelCtrl = TextEditingController(
+      text: e.label.isNotEmpty ? e.label : e.id,
+    );
+    vCtrl = TextEditingController(
+      text: _hasParameterEvidence(e, 'vPu') ? e.vPu.toString() : '',
+    );
 
     final double pVal = useMw ? (e.pPu * widget.sBase) : e.pPu;
     final double qVal = useMw ? (e.qPu * widget.sBase) : e.qPu;
-    pCtrl = TextEditingController(text: _formatNum(pVal));
-    qCtrl = TextEditingController(text: _formatNum(qVal));
+    pCtrl = TextEditingController(
+      text: _hasParameterEvidence(e, 'pPu') ? _formatNum(pVal) : '',
+    );
+    qCtrl = TextEditingController(
+      text: _hasParameterEvidence(e, 'qPu') ? _formatNum(qVal) : '',
+    );
 
-    rCtrl = TextEditingController(text: e.rPu.toString());
-    xCtrl = TextEditingController(text: e.xPu.toString());
-    bCtrl = TextEditingController(text: e.bPu.toString());
-    thetaCtrl = TextEditingController(text: e.thetaDeg.toString());
-    tapCtrl = TextEditingController(text: e.tapRatio.toString());
+    rCtrl = TextEditingController(
+      text: _hasParameterEvidence(e, 'rPu') ? e.rPu.toString() : '',
+    );
+    xCtrl = TextEditingController(
+      text: _hasParameterEvidence(e, 'xPu') ? e.xPu.toString() : '',
+    );
+    bCtrl = TextEditingController(
+      text: _hasParameterEvidence(e, 'bPu') ? e.bPu.toString() : '',
+    );
+    thetaCtrl = TextEditingController(
+      text: _hasParameterEvidence(e, 'thetaDeg') ? e.thetaDeg.toString() : '',
+    );
+    tapCtrl = TextEditingController(
+      text: _hasParameterEvidence(e, 'tapRatio') ? e.tapRatio.toString() : '',
+    );
+  }
+
+  bool _hasParameterEvidence(DrawingElement element, String field) {
+    if (element.parameterInputFields.contains(field)) return true;
+    if (element.parameterStatus == 'VALID' &&
+        element.parameterMissingFields.isEmpty) {
+      return true;
+    }
+    return element.parameterStatus == 'MISSING' &&
+        element.parameterMissingFields.isNotEmpty &&
+        !element.parameterMissingFields.contains(field);
   }
 
   String _formatNum(double v) {
     if (v == v.roundToDouble()) return v.toInt().toString();
-    return v.toStringAsFixed(4).replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '');
+    return v
+        .toStringAsFixed(4)
+        .replaceAll(RegExp(r'0+$'), '')
+        .replaceAll(RegExp(r'\.$'), '');
   }
 
   @override
@@ -111,7 +143,11 @@ class _InspectorPanelState extends State<InspectorPanel> {
     void updateIfDifferent(TextEditingController ctrl, double modelVal) {
       final text = ctrl.text.trim();
       final parsed = double.tryParse(text);
-      if (text.endsWith('.') || text == '-' || text == '-0' || text.endsWith('.0') || text.isEmpty) {
+      if (text.endsWith('.') ||
+          text == '-' ||
+          text == '-0' ||
+          text.endsWith('.0') ||
+          text.isEmpty) {
         if (parsed != null && (parsed - modelVal).abs() < 1e-6) {
           return;
         }
@@ -124,16 +160,20 @@ class _InspectorPanelState extends State<InspectorPanel> {
       }
     }
 
-    updateIfDifferent(vCtrl, e.vPu);
+    if (_hasParameterEvidence(e, 'vPu')) updateIfDifferent(vCtrl, e.vPu);
     final double pVal = useMw ? (e.pPu * widget.sBase) : e.pPu;
     final double qVal = useMw ? (e.qPu * widget.sBase) : e.qPu;
-    updateIfDifferent(pCtrl, pVal);
-    updateIfDifferent(qCtrl, qVal);
-    updateIfDifferent(rCtrl, e.rPu);
-    updateIfDifferent(xCtrl, e.xPu);
-    updateIfDifferent(bCtrl, e.bPu);
-    updateIfDifferent(thetaCtrl, e.thetaDeg);
-    updateIfDifferent(tapCtrl, e.tapRatio);
+    if (_hasParameterEvidence(e, 'pPu')) updateIfDifferent(pCtrl, pVal);
+    if (_hasParameterEvidence(e, 'qPu')) updateIfDifferent(qCtrl, qVal);
+    if (_hasParameterEvidence(e, 'rPu')) updateIfDifferent(rCtrl, e.rPu);
+    if (_hasParameterEvidence(e, 'xPu')) updateIfDifferent(xCtrl, e.xPu);
+    if (_hasParameterEvidence(e, 'bPu')) updateIfDifferent(bCtrl, e.bPu);
+    if (_hasParameterEvidence(e, 'thetaDeg')) {
+      updateIfDifferent(thetaCtrl, e.thetaDeg);
+    }
+    if (_hasParameterEvidence(e, 'tapRatio')) {
+      updateIfDifferent(tapCtrl, e.tapRatio);
+    }
   }
 
   @override
@@ -162,20 +202,35 @@ class _InspectorPanelState extends State<InspectorPanel> {
     if (el.type != Tool.line) return false;
     DrawingElement? startEl;
     DrawingElement? endEl;
-    try { startEl = widget.elements.firstWhere((e) => e.id == el.startElementId); } catch (_) {}
-    try { endEl = widget.elements.firstWhere((e) => e.id == el.endElementId); } catch (_) {}
+    try {
+      startEl = widget.elements.firstWhere((e) => e.id == el.startElementId);
+    } catch (_) {}
+    try {
+      endEl = widget.elements.firstWhere((e) => e.id == el.endElementId);
+    } catch (_) {}
 
     // Exclude generator feeder leads
-    final bool isGenLead = startEl?.type == Tool.generator || endEl?.type == Tool.generator ||
-        el.label.contains("↔ G_") || el.label.contains("G_") || (el.id.startsWith("lead_") && el.id.contains("gen"));
+    final bool isGenLead =
+        startEl?.type == Tool.generator ||
+        endEl?.type == Tool.generator ||
+        el.label.contains("↔ G_") ||
+        el.label.contains("G_") ||
+        (el.id.startsWith("lead_") && el.id.contains("gen"));
     if (isGenLead) return false;
 
     // Exclude load feeder leads
-    final bool isLoadLead = startEl?.type == Tool.load || endEl?.type == Tool.load ||
-        el.label.contains("↔ Load_") || el.label.contains("Load_") || (el.id.startsWith("lead_") && el.id.contains("load"));
+    final bool isLoadLead =
+        startEl?.type == Tool.load ||
+        endEl?.type == Tool.load ||
+        el.label.contains("↔ Load_") ||
+        el.label.contains("Load_") ||
+        (el.id.startsWith("lead_") && el.id.contains("load"));
     if (isLoadLead) return false;
 
-    if (el.id.startsWith("lead_") || el.label.contains("↔ Load_") || el.label.contains("↔ G_")) return false;
+    if (el.id.startsWith("lead_") ||
+        el.label.contains("↔ Load_") ||
+        el.label.contains("↔ G_"))
+      return false;
 
     // Transformer branches and transmission lines are both included
     return true;
@@ -183,20 +238,27 @@ class _InspectorPanelState extends State<InspectorPanel> {
 
   Widget _buildSystemOverview() {
     final busCount = widget.elements.where((e) => e.type == Tool.bus).length;
-    final genCount = widget.elements.where((e) => e.type == Tool.generator).length;
+    final genCount = widget.elements
+        .where((e) => e.type == Tool.generator)
+        .length;
     final loadCount = widget.elements.where((e) => e.type == Tool.load).length;
     int lineCount = 0;
     if (widget.simulationResult != null) {
       if (widget.simulationResult!['total_branches'] is num) {
         lineCount = (widget.simulationResult!['total_branches'] as num).toInt();
-      } else if (widget.simulationResult!['line_results'] is List && (widget.simulationResult!['line_results'] as List).isNotEmpty) {
+      } else if (widget.simulationResult!['line_results'] is List &&
+          (widget.simulationResult!['line_results'] as List).isNotEmpty) {
         lineCount = (widget.simulationResult!['line_results'] as List).length;
       }
     }
     if (lineCount == 0) {
-      lineCount = widget.elements.where(_isActualTransmissionOrTransformerLine).length;
+      lineCount = widget.elements
+          .where(_isActualTransmissionOrTransformerLine)
+          .length;
     }
-    final transCount = widget.elements.where((e) => e.type == Tool.transformer).length;
+    final transCount = widget.elements
+        .where((e) => e.type == Tool.transformer)
+        .length;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -205,11 +267,19 @@ class _InspectorPanelState extends State<InspectorPanel> {
         children: [
           Row(
             children: [
-              const Icon(Icons.dashboard_outlined, color: Colors.blueGrey, size: 20),
+              const Icon(
+                Icons.dashboard_outlined,
+                color: Colors.blueGrey,
+                size: 20,
+              ),
               const SizedBox(width: 8),
               const Text(
                 "계통 개요 & 안내",
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF0F172A),
+                ),
               ),
               const Spacer(),
               IconButton(
@@ -220,7 +290,7 @@ class _InspectorPanelState extends State<InspectorPanel> {
             ],
           ),
           const Divider(height: 20),
-          
+
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
@@ -231,14 +301,31 @@ class _InspectorPanelState extends State<InspectorPanel> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text("기준 용량 (Sbase)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                Text("${widget.sBase.toStringAsFixed(0)} MVA", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.blue.shade900)),
+                const Text(
+                  "기준 용량 (Sbase)",
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                ),
+                Text(
+                  "${widget.sBase.toStringAsFixed(0)} MVA",
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue.shade900,
+                  ),
+                ),
               ],
             ),
           ),
           const SizedBox(height: 12),
 
-          const Text("계통 구성 요소", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey)),
+          const Text(
+            "계통 구성 요소",
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey,
+            ),
+          ),
           const SizedBox(height: 8),
           Wrap(
             spacing: 8,
@@ -254,24 +341,37 @@ class _InspectorPanelState extends State<InspectorPanel> {
           const SizedBox(height: 20),
 
           InkWell(
-            onTap: () => setState(() => _isShortcutsExpanded = !_isShortcutsExpanded),
+            onTap: () =>
+                setState(() => _isShortcutsExpanded = !_isShortcutsExpanded),
             borderRadius: BorderRadius.circular(6),
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Text("⌨️ 키보드 단축키", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey)),
+                  const Text(
+                    "⌨️ 키보드 단축키",
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.grey,
+                    ),
+                  ),
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
                         _isShortcutsExpanded ? "접기" : "펼치기",
-                        style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey.shade600,
+                        ),
                       ),
                       const SizedBox(width: 2),
                       Icon(
-                        _isShortcutsExpanded ? Icons.expand_less : Icons.expand_more,
+                        _isShortcutsExpanded
+                            ? Icons.expand_less
+                            : Icons.expand_more,
                         size: 18,
                         color: Colors.grey,
                       ),
@@ -311,7 +411,9 @@ class _InspectorPanelState extends State<InspectorPanel> {
               style: OutlinedButton.styleFrom(
                 foregroundColor: Colors.redAccent,
                 side: const BorderSide(color: Colors.redAccent),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
               icon: const Icon(Icons.delete_sweep_outlined, size: 18),
               label: const Text("도면 전체 초기화"),
@@ -334,15 +436,27 @@ class _InspectorPanelState extends State<InspectorPanel> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Container(width: 6, height: 6, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
           const SizedBox(width: 6),
           Text(
             "$label: ",
-            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: color),
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
           ),
           Text(
             "$count",
-            style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: color),
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
           ),
         ],
       ),
@@ -364,7 +478,11 @@ class _InspectorPanelState extends State<InspectorPanel> {
             ),
             child: Text(
               keys,
-              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+              style: const TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF0F172A),
+              ),
             ),
           ),
           Text(
@@ -388,37 +506,72 @@ class _InspectorPanelState extends State<InspectorPanel> {
     DrawingElement? lineStartEl;
     DrawingElement? lineEndEl;
     if (e.type == Tool.line) {
-      try { lineStartEl = widget.elements.firstWhere((el) => el.id == e.startElementId); } catch (_) {}
-      try { lineEndEl = widget.elements.firstWhere((el) => el.id == e.endElementId); } catch (_) {}
+      try {
+        lineStartEl = widget.elements.firstWhere(
+          (el) => el.id == e.startElementId,
+        );
+      } catch (_) {}
+      try {
+        lineEndEl = widget.elements.firstWhere((el) => el.id == e.endElementId);
+      } catch (_) {}
     }
-    final sBusNum = _getBusNumDigits(lineStartEl?.label.isNotEmpty == true ? lineStartEl!.label : e.startElementId);
-    final eBusNum = _getBusNumDigits(lineEndEl?.label.isNotEmpty == true ? lineEndEl!.label : e.endElementId);
-    final bool isBothBuses = e.type == Tool.line && (
-        (lineStartEl?.type == Tool.bus && lineEndEl?.type == Tool.bus) ||
-        (sBusNum != null && eBusNum != null &&
-         lineStartEl?.type != Tool.generator && lineEndEl?.type != Tool.generator &&
-         lineStartEl?.type != Tool.load && lineEndEl?.type != Tool.load &&
-         lineStartEl?.type != Tool.transformer && lineEndEl?.type != Tool.transformer &&
-         !e.id.contains('trans') && !e.id.contains('load') && !e.id.contains('gen')) ||
-        (RegExp(r'^line_\d+_\d+$').hasMatch(e.id)) ||
-        (RegExp(r'^Line\s+\d+[-~]\d+').hasMatch(e.label))
+    final sBusNum = _getBusNumDigits(
+      lineStartEl?.label.isNotEmpty == true
+          ? lineStartEl!.label
+          : e.startElementId,
     );
-    final bool isGenLead = !isBothBuses && e.type == Tool.line && (
-        lineStartEl?.type == Tool.generator || lineEndEl?.type == Tool.generator ||
-        e.label.contains("↔ G_") || e.label.contains("G_") ||
-        (e.id.startsWith("lead_") && e.id.contains("gen"))
+    final eBusNum = _getBusNumDigits(
+      lineEndEl?.label.isNotEmpty == true ? lineEndEl!.label : e.endElementId,
     );
-    final bool isLoadLead = !isBothBuses && !isGenLead && e.type == Tool.line && (
-        lineStartEl?.type == Tool.load || lineEndEl?.type == Tool.load ||
-        e.label.contains("↔ Load_") || e.label.contains("Load_") ||
-        (e.id.startsWith("lead_") && e.id.contains("load"))
-    );
-    final bool isTransLead = !isBothBuses && !isGenLead && !isLoadLead && e.type == Tool.line && (
-        lineStartEl?.type == Tool.transformer || lineEndEl?.type == Tool.transformer ||
-        (e.id.startsWith("lead_") && e.id.contains("trans")) ||
-        (e.label.contains("↔ T") && !e.label.contains("Load") && !e.label.contains("G_"))
-    );
-    final bool hasPowerFields = (e.type == Tool.generator || e.type == Tool.load || isGenLead || isLoadLead);
+    final bool isBothBuses =
+        e.type == Tool.line &&
+        ((lineStartEl?.type == Tool.bus && lineEndEl?.type == Tool.bus) ||
+            (sBusNum != null &&
+                eBusNum != null &&
+                lineStartEl?.type != Tool.generator &&
+                lineEndEl?.type != Tool.generator &&
+                lineStartEl?.type != Tool.load &&
+                lineEndEl?.type != Tool.load &&
+                lineStartEl?.type != Tool.transformer &&
+                lineEndEl?.type != Tool.transformer &&
+                !e.id.contains('trans') &&
+                !e.id.contains('load') &&
+                !e.id.contains('gen')) ||
+            (RegExp(r'^line_\d+_\d+$').hasMatch(e.id)) ||
+            (RegExp(r'^Line\s+\d+[-~]\d+').hasMatch(e.label)));
+    final bool isGenLead =
+        !isBothBuses &&
+        e.type == Tool.line &&
+        (lineStartEl?.type == Tool.generator ||
+            lineEndEl?.type == Tool.generator ||
+            e.label.contains("↔ G_") ||
+            e.label.contains("G_") ||
+            (e.id.startsWith("lead_") && e.id.contains("gen")));
+    final bool isLoadLead =
+        !isBothBuses &&
+        !isGenLead &&
+        e.type == Tool.line &&
+        (lineStartEl?.type == Tool.load ||
+            lineEndEl?.type == Tool.load ||
+            e.label.contains("↔ Load_") ||
+            e.label.contains("Load_") ||
+            (e.id.startsWith("lead_") && e.id.contains("load")));
+    final bool isTransLead =
+        !isBothBuses &&
+        !isGenLead &&
+        !isLoadLead &&
+        e.type == Tool.line &&
+        (lineStartEl?.type == Tool.transformer ||
+            lineEndEl?.type == Tool.transformer ||
+            (e.id.startsWith("lead_") && e.id.contains("trans")) ||
+            (e.label.contains("↔ T") &&
+                !e.label.contains("Load") &&
+                !e.label.contains("G_")));
+    final bool hasPowerFields =
+        (e.type == Tool.generator ||
+        e.type == Tool.load ||
+        isGenLead ||
+        isLoadLead);
 
     Color typeColor = Colors.blueGrey;
     String typeName = "부품";
@@ -483,12 +636,20 @@ class _InspectorPanelState extends State<InspectorPanel> {
                   children: [
                     Text(
                       title,
-                      style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF0F172A),
+                      ),
                       overflow: TextOverflow.ellipsis,
                     ),
                     Text(
                       typeName,
-                      style: TextStyle(fontSize: 11, color: typeColor, fontWeight: FontWeight.w600),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: typeColor,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ],
                 ),
@@ -497,9 +658,16 @@ class _InspectorPanelState extends State<InspectorPanel> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   if (widget.onRotateSelected != null &&
-                      (e.type == Tool.bus || e.type == Tool.generator || e.type == Tool.load || e.type == Tool.transformer))
+                      (e.type == Tool.bus ||
+                          e.type == Tool.generator ||
+                          e.type == Tool.load ||
+                          e.type == Tool.transformer))
                     IconButton(
-                      icon: const Icon(Icons.rotate_right, size: 20, color: Color(0xFF2563EB)),
+                      icon: const Icon(
+                        Icons.rotate_right,
+                        size: 20,
+                        color: Color(0xFF2563EB),
+                      ),
                       tooltip: "90° 회전 (Ctrl+R)",
                       onPressed: widget.onRotateSelected,
                     ),
@@ -520,14 +688,15 @@ class _InspectorPanelState extends State<InspectorPanel> {
           ),
           const Divider(height: 20),
 
-
-
           _buildSimulationResultBox(e),
 
           SwitchListTile(
             dense: true,
             contentPadding: EdgeInsets.zero,
-            title: const Text("도면 위에 값 표시", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+            title: const Text(
+              "도면 위에 값 표시",
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+            ),
             value: e.showInfo,
             activeColor: Colors.blueAccent,
             onChanged: (v) {
@@ -538,7 +707,14 @@ class _InspectorPanelState extends State<InspectorPanel> {
 
           if (hasPowerFields) ...[
             const SizedBox(height: 6),
-            const Text("전력 표시/입력 단위", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.blueGrey)),
+            const Text(
+              "전력 표시/입력 단위",
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+                color: Colors.blueGrey,
+              ),
+            ),
             const SizedBox(height: 4),
             _buildUnitToggle(),
             const SizedBox(height: 10),
@@ -554,7 +730,9 @@ class _InspectorPanelState extends State<InspectorPanel> {
                   labelText: "버스 번호 / 라벨",
                   helperText: "예: 1, 2, 3...",
                   isDense: true,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
                 onChanged: (text) {
                   e.label = text;
@@ -566,7 +744,10 @@ class _InspectorPanelState extends State<InspectorPanel> {
             SwitchListTile(
               dense: true,
               contentPadding: EdgeInsets.zero,
-              title: const Text("슬랙 모선 (Slack/Swing)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+              title: const Text(
+                "슬랙 모선 (Slack/Swing)",
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+              ),
               subtitle: Text(
                 e.isSlack ? "기준 모선 (위상 θ=0° 고정)" : "일반 모선",
                 style: const TextStyle(fontSize: 10),
@@ -575,7 +756,9 @@ class _InspectorPanelState extends State<InspectorPanel> {
               activeColor: Colors.redAccent,
               onChanged: (v) {
                 if (v) {
-                  for (var b in widget.elements.where((el) => el.type == Tool.bus)) {
+                  for (var b in widget.elements.where(
+                    (el) => el.type == Tool.bus,
+                  )) {
                     b.isSlack = false;
                   }
                 }
@@ -602,7 +785,11 @@ class _InspectorPanelState extends State<InspectorPanel> {
                         "🚩 슬랙(Slack / 기준) 모선\n"
                         "• 계통의 기준 모선으로 위상각(θ = 0.0°)이 고정됩니다.\n"
                         "• 발전량은 계통 전체 수급 불균형과 손실을 보상하도록 조류계산 시 자동 결정됩니다.",
-                        style: TextStyle(fontSize: 11, color: Colors.redAccent, height: 1.4),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.redAccent,
+                          height: 1.4,
+                        ),
                       ),
                     ),
                   ],
@@ -614,14 +801,20 @@ class _InspectorPanelState extends State<InspectorPanel> {
               unit: "pu",
               controller: vCtrl,
               helperText: "기준 공칭 전압 대비 비율 (기본 1.0)",
-              onChanged: (val) => e.vPu = val,
+              onChanged: (val) {
+                e.vPu = val;
+                e.markParameterInput('vPu');
+              },
             ),
             _buildNumberField(
               label: "기준 위상각 θ",
               unit: "deg",
               controller: thetaCtrl,
               helperText: "기준 모선은 통상 0.0°",
-              onChanged: (val) => e.thetaDeg = val,
+              onChanged: (val) {
+                e.thetaDeg = val;
+                e.markParameterInput('thetaDeg');
+              },
             ),
           ],
 
@@ -634,7 +827,9 @@ class _InspectorPanelState extends State<InspectorPanel> {
                 decoration: InputDecoration(
                   labelText: "발전기 라벨 (식별자)",
                   isDense: true,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
                 onChanged: (text) {
                   e.label = text;
@@ -645,16 +840,25 @@ class _InspectorPanelState extends State<InspectorPanel> {
             SwitchListTile(
               dense: true,
               contentPadding: EdgeInsets.zero,
-              title: const Text("슬랙 모선 발전기 (Slack/Swing)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+              title: const Text(
+                "슬랙 모선 발전기 (Slack/Swing)",
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+              ),
               subtitle: Text(
-                e.isSlack ? "기준 모선 (위상 θ=0°, 손실/부하 자동분담)" : (e.isSynchronousCondenser ? "동기조상기 (P=0 MW 고정, 전압 V 제어)" : "PV 발전기 (유효전력 P, 전압 V 지정)"),
+                e.isSlack
+                    ? "기준 모선 (위상 θ=0°, 손실/부하 자동분담)"
+                    : (e.isSynchronousCondenser
+                          ? "동기조상기 (P=0 MW 고정, 전압 V 제어)"
+                          : "PV 발전기 (유효전력 P, 전압 V 지정)"),
                 style: const TextStyle(fontSize: 10),
               ),
               value: e.isSlack,
               activeColor: Colors.redAccent,
               onChanged: (v) {
                 if (v) {
-                  for (var g in widget.elements.where((el) => el.type == Tool.generator)) {
+                  for (var g in widget.elements.where(
+                    (el) => el.type == Tool.generator,
+                  )) {
                     g.isSlack = false;
                   }
                   e.isSynchronousCondenser = false;
@@ -667,9 +871,14 @@ class _InspectorPanelState extends State<InspectorPanel> {
               SwitchListTile(
                 dense: true,
                 contentPadding: EdgeInsets.zero,
-                title: const Text("동기조상기 모드 (SC)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                title: const Text(
+                  "동기조상기 모드 (SC)",
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                ),
                 subtitle: Text(
-                  e.isSynchronousCondenser ? "P=0 MW 고정 (전압 V 제어를 위한 무효전력 공급)" : "일반 PV 발전기 (유효전력 P, 전압 V 지정)",
+                  e.isSynchronousCondenser
+                      ? "P=0 MW 고정 (전압 V 제어를 위한 무효전력 공급)"
+                      : "일반 PV 발전기 (유효전력 P, 전압 V 지정)",
                   style: const TextStyle(fontSize: 10),
                 ),
                 value: e.isSynchronousCondenser,
@@ -686,7 +895,9 @@ class _InspectorPanelState extends State<InspectorPanel> {
                   } else {
                     if (e.pPu == 0.0) {
                       e.pPu = 1.0;
-                      pCtrl.text = useMw ? (1.0 * widget.sBase).toStringAsFixed(1) : "1.0";
+                      pCtrl.text = useMw
+                          ? (1.0 * widget.sBase).toStringAsFixed(1)
+                          : "1.0";
                     }
                     if (e.label.startsWith("SC_") || e.label.startsWith("SC")) {
                       e.label = e.label.replaceFirst("SC", "G");
@@ -717,7 +928,11 @@ class _InspectorPanelState extends State<InspectorPanel> {
                         "• 전압(V)과 기준 위상(θ=0°)만 고정 제약조건입니다.\n"
                         "• 유효 발전량(P) 및 무효 발전량(Q)은 조류계산 시 전체 계통 수급 균형(부하 + 손실 - 타발전기)에 의해 자동 산출됩니다.\n"
                         "• 아래 표시된 수치는 엑셀에 저장되어 있던 참고값(직전 계산값)이며, 조류계산 시 입력 제약으로 쓰이지 않고 실제 수렴 결과값으로 갱신됩니다.",
-                        style: TextStyle(fontSize: 11, color: Colors.redAccent, height: 1.4),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.redAccent,
+                          height: 1.4,
+                        ),
                       ),
                     ),
                   ],
@@ -743,7 +958,11 @@ class _InspectorPanelState extends State<InspectorPanel> {
                         "⚡ 동기조상기 (Synchronous Condenser)\n"
                         "• 유효 발전 출력 P = 0 MW (터빈 없는 전압 조정기)\n"
                         "• 목표 단자 전압(V)을 유지하기 위해 필요한 무효전력(Q)을 조류계산이 자동으로 공급/흡수 계산합니다.",
-                        style: TextStyle(fontSize: 11, color: Colors.blueAccent, height: 1.4),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.blueAccent,
+                          height: 1.4,
+                        ),
                       ),
                     ),
                   ],
@@ -755,7 +974,10 @@ class _InspectorPanelState extends State<InspectorPanel> {
               unit: "pu",
               controller: vCtrl,
               helperText: "발전기가 유지할 전압 (예: 1.04)",
-              onChanged: (val) => e.vPu = val,
+              onChanged: (val) {
+                e.vPu = val;
+                e.markParameterInput('vPu');
+              },
             ),
             if (e.isSlack) ...[
               Padding(
@@ -773,41 +995,73 @@ class _InspectorPanelState extends State<InspectorPanel> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          const Text("유효 발전량 P (슬랙)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.black87)),
+                          const Text(
+                            "유효 발전량 P (슬랙)",
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.black87,
+                            ),
+                          ),
                           Text(
-                            e.pPu == 0 ? "계산 전 (미지수)" : "${(e.pPu * widget.sBase).toStringAsFixed(2)} MW",
+                            e.pPu == 0
+                                ? "계산 전 (미지수)"
+                                : "${(e.pPu * widget.sBase).toStringAsFixed(2)} MW",
                             style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.bold,
-                              color: e.pPu == 0 ? Colors.grey : Colors.redAccent,
+                              color: e.pPu == 0
+                                  ? Colors.grey
+                                  : Colors.redAccent,
                             ),
                           ),
                         ],
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        e.pPu == 0 ? "• 조류계산 실행 시 계통 전체 수급 균형에 맞춰 자동 산출됩니다." : "• 조류계산 수렴 결과 산출된 슬랙 유효 발전량입니다.",
-                        style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                        e.pPu == 0
+                            ? "• 조류계산 실행 시 계통 전체 수급 균형에 맞춰 자동 산출됩니다."
+                            : "• 조류계산 수렴 결과 산출된 슬랙 유효 발전량입니다.",
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey.shade600,
+                        ),
                       ),
                       const Divider(height: 16),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          const Text("무효 발전량 Q (슬랙)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.black87)),
+                          const Text(
+                            "무효 발전량 Q (슬랙)",
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.black87,
+                            ),
+                          ),
                           Text(
-                            e.qPu == 0 ? "계산 전 (미지수)" : "${(e.qPu * widget.sBase).toStringAsFixed(2)} MVAR",
+                            e.qPu == 0
+                                ? "계산 전 (미지수)"
+                                : "${(e.qPu * widget.sBase).toStringAsFixed(2)} MVAR",
                             style: TextStyle(
                               fontSize: 13,
                               fontWeight: FontWeight.bold,
-                              color: e.qPu == 0 ? Colors.grey : Colors.blueAccent,
+                              color: e.qPu == 0
+                                  ? Colors.grey
+                                  : Colors.blueAccent,
                             ),
                           ),
                         ],
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        e.qPu == 0 ? "• 조류계산 실행 시 기준 단자 전압 유지를 위해 자동 산출됩니다." : "• 조류계산 수렴 결과 산출된 슬랙 무효 발전량입니다.",
-                        style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                        e.qPu == 0
+                            ? "• 조류계산 실행 시 기준 단자 전압 유지를 위해 자동 산출됩니다."
+                            : "• 조류계산 수렴 결과 산출된 슬랙 무효 발전량입니다.",
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey.shade600,
+                        ),
                       ),
                     ],
                   ),
@@ -815,19 +1069,33 @@ class _InspectorPanelState extends State<InspectorPanel> {
               ),
             ] else ...[
               _buildNumberField(
-                label: e.isSynchronousCondenser ? "유효 발전 출력 P (0 MW 고정)" : "유효 발전 출력 P",
+                label: e.isSynchronousCondenser
+                    ? "유효 발전 출력 P (0 MW 고정)"
+                    : "유효 발전 출력 P",
                 unit: useMw ? "MW" : "pu",
                 controller: pCtrl,
                 enabled: !e.isSynchronousCondenser,
-                helperText: useMw ? "(= ${e.pPu.toStringAsFixed(3)} pu)" : "(= ${(e.pPu * widget.sBase).toStringAsFixed(1)} MW)",
-                onChanged: (val) => e.pPu = useMw ? (val / widget.sBase) : val,
+                helperText: useMw
+                    ? "(= ${e.pPu.toStringAsFixed(3)} pu)"
+                    : "(= ${(e.pPu * widget.sBase).toStringAsFixed(1)} MW)",
+                onChanged: (val) {
+                  e.pPu = useMw ? (val / widget.sBase) : val;
+                  e.markParameterInput('pPu');
+                },
               ),
               _buildNumberField(
-                label: e.isSynchronousCondenser ? "무효 발전 출력 Q (계산 시 자동 산출)" : "무효 발전 출력 Q",
+                label: e.isSynchronousCondenser
+                    ? "무효 발전 출력 Q (계산 시 자동 산출)"
+                    : "무효 발전 출력 Q",
                 unit: useMw ? "MVAR" : "pu",
                 controller: qCtrl,
-                helperText: useMw ? "(= ${e.qPu.toStringAsFixed(3)} pu)" : "(= ${(e.qPu * widget.sBase).toStringAsFixed(1)} MVAR)",
-                onChanged: (val) => e.qPu = useMw ? (val / widget.sBase) : val,
+                helperText: useMw
+                    ? "(= ${e.qPu.toStringAsFixed(3)} pu)"
+                    : "(= ${(e.qPu * widget.sBase).toStringAsFixed(1)} MVAR)",
+                onChanged: (val) {
+                  e.qPu = useMw ? (val / widget.sBase) : val;
+                  e.markParameterInput('qPu');
+                },
               ),
             ],
             if (e.isSlack)
@@ -836,7 +1104,10 @@ class _InspectorPanelState extends State<InspectorPanel> {
                 unit: "deg",
                 controller: thetaCtrl,
                 helperText: "슬랙 모선 기준각 (기본 0°)",
-                onChanged: (val) => e.thetaDeg = val,
+                onChanged: (val) {
+                  e.thetaDeg = val;
+                  e.markParameterInput('thetaDeg');
+                },
               ),
           ],
 
@@ -849,7 +1120,9 @@ class _InspectorPanelState extends State<InspectorPanel> {
                 decoration: InputDecoration(
                   labelText: "부하 라벨 (식별자)",
                   isDense: true,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
                 onChanged: (text) {
                   e.label = text;
@@ -861,15 +1134,25 @@ class _InspectorPanelState extends State<InspectorPanel> {
               label: "소비 유효전력 P",
               unit: useMw ? "MW" : "pu",
               controller: pCtrl,
-              helperText: useMw ? "(= ${e.pPu.toStringAsFixed(3)} pu)" : "(= ${(e.pPu * widget.sBase).toStringAsFixed(1)} MW)",
-              onChanged: (val) => e.pPu = useMw ? (val / widget.sBase) : val,
+              helperText: useMw
+                  ? "(= ${e.pPu.toStringAsFixed(3)} pu)"
+                  : "(= ${(e.pPu * widget.sBase).toStringAsFixed(1)} MW)",
+              onChanged: (val) {
+                e.pPu = useMw ? (val / widget.sBase) : val;
+                e.markParameterInput('pPu');
+              },
             ),
             _buildNumberField(
               label: "소비 무효전력 Q",
               unit: useMw ? "MVAR" : "pu",
               controller: qCtrl,
-              helperText: useMw ? "(= ${e.qPu.toStringAsFixed(3)} pu)" : "(= ${(e.qPu * widget.sBase).toStringAsFixed(1)} MVAR)",
-              onChanged: (val) => e.qPu = useMw ? (val / widget.sBase) : val,
+              helperText: useMw
+                  ? "(= ${e.qPu.toStringAsFixed(3)} pu)"
+                  : "(= ${(e.qPu * widget.sBase).toStringAsFixed(1)} MVAR)",
+              onChanged: (val) {
+                e.qPu = useMw ? (val / widget.sBase) : val;
+                e.markParameterInput('qPu');
+              },
             ),
             const SizedBox(height: 8),
             Container(
@@ -884,11 +1167,19 @@ class _InspectorPanelState extends State<InspectorPanel> {
                 children: [
                   Row(
                     children: [
-                      const Icon(Icons.explore, size: 14, color: Color(0xFF059669)),
+                      const Icon(
+                        Icons.explore,
+                        size: 14,
+                        color: Color(0xFF059669),
+                      ),
                       const SizedBox(width: 4),
                       const Text(
                         "부하 화살표 방향",
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Color(0xFF334155)),
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
+                          color: Color(0xFF334155),
+                        ),
                       ),
                       const Spacer(),
                       InkWell(
@@ -899,7 +1190,10 @@ class _InspectorPanelState extends State<InspectorPanel> {
                           widget.onStateChanged();
                         },
                         child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
                           decoration: BoxDecoration(
                             color: const Color(0xFFE2E8F0),
                             borderRadius: BorderRadius.circular(4),
@@ -907,9 +1201,19 @@ class _InspectorPanelState extends State<InspectorPanel> {
                           child: const Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(Icons.rotate_right, size: 12, color: Color(0xFF475569)),
+                              Icon(
+                                Icons.rotate_right,
+                                size: 12,
+                                color: Color(0xFF475569),
+                              ),
                               SizedBox(width: 2),
-                              Text("90° 회전", style: TextStyle(fontSize: 10, color: Color(0xFF475569))),
+                              Text(
+                                "90° 회전",
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: Color(0xFF475569),
+                                ),
+                              ),
                             ],
                           ),
                         ),
@@ -919,9 +1223,15 @@ class _InspectorPanelState extends State<InspectorPanel> {
                   const SizedBox(height: 8),
                   Builder(
                     builder: (context) {
-                      final int qTurns = ((e.angle / (math.pi / 2)).round() % 4 + 4) % 4;
+                      final int qTurns =
+                          ((e.angle / (math.pi / 2)).round() % 4 + 4) % 4;
                       // 0: down, 1: left, 2: up, 3: right
-                      Widget dirBtn(String label, IconData icon, int targetTurns, double targetAngle) {
+                      Widget dirBtn(
+                        String label,
+                        IconData icon,
+                        int targetTurns,
+                        double targetAngle,
+                      ) {
                         final bool isCurrent = (qTurns == targetTurns);
                         return Expanded(
                           child: InkWell(
@@ -935,27 +1245,47 @@ class _InspectorPanelState extends State<InspectorPanel> {
                               padding: const EdgeInsets.symmetric(vertical: 6),
                               margin: const EdgeInsets.symmetric(horizontal: 2),
                               decoration: BoxDecoration(
-                                color: isCurrent ? const Color(0xFF059669) : Colors.white,
+                                color: isCurrent
+                                    ? const Color(0xFF059669)
+                                    : Colors.white,
                                 borderRadius: BorderRadius.circular(6),
                                 border: Border.all(
-                                  color: isCurrent ? const Color(0xFF059669) : const Color(0xFFCBD5E1),
+                                  color: isCurrent
+                                      ? const Color(0xFF059669)
+                                      : const Color(0xFFCBD5E1),
                                   width: isCurrent ? 1.5 : 1.0,
                                 ),
-                                boxShadow: isCurrent ? [
-                                  const BoxShadow(color: Color(0x33059669), blurRadius: 4, offset: Offset(0, 1))
-                                ] : null,
+                                boxShadow: isCurrent
+                                    ? [
+                                        const BoxShadow(
+                                          color: Color(0x33059669),
+                                          blurRadius: 4,
+                                          offset: Offset(0, 1),
+                                        ),
+                                      ]
+                                    : null,
                               ),
                               child: Column(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  Icon(icon, size: 16, color: isCurrent ? Colors.white : const Color(0xFF475569)),
+                                  Icon(
+                                    icon,
+                                    size: 16,
+                                    color: isCurrent
+                                        ? Colors.white
+                                        : const Color(0xFF475569),
+                                  ),
                                   const SizedBox(height: 2),
                                   Text(
                                     label,
                                     style: TextStyle(
                                       fontSize: 10,
-                                      fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
-                                      color: isCurrent ? Colors.white : const Color(0xFF475569),
+                                      fontWeight: isCurrent
+                                          ? FontWeight.bold
+                                          : FontWeight.normal,
+                                      color: isCurrent
+                                          ? Colors.white
+                                          : const Color(0xFF475569),
                                     ),
                                   ),
                                 ],
@@ -970,12 +1300,40 @@ class _InspectorPanelState extends State<InspectorPanel> {
                           dirBtn("아래 (↓)", Icons.arrow_downward, 0, 0.0),
                           dirBtn("위 (↑)", Icons.arrow_upward, 2, math.pi),
                           dirBtn("왼쪽 (←)", Icons.arrow_back, 1, math.pi / 2),
-                          dirBtn("오른쪽 (→)", Icons.arrow_forward, 3, -math.pi / 2),
+                          dirBtn(
+                            "오른쪽 (→)",
+                            Icons.arrow_forward,
+                            3,
+                            -math.pi / 2,
+                          ),
                         ],
                       );
                     },
                   ),
                 ],
+              ),
+            ),
+          ],
+
+          if (e.parameterStatus == 'MISSING') ...[
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.orange.shade300),
+              ),
+              child: Text(
+                'Excel 원본에 필수 제원이 누락되었습니다'
+                '${e.parameterMissingFields.isEmpty ? '' : ': ${e.parameterMissingFields.join(', ')}'}.'
+                ' 표시용 기본값은 계산 입력으로 사용하지 않습니다.',
+                style: TextStyle(
+                  color: Colors.orange.shade900,
+                  fontSize: 11,
+                  height: 1.35,
+                ),
               ),
             ),
           ],
@@ -993,7 +1351,11 @@ class _InspectorPanelState extends State<InspectorPanel> {
                 children: [
                   const Text(
                     "선로 형태 보정",
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF475569)),
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF475569),
+                    ),
                   ),
                   const SizedBox(height: 6),
                   Row(
@@ -1001,12 +1363,23 @@ class _InspectorPanelState extends State<InspectorPanel> {
                       Expanded(
                         child: OutlinedButton.icon(
                           icon: const Icon(Icons.timeline, size: 15),
-                          label: const Text("자연스런 직선", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                          label: const Text(
+                            "자연스런 직선",
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: const Color(0xFF2563EB),
                             side: const BorderSide(color: Color(0xFF2563EB)),
-                            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 6,
+                              horizontal: 2,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(6),
+                            ),
                           ),
                           onPressed: widget.onSmoothLine,
                         ),
@@ -1015,12 +1388,23 @@ class _InspectorPanelState extends State<InspectorPanel> {
                       Expanded(
                         child: OutlinedButton.icon(
                           icon: const Icon(Icons.alt_route, size: 15),
-                          label: const Text("90° 직각", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                          label: const Text(
+                            "90° 직각",
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
                           style: OutlinedButton.styleFrom(
                             foregroundColor: const Color(0xFFD97706),
                             side: const BorderSide(color: Color(0xFFD97706)),
-                            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 6,
+                              horizontal: 2,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(6),
+                            ),
                           ),
                           onPressed: widget.onStraightenLine,
                         ),
@@ -1032,8 +1416,18 @@ class _InspectorPanelState extends State<InspectorPanel> {
                     SizedBox(
                       width: double.infinity,
                       child: TextButton.icon(
-                        icon: const Icon(Icons.undo, size: 14, color: Colors.blueGrey),
-                        label: const Text("원본 손그림 복원", style: TextStyle(fontSize: 11, color: Colors.blueGrey)),
+                        icon: const Icon(
+                          Icons.undo,
+                          size: 14,
+                          color: Colors.blueGrey,
+                        ),
+                        label: const Text(
+                          "원본 손그림 복원",
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Colors.blueGrey,
+                          ),
+                        ),
                         style: TextButton.styleFrom(
                           padding: const EdgeInsets.symmetric(vertical: 4),
                           visualDensity: VisualDensity.compact,
@@ -1057,7 +1451,9 @@ class _InspectorPanelState extends State<InspectorPanel> {
                 decoration: InputDecoration(
                   labelText: "인입선 라벨 (식별자)",
                   isDense: true,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
                 onChanged: (text) {
                   e.label = text;
@@ -1069,11 +1465,16 @@ class _InspectorPanelState extends State<InspectorPanel> {
               label: "발전 주입 유효전력 P",
               unit: useMw ? "MW" : "pu",
               controller: pCtrl,
-              helperText: useMw ? "(= ${e.pPu.toStringAsFixed(3)} pu)" : "(= ${(e.pPu * widget.sBase).toStringAsFixed(1)} MW)",
+              helperText: useMw
+                  ? "(= ${e.pPu.toStringAsFixed(3)} pu)"
+                  : "(= ${(e.pPu * widget.sBase).toStringAsFixed(1)} MW)",
               onChanged: (val) {
                 e.pPu = useMw ? (val / widget.sBase) : val;
-                if (lineStartEl?.type == Tool.generator) lineStartEl!.pPu = e.pPu;
-                else if (lineEndEl?.type == Tool.generator) lineEndEl!.pPu = e.pPu;
+                e.markParameterInput('pPu');
+                if (lineStartEl?.type == Tool.generator)
+                  lineStartEl!.pPu = e.pPu;
+                else if (lineEndEl?.type == Tool.generator)
+                  lineEndEl!.pPu = e.pPu;
                 widget.onStateChanged();
               },
             ),
@@ -1081,11 +1482,16 @@ class _InspectorPanelState extends State<InspectorPanel> {
               label: "발전 무효전력 Q",
               unit: useMw ? "MVAR" : "pu",
               controller: qCtrl,
-              helperText: useMw ? "(= ${e.qPu.toStringAsFixed(3)} pu)" : "(= ${(e.qPu * widget.sBase).toStringAsFixed(1)} MVAR)",
+              helperText: useMw
+                  ? "(= ${e.qPu.toStringAsFixed(3)} pu)"
+                  : "(= ${(e.qPu * widget.sBase).toStringAsFixed(1)} MVAR)",
               onChanged: (val) {
                 e.qPu = useMw ? (val / widget.sBase) : val;
-                if (lineStartEl?.type == Tool.generator) lineStartEl!.qPu = e.qPu;
-                else if (lineEndEl?.type == Tool.generator) lineEndEl!.qPu = e.qPu;
+                e.markParameterInput('qPu');
+                if (lineStartEl?.type == Tool.generator)
+                  lineStartEl!.qPu = e.qPu;
+                else if (lineEndEl?.type == Tool.generator)
+                  lineEndEl!.qPu = e.qPu;
                 widget.onStateChanged();
               },
             ),
@@ -1094,14 +1500,20 @@ class _InspectorPanelState extends State<InspectorPanel> {
               unit: "pu",
               controller: rCtrl,
               helperText: "발전기 단자 직결 (기본 0.0)",
-              onChanged: (val) => e.rPu = val,
+              onChanged: (val) {
+                e.rPu = val;
+                e.markParameterInput('rPu');
+              },
             ),
             _buildNumberField(
               label: "인입선 직렬 리액턴스 X",
               unit: "pu",
               controller: xCtrl,
               helperText: "발전기 단자 직결 (기본 0.0)",
-              onChanged: (val) => e.xPu = val,
+              onChanged: (val) {
+                e.xPu = val;
+                e.markParameterInput('xPu');
+              },
             ),
           ] else if (e.type == Tool.line && isLoadLead) ...[
             Padding(
@@ -1111,7 +1523,9 @@ class _InspectorPanelState extends State<InspectorPanel> {
                 decoration: InputDecoration(
                   labelText: "인입선 라벨 (식별자)",
                   isDense: true,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
                 onChanged: (text) {
                   e.label = text;
@@ -1123,11 +1537,16 @@ class _InspectorPanelState extends State<InspectorPanel> {
               label: "부하 소비 유효전력 P",
               unit: useMw ? "MW" : "pu",
               controller: pCtrl,
-              helperText: useMw ? "(= ${e.pPu.toStringAsFixed(3)} pu)" : "(= ${(e.pPu * widget.sBase).toStringAsFixed(1)} MW)",
+              helperText: useMw
+                  ? "(= ${e.pPu.toStringAsFixed(3)} pu)"
+                  : "(= ${(e.pPu * widget.sBase).toStringAsFixed(1)} MW)",
               onChanged: (val) {
                 e.pPu = useMw ? (val / widget.sBase) : val;
-                if (lineStartEl?.type == Tool.load) lineStartEl!.pPu = e.pPu;
-                else if (lineEndEl?.type == Tool.load) lineEndEl!.pPu = e.pPu;
+                e.markParameterInput('pPu');
+                if (lineStartEl?.type == Tool.load)
+                  lineStartEl!.pPu = e.pPu;
+                else if (lineEndEl?.type == Tool.load)
+                  lineEndEl!.pPu = e.pPu;
                 widget.onStateChanged();
               },
             ),
@@ -1135,11 +1554,16 @@ class _InspectorPanelState extends State<InspectorPanel> {
               label: "부하 소비 무효전력 Q",
               unit: useMw ? "MVAR" : "pu",
               controller: qCtrl,
-              helperText: useMw ? "(= ${e.qPu.toStringAsFixed(3)} pu)" : "(= ${(e.qPu * widget.sBase).toStringAsFixed(1)} MVAR)",
+              helperText: useMw
+                  ? "(= ${e.qPu.toStringAsFixed(3)} pu)"
+                  : "(= ${(e.qPu * widget.sBase).toStringAsFixed(1)} MVAR)",
               onChanged: (val) {
                 e.qPu = useMw ? (val / widget.sBase) : val;
-                if (lineStartEl?.type == Tool.load) lineStartEl!.qPu = e.qPu;
-                else if (lineEndEl?.type == Tool.load) lineEndEl!.qPu = e.qPu;
+                e.markParameterInput('qPu');
+                if (lineStartEl?.type == Tool.load)
+                  lineStartEl!.qPu = e.qPu;
+                else if (lineEndEl?.type == Tool.load)
+                  lineEndEl!.qPu = e.qPu;
                 widget.onStateChanged();
               },
             ),
@@ -1148,14 +1572,20 @@ class _InspectorPanelState extends State<InspectorPanel> {
               unit: "pu",
               controller: rCtrl,
               helperText: "부하 단자 직결 (기본 0.0)",
-              onChanged: (val) => e.rPu = val,
+              onChanged: (val) {
+                e.rPu = val;
+                e.markParameterInput('rPu');
+              },
             ),
             _buildNumberField(
               label: "인입선 직렬 리액턴스 X",
               unit: "pu",
               controller: xCtrl,
               helperText: "부하 단자 직결 (기본 0.0)",
-              onChanged: (val) => e.xPu = val,
+              onChanged: (val) {
+                e.xPu = val;
+                e.markParameterInput('xPu');
+              },
             ),
           ] else if (e.type == Tool.line && isTransLead) ...[
             Padding(
@@ -1165,7 +1595,9 @@ class _InspectorPanelState extends State<InspectorPanel> {
                 decoration: InputDecoration(
                   labelText: "인입선 라벨 (식별자)",
                   isDense: true,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
                 onChanged: (text) {
                   e.label = text;
@@ -1178,14 +1610,20 @@ class _InspectorPanelState extends State<InspectorPanel> {
               unit: "pu",
               controller: rCtrl,
               helperText: "변압기 분기 직렬 저항 (엑셀 기준값 반영)",
-              onChanged: (val) => e.rPu = val,
+              onChanged: (val) {
+                e.rPu = val;
+                e.markParameterInput('rPu');
+              },
             ),
             _buildNumberField(
               label: "인입선 직렬 리액턴스 X",
               unit: "pu",
               controller: xCtrl,
               helperText: "변압기 분기 직렬 리액턴스 (엑셀 기준값 반영)",
-              onChanged: (val) => e.xPu = val,
+              onChanged: (val) {
+                e.xPu = val;
+                e.markParameterInput('xPu');
+              },
             ),
           ] else if (e.type == Tool.line) ...[
             Padding(
@@ -1195,7 +1633,9 @@ class _InspectorPanelState extends State<InspectorPanel> {
                 decoration: InputDecoration(
                   labelText: "선로 라벨 (식별자)",
                   isDense: true,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
                 onChanged: (text) {
                   e.label = text;
@@ -1222,7 +1662,11 @@ class _InspectorPanelState extends State<InspectorPanel> {
                         "⚡ 복회선 적용됨 (Double Circuit - ${e.circuitCount ?? 2}회선 병렬 등가)\n"
                         "• 모선 간 2가닥 이상의 선로가 병렬 연결된 복회선입니다.\n"
                         "• 저항(R)과 리액턴스(X)가 1/2로 병렬 합성(등가 임피던스)되어 조류계산에 반영됩니다.",
-                        style: const TextStyle(fontSize: 11, color: Colors.teal, height: 1.4),
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: Colors.teal,
+                          height: 1.4,
+                        ),
                       ),
                     ),
                   ],
@@ -1234,28 +1678,40 @@ class _InspectorPanelState extends State<InspectorPanel> {
               unit: "pu",
               controller: rCtrl,
               helperText: "선로 직렬 저항 (예: 0.02)",
-              onChanged: (val) => e.rPu = val,
+              onChanged: (val) {
+                e.rPu = val;
+                e.markParameterInput('rPu');
+              },
             ),
             _buildNumberField(
               label: "선로 리액턴스 X",
               unit: "pu",
               controller: xCtrl,
               helperText: "선로 직렬 유도 리액턴스 (예: 0.04)",
-              onChanged: (val) => e.xPu = val,
+              onChanged: (val) {
+                e.xPu = val;
+                e.markParameterInput('xPu');
+              },
             ),
             _buildNumberField(
               label: "대지 충전 서셉턴스 B",
               unit: "pu",
               controller: bCtrl,
               helperText: "장거리 선로 커패시턴스 (보통 0.0)",
-              onChanged: (val) => e.bPu = val,
+              onChanged: (val) {
+                e.bPu = val;
+                e.markParameterInput('bPu');
+              },
             ),
             _buildNumberField(
               label: "변압기 탭비 Tap",
               unit: "pu",
               controller: tapCtrl,
               helperText: "일반 선로는 1.0 (변압기 결합 시 탭비)",
-              onChanged: (val) => e.tapRatio = val,
+              onChanged: (val) {
+                e.tapRatio = val;
+                e.markParameterInput('tapRatio');
+              },
             ),
           ],
 
@@ -1268,7 +1724,9 @@ class _InspectorPanelState extends State<InspectorPanel> {
                 decoration: InputDecoration(
                   labelText: "변압기 라벨 (식별자)",
                   isDense: true,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
                 onChanged: (text) {
                   e.label = text;
@@ -1281,7 +1739,40 @@ class _InspectorPanelState extends State<InspectorPanel> {
               unit: "pu",
               controller: tapCtrl,
               helperText: "엑셀 transformer 시트 기준 (1.00 = 100%, 1.03 = 103%)",
-              onChanged: (val) => e.tapRatio = val,
+              onChanged: (val) {
+                e.tapRatio = val;
+                e.markParameterInput('tapRatio');
+              },
+            ),
+            _buildNumberField(
+              label: "변압기 저항 R",
+              unit: "pu",
+              controller: rCtrl,
+              helperText: "표시 기본값은 미검증입니다. 실제 계통 제원을 입력하세요.",
+              onChanged: (val) {
+                e.rPu = val;
+                e.markParameterInput('rPu');
+              },
+            ),
+            _buildNumberField(
+              label: "변압기 리액턴스 X",
+              unit: "pu",
+              controller: xCtrl,
+              helperText: "표시 기본값은 미검증입니다. 실제 계통 제원을 입력하세요.",
+              onChanged: (val) {
+                e.xPu = val;
+                e.markParameterInput('xPu');
+              },
+            ),
+            _buildNumberField(
+              label: "변압기 충전 서셉턴스 B",
+              unit: "pu",
+              controller: bCtrl,
+              helperText: "0도 유효값이면 직접 0을 입력하세요.",
+              onChanged: (val) {
+                e.bPu = val;
+                e.markParameterInput('bPu');
+              },
             ),
             const SizedBox(height: 12),
             Container(
@@ -1298,8 +1789,12 @@ class _InspectorPanelState extends State<InspectorPanel> {
                   SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      "변압기는 탭비(Tap)만 보유하며, 임피던스(저항 R, 리액턴스 X)는 엑셀 branch 시트 규격에 따라 변압기와 연결된 선로(Line)에 적용됩니다.",
-                      style: TextStyle(fontSize: 11, color: Color(0xFF1E293B), height: 1.4),
+                      "변압기는 실제 Excel 또는 사용자가 입력한 R/X/B/Tap 값으로 계산합니다. 화면에 표시된 기본 숫자는 검증된 제원이 아니며 계산 준비를 대신하지 않습니다.",
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF1E293B),
+                        height: 1.4,
+                      ),
                     ),
                   ),
                 ],
@@ -1316,7 +1811,9 @@ class _InspectorPanelState extends State<InspectorPanel> {
                 decoration: InputDecoration(
                   labelText: "라벨 텍스트 내용",
                   isDense: true,
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                 ),
                 onChanged: (text) {
                   e.label = text;
@@ -1337,10 +1834,15 @@ class _InspectorPanelState extends State<InspectorPanel> {
                 backgroundColor: Colors.red.shade600,
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
               icon: const Icon(Icons.delete_outline, size: 18),
-              label: const Text("선택 요소 삭제 (Delete)", style: TextStyle(fontWeight: FontWeight.bold)),
+              label: const Text(
+                "선택 요소 삭제 (Delete)",
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
               onPressed: widget.onDeleteSelected,
             ),
           ),
@@ -1428,21 +1930,37 @@ class _InspectorPanelState extends State<InspectorPanel> {
     bool enabled = true,
     required Function(double) onChanged,
   }) {
+    final effectiveHelperText = controller.text.trim().isEmpty
+        ? '미입력 상태입니다. 표시용 기본 숫자는 계산 입력 근거로 인정되지 않습니다.'
+        : helperText;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6.0),
       child: TextField(
         controller: controller,
         enabled: enabled,
-        keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+        keyboardType: const TextInputType.numberWithOptions(
+          decimal: true,
+          signed: true,
+        ),
         decoration: InputDecoration(
           labelText: label,
-          labelStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-          helperText: helperText,
+          labelStyle: const TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+          helperText: effectiveHelperText,
           helperStyle: const TextStyle(fontSize: 10, color: Colors.blueGrey),
           suffixText: unit,
-          suffixStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.blueGrey),
+          suffixStyle: const TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            color: Colors.blueGrey,
+          ),
           isDense: true,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 10,
+            vertical: 10,
+          ),
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
           enabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(8),
@@ -1458,9 +1976,6 @@ class _InspectorPanelState extends State<InspectorPanel> {
           if (val != null) {
             onChanged(val);
             widget.onStateChanged();
-          } else if (text.trim().isEmpty) {
-            onChanged(0.0);
-            widget.onStateChanged();
           }
         },
       ),
@@ -1470,8 +1985,29 @@ class _InspectorPanelState extends State<InspectorPanel> {
   Widget _buildSimulationResultBox(DrawingElement e) {
     if (widget.simulationResult == null) return const SizedBox.shrink();
 
-    final busResults = widget.simulationResult!['bus_results'] as List<dynamic>? ?? [];
-    final lineResults = widget.simulationResult!['line_results'] as List<dynamic>? ?? [];
+    if (widget.simulationResult!['converged'] != true) {
+      final iterations = widget.simulationResult!['iterations'];
+      final mismatch = widget.simulationResult!['max_mismatch'];
+      return Container(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Colors.orange.shade50,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: Colors.orange.shade300),
+        ),
+        child: Text(
+          '조류계산 미수렴: $iterations회 반복, 최대 mismatch $mismatch. '
+          '이 반복값은 수렴한 운전 결과가 아닙니다.',
+          style: TextStyle(color: Colors.orange.shade900, fontSize: 11),
+        ),
+      );
+    }
+
+    final busResults =
+        widget.simulationResult!['bus_results'] as List<dynamic>? ?? [];
+    final lineResults =
+        widget.simulationResult!['line_results'] as List<dynamic>? ?? [];
 
     String getBusNum(String text) {
       final RegExp digitRegExp = RegExp(r'\d+');
@@ -1480,7 +2016,9 @@ class _InspectorPanelState extends State<InspectorPanel> {
     }
 
     if (e.type == Tool.bus) {
-      final busNum = getBusNum(e.label.isNotEmpty ? e.label : e.id);
+      final busNum =
+          e.busNumber?.toString() ??
+          getBusNum(e.label.isNotEmpty ? e.label : e.id);
       final bRes = busResults.firstWhere(
         (b) => b['bus'].toString() == busNum,
         orElse: () => null,
@@ -1493,66 +2031,126 @@ class _InspectorPanelState extends State<InspectorPanel> {
       final double qgen = (bRes['qgen'] as num?)?.toDouble() ?? 0.0;
       final double pload = (bRes['pload'] as num?)?.toDouble() ?? 0.0;
       final double qload = (bRes['qload'] as num?)?.toDouble() ?? 0.0;
-      final bool isNormalVolt = (v >= 0.95 && v <= 1.05);
-
       return Container(
         margin: const EdgeInsets.symmetric(vertical: 8),
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: isNormalVolt ? Colors.green.shade50 : Colors.orange.shade50,
+          color: Colors.blue.shade50,
           borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: isNormalVolt ? Colors.green.shade300 : Colors.orange.shade300, width: 1.2),
+          border: Border.all(color: Colors.blue.shade300, width: 1.2),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                Icon(Icons.bolt, size: 16, color: isNormalVolt ? Colors.green.shade700 : Colors.orange.shade700),
+                Icon(Icons.bolt, size: 16, color: Colors.blue.shade700),
                 const SizedBox(width: 6),
-                Text("조류계산 해석 결과", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: isNormalVolt ? Colors.green.shade900 : Colors.orange.shade900)),
+                Text(
+                  "조류계산 수렴 결과",
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue.shade900,
+                  ),
+                ),
                 const Spacer(),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
-                    color: (isNormalVolt ? Colors.green.shade600 : Colors.orange.shade600).withOpacity(0.15),
+                    color: Colors.blue.shade600.withOpacity(0.15),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Text(
-                    isNormalVolt ? "정상 전압" : "주의 전압",
-                    style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: isNormalVolt ? Colors.green.shade700 : Colors.orange.shade700),
+                    "실제 solver 값",
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blue.shade700,
+                    ),
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 8),
-            _resRow("모선 전압 크기 (V)", "${v.toStringAsFixed(4)} pu  (${(v * 100).toStringAsFixed(1)}%)"),
-            _resRow("전압 위상각 (θ)", "${ang >= 0 ? '+' : ''}${ang.toStringAsFixed(2)}°"),
+            _resRow(
+              "모선 전압 크기 (V)",
+              "${v.toStringAsFixed(4)} pu  (${(v * 100).toStringAsFixed(1)}%)",
+            ),
+            _resRow(
+              "전압 위상각 (θ)",
+              "${ang >= 0 ? '+' : ''}${ang.toStringAsFixed(2)}°",
+            ),
             if (pgen.abs() > 0.01 || qgen.abs() > 0.01)
-              _resRow("발전 전력 (P / Q)", "${pgen.toStringAsFixed(1)} MW / ${qgen.toStringAsFixed(1)} MVAR"),
+              _resRow(
+                "발전 전력 (P / Q)",
+                "${pgen.toStringAsFixed(1)} MW / ${qgen.toStringAsFixed(1)} MVAR",
+              ),
             if (pload.abs() > 0.01 || qload.abs() > 0.01)
-              _resRow("부하 소비 (P / Q)", "${pload.toStringAsFixed(1)} MW / ${qload.toStringAsFixed(1)} MVAR"),
+              _resRow(
+                "부하 소비 (P / Q)",
+                "${pload.toStringAsFixed(1)} MW / ${qload.toStringAsFixed(1)} MVAR",
+              ),
           ],
         ),
       );
     } else if (e.type == Tool.line) {
       DrawingElement? startEl;
       DrawingElement? endEl;
-      try { startEl = widget.elements.firstWhere((el) => el.id == e.startElementId); } catch (_) {}
-      try { endEl = widget.elements.firstWhere((el) => el.id == e.endElementId); } catch (_) {}
+      try {
+        startEl = widget.elements.firstWhere((el) => el.id == e.startElementId);
+      } catch (_) {}
+      try {
+        endEl = widget.elements.firstWhere((el) => el.id == e.endElementId);
+      } catch (_) {}
 
-      final sBusNum = _getBusNumDigits(startEl?.label.isNotEmpty == true ? startEl!.label : e.startElementId);
-      final eBusNum = _getBusNumDigits(endEl?.label.isNotEmpty == true ? endEl!.label : e.endElementId);
-      final bool isBothBuses = (startEl?.type == Tool.bus && endEl?.type == Tool.bus) ||
-          (sBusNum != null && eBusNum != null &&
-           startEl?.type != Tool.generator && endEl?.type != Tool.generator &&
-           startEl?.type != Tool.load && endEl?.type != Tool.load &&
-           startEl?.type != Tool.transformer && endEl?.type != Tool.transformer &&
-           !e.id.contains('trans') && !e.id.contains('load') && !e.id.contains('gen')) ||
+      final sBusNum =
+          e.fromBus?.toString() ??
+          startEl?.busNumber?.toString() ??
+          _getBusNumDigits(
+            startEl?.label.isNotEmpty == true
+                ? startEl!.label
+                : e.startElementId,
+          );
+      final eBusNum =
+          e.toBus?.toString() ??
+          endEl?.busNumber?.toString() ??
+          _getBusNumDigits(
+            endEl?.label.isNotEmpty == true ? endEl!.label : e.endElementId,
+          );
+      final bool isBothBuses =
+          (startEl?.type == Tool.bus && endEl?.type == Tool.bus) ||
+          (sBusNum != null &&
+              eBusNum != null &&
+              startEl?.type != Tool.generator &&
+              endEl?.type != Tool.generator &&
+              startEl?.type != Tool.load &&
+              endEl?.type != Tool.load &&
+              startEl?.type != Tool.transformer &&
+              endEl?.type != Tool.transformer &&
+              !e.id.contains('trans') &&
+              !e.id.contains('load') &&
+              !e.id.contains('gen')) ||
           (RegExp(r'^line_\d+_\d+$').hasMatch(e.id)) ||
           (RegExp(r'^Line\s+\d+[-~]\d+').hasMatch(e.label));
-      final bool isGen = !isBothBuses && (startEl?.type == Tool.generator || endEl?.type == Tool.generator || e.label.contains("↔ G_") || e.label.contains("G_") || (e.id.startsWith("lead_") && e.id.contains("gen")));
-      final bool isLd = !isBothBuses && !isGen && (startEl?.type == Tool.load || endEl?.type == Tool.load || e.label.contains("↔ Load_") || e.label.contains("Load_") || (e.id.startsWith("lead_") && e.id.contains("load")));
+      final bool isGen =
+          !isBothBuses &&
+          (startEl?.type == Tool.generator ||
+              endEl?.type == Tool.generator ||
+              e.label.contains("↔ G_") ||
+              e.label.contains("G_") ||
+              (e.id.startsWith("lead_") && e.id.contains("gen")));
+      final bool isLd =
+          !isBothBuses &&
+          !isGen &&
+          (startEl?.type == Tool.load ||
+              endEl?.type == Tool.load ||
+              e.label.contains("↔ Load_") ||
+              e.label.contains("Load_") ||
+              (e.id.startsWith("lead_") && e.id.contains("load")));
 
       if (isGen || isLd) {
         final double pMw = e.pPu * widget.sBase;
@@ -1571,14 +2169,31 @@ class _InspectorPanelState extends State<InspectorPanel> {
             children: [
               Row(
                 children: [
-                  Icon(isGen ? Icons.motion_photos_on : Icons.arrow_downward, size: 16, color: boxColor),
+                  Icon(
+                    isGen ? Icons.motion_photos_on : Icons.arrow_downward,
+                    size: 16,
+                    color: boxColor,
+                  ),
                   const SizedBox(width: 6),
-                  Text(isGen ? "발전기 인입 조류 (단자 직결)" : "부하 인입 조류 (단자 직결)", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: boxColor)),
+                  Text(
+                    isGen ? "발전기 인입 조류 (단자 직결)" : "부하 인입 조류 (단자 직결)",
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: boxColor,
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 8),
-              _resRow(isGen ? "발전 주입 (P)" : "부하 소비 (P)", "${pMw.abs().toStringAsFixed(1)} MW  (${e.pPu.toStringAsFixed(3)} pu)"),
-              _resRow(isGen ? "무효 주입 (Q)" : "무효 소비 (Q)", "${qMvar.abs().toStringAsFixed(1)} MVAR  (${e.qPu.toStringAsFixed(3)} pu)"),
+              _resRow(
+                isGen ? "발전 주입 (P)" : "부하 소비 (P)",
+                "${pMw.abs().toStringAsFixed(1)} MW  (${e.pPu.toStringAsFixed(3)} pu)",
+              ),
+              _resRow(
+                isGen ? "무효 주입 (Q)" : "무효 소비 (Q)",
+                "${qMvar.abs().toStringAsFixed(1)} MVAR  (${e.qPu.toStringAsFixed(3)} pu)",
+              ),
               _resRow("인입 손실 (P loss)", "0.00 MW (단자 직결 손실 없음)"),
             ],
           ),
@@ -1587,11 +2202,14 @@ class _InspectorPanelState extends State<InspectorPanel> {
 
       if (startEl == null || endEl == null) return const SizedBox.shrink();
 
-      final fb = getBusNum(startEl.label.isNotEmpty ? startEl.label : startEl.id);
+      final fb = getBusNum(
+        startEl.label.isNotEmpty ? startEl.label : startEl.id,
+      );
       final tb = getBusNum(endEl.label.isNotEmpty ? endEl.label : endEl.id);
       final lRes = lineResults.firstWhere(
-        (l) => (l['from_bus'].toString() == fb && l['to_bus'].toString() == tb) ||
-               (l['from_bus'].toString() == tb && l['to_bus'].toString() == fb),
+        (l) =>
+            (l['from_bus'].toString() == fb && l['to_bus'].toString() == tb) ||
+            (l['from_bus'].toString() == tb && l['to_bus'].toString() == fb),
         orElse: () => null,
       );
       if (lRes == null) return const SizedBox.shrink();
@@ -1616,7 +2234,14 @@ class _InspectorPanelState extends State<InspectorPanel> {
               children: [
                 Icon(Icons.timeline, size: 16, color: Colors.blue.shade700),
                 const SizedBox(width: 6),
-                Text("선로 조류 및 손실 결과", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.blue.shade900)),
+                Text(
+                  "선로 조류 및 손실 결과",
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.blue.shade900,
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 8),
@@ -1637,11 +2262,20 @@ class _InspectorPanelState extends State<InspectorPanel> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: TextStyle(fontSize: 11, color: Colors.grey.shade700)),
-          Text(value, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF0F172A))),
+          Text(
+            label,
+            style: TextStyle(fontSize: 11, color: Colors.grey.shade700),
+          ),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF0F172A),
+            ),
+          ),
         ],
       ),
     );
   }
-
 }

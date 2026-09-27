@@ -14,6 +14,7 @@ from pathlib import Path
 import core.env_loader
 
 try:
+    from core.power_flow_readiness import evaluate_power_flow_readiness
     from agent_tools.vision_tools import configure_review_tools
     from core.power_logic import construct_y_bus
     from core.adaptive_vision_pipeline import analyze_circuit_image_adaptive
@@ -165,6 +166,37 @@ async def apply_excel_to_elements(request: Request):
         body = await request.json()
         elements = body.get("elements", [])
         excel_data = body.get("excel_data", {})
+        if body.get("verified_sld_apply") is True:
+            updated_elements, summary, mismatch_report = excel_importer.apply_verified_sld_with_excel(
+                elements,
+                excel_data,
+            )
+            return {
+                "status": "success",
+                "elements": updated_elements,
+                "summary": summary,
+                "mismatch_report": mismatch_report,
+            }
+        if body.get("verified_sld_review") is True:
+            # Final review is a read-only comparison. The canvas importer may
+            # add missing generators/leads, which must never alter or mask the
+            # verified topology while the user is still reviewing it.
+            mismatch_report = excel_importer.compare_elements_with_excel(
+                elements,
+                excel_data,
+                structured_bus_numbers_only=True,
+            )
+            summary = {
+                "review_only": True,
+                "mismatch_report": mismatch_report,
+            }
+            return {
+                "status": "success",
+                "elements": elements,
+                "summary": summary,
+                "mismatch_report": mismatch_report,
+            }
+
         updated_elements, summary = excel_importer.apply_to_elements(elements, excel_data)
         return {
             "status": "success",
@@ -213,13 +245,31 @@ async def run_simulation(request: Request):
     try:
         data = await request.json()
         elements = data.get("elements", [])
+        s_base = data.get("s_base_mva", power_flow_solver.s_base)
         print(f"\n⚡ [조류계산 요청] {len(elements)}개의 부품 데이터를 수신하여 계산을 시작합니다.")
 
-        result = power_flow_solver.solve(elements)
+        readiness = evaluate_power_flow_readiness(elements, s_base=s_base)
+        if not readiness["ready"]:
+            last_simulation_result = None
+            return {
+                "status": "error",
+                "ready": False,
+                "blockers": readiness["blockers"],
+                "message": "조류계산 준비가 완료되지 않았습니다: " + " ".join(readiness["blockers"]),
+            }
+
+        last_simulation_result = None
+        solver = PowerFlowSolver(
+            s_base=float(s_base),
+            tol=power_flow_solver.tol,
+            max_iter=power_flow_solver.max_iter,
+        )
+        result = solver.solve(elements)
         if result.get("status") == "error":
             print(f"⚠️ 조류계산 실패: {result.get('message')}")
             return result
 
+        result["s_base_mva"] = float(s_base)
         last_simulation_result = result
 
         converged = result.get("converged", False)

@@ -139,6 +139,16 @@ class ExcelCaseImporter:
                     'va_deg': va,
                     'max_vm': max_vm,
                     'min_vm': min_vm,
+                    'provided_fields': [
+                        name for name, column in (
+                            ('type', type_col),
+                            ('is_slack', type_col),
+                            ('pload_pu', pload_col),
+                            ('qload_pu', qload_col),
+                            ('vm_pu', vm_col),
+                            ('va_deg', va_col),
+                        ) if column is not None and pd.notna(row[column])
+                    ],
                 }
                 bus_dict[str(b_no)] = bus_info
 
@@ -163,6 +173,13 @@ class ExcelCaseImporter:
                 pg = float(row[pg_col]) if pg_col and pd.notna(row[pg_col]) else 0.0
                 qg = float(row[qg_col]) if qg_col and pd.notna(row[qg_col]) else 0.0
                 vset = float(row[vset_col]) if vset_col and pd.notna(row[vset_col]) else 1.0
+                provided_gen_fields = [
+                    name for name, column in (
+                        ('pg_pu', pg_col),
+                        ('qg_pu', qg_col),
+                        ('voltage_setpoint', vset_col),
+                    ) if column is not None and pd.notna(row[column])
+                ]
 
                 s_b_no = str(b_no)
                 if s_b_no not in gen_by_bus:
@@ -172,8 +189,11 @@ class ExcelCaseImporter:
                         'pg_mw': 0.0,
                         'qg_mvar': 0.0,
                         'voltage_setpoint': vset,
-                        'gen_count': 0
+                        'gen_count': 0,
+                        'provided_fields': set(provided_gen_fields),
                     }
+                else:
+                    gen_by_bus[s_b_no]['provided_fields'].intersection_update(provided_gen_fields)
                 # For slack generator, P and Q are determined by power flow balance, not input constraints
                 if b_no != slack_bus_no:
                     gen_by_bus[s_b_no]['pg_mw'] += pg
@@ -185,6 +205,7 @@ class ExcelCaseImporter:
             for s_b_no, g in gen_by_bus.items():
                 g['pg_pu'] = round(g['pg_mw'] / sbase, 5)
                 g['qg_pu'] = round(g['qg_mvar'] / sbase, 5)
+                g['provided_fields'] = sorted(g['provided_fields'])
 
         # 4. Branch / Line Sheet
         branch_dict = {}
@@ -196,6 +217,7 @@ class ExcelCaseImporter:
                 r_col = next((c for c in df_br.columns if c.strip().lower().startswith('r')), None)
                 x_col = next((c for c in df_br.columns if c.strip().lower().startswith('x')), None)
                 b_col = next((c for c in df_br.columns if c.strip().lower().startswith('b')), None)
+                tap_col = next((c for c in df_br.columns if 'tap' in c.lower() or 'ratio' in c.lower()), None)
 
                 pair_branches = {}
                 for _, row in df_br.iterrows():
@@ -206,30 +228,54 @@ class ExcelCaseImporter:
                         continue
                     r_val = float(row[r_col]) if r_col and pd.notna(row[r_col]) else None
                     x_val = float(row[x_col]) if x_col and pd.notna(row[x_col]) else None
-                    b_val = float(row[b_col]) if b_col and pd.notna(row[b_col]) else 0.0
+                    b_provided = bool(b_col and pd.notna(row[b_col]))
+                    b_val = float(row[b_col]) if b_provided else 0.0
+                    tap_provided = bool(tap_col and pd.notna(row[tap_col]))
+                    tap_val = float(row[tap_col]) if tap_provided else None
                     pair_key = (min(f_b, t_b), max(f_b, t_b))
-                    pair_branches.setdefault(pair_key, []).append({'r': r_val, 'x': x_val, 'b': b_val})
+                    pair_branches.setdefault(pair_key, []).append({
+                        'r': r_val,
+                        'x': x_val,
+                        'b': b_val,
+                        'b_provided': b_provided,
+                        'tap': tap_val,
+                        'tap_provided': tap_provided,
+                    })
 
                 for (fb, tb), c_list in pair_branches.items():
                     has_missing = any(c['r'] is None or c['x'] is None for c in c_list)
                     if has_missing:
-                        r_eq, x_eq, b_eq = None, None, None
+                        r_eq, x_eq = None, None
                     elif len(c_list) == 1:
-                        r_eq, x_eq, b_eq = c_list[0]['r'], c_list[0]['x'], c_list[0]['b']
+                        r_eq, x_eq = c_list[0]['r'], c_list[0]['x']
                     else:
                         if any(abs(c['r']) < 1e-9 and abs(c['x']) < 1e-9 for c in c_list):
-                            r_eq, x_eq, b_eq = 0.0, 0.0, sum(c['b'] for c in c_list)
+                            r_eq, x_eq = 0.0, 0.0
                         else:
                             y_tot = sum(1.0 / complex(c['r'], c['x']) for c in c_list)
                             z_eq = 1.0 / y_tot
                             r_eq = z_eq.real
                             x_eq = z_eq.imag
-                            b_eq = sum(c['b'] for c in c_list)
+                    b_eq = sum(c['b'] for c in c_list) if all(c['b_provided'] for c in c_list) else None
+                    provided_taps = [c['tap'] for c in c_list if c['tap_provided']]
+                    tap_is_consistent = (
+                        len(provided_taps) == len(c_list)
+                        and bool(provided_taps)
+                        and all(abs(value - provided_taps[0]) <= 1e-9 for value in provided_taps)
+                    )
+                    tap_eq = provided_taps[0] if tap_is_consistent else None
 
                     br_info = {
                         'from_bus': fb, 'to_bus': tb,
                         'r_pu': r_eq, 'x_pu': x_eq, 'b_pu': b_eq,
-                        'circuit_count': len(c_list)
+                        'circuit_count': len(c_list),
+                        'tap': tap_eq,
+                        'requires_tap': bool(provided_taps),
+                        'provided_fields': [
+                            name for name, value in (
+                                ('r_pu', r_eq), ('x_pu', x_eq), ('b_pu', b_eq), ('tap', tap_eq),
+                            ) if value is not None
+                        ],
                     }
                     branch_dict[f"{fb}_{tb}"] = br_info
                     branch_dict[f"{tb}_{fb}"] = br_info
@@ -252,10 +298,20 @@ class ExcelCaseImporter:
                         t_b = int(row[to_col])
                     except (ValueError, TypeError):
                         continue
-                    tap = float(row[tap_col]) if tap_col and pd.notna(row[tap_col]) else 1.0
+                    tap_provided = bool(tap_col and pd.notna(row[tap_col]))
+                    tap = float(row[tap_col]) if tap_provided else 1.0
                     r_val = float(row[r_col]) if r_col and pd.notna(row[r_col]) else None
                     x_val = float(row[x_col]) if x_col and pd.notna(row[x_col]) else None
                     b_val = float(row[b_col]) if b_col and pd.notna(row[b_col]) else None
+                    provided_tr_fields = set()
+                    if tap_provided:
+                        provided_tr_fields.add('tap')
+                    if r_val is not None:
+                        provided_tr_fields.add('r_pu')
+                    if x_val is not None:
+                        provided_tr_fields.add('x_pu')
+                    if b_val is not None:
+                        provided_tr_fields.add('b_pu')
 
                     # If r, x, b were not in transformer sheet, look up in branch_dict
                     if r_val is None or x_val is None:
@@ -264,6 +320,13 @@ class ExcelCaseImporter:
                             r_val = br.get('r_pu') if r_val is None else r_val
                             x_val = br.get('x_pu') if x_val is None else x_val
                             b_val = br.get('b_pu', 0.0) if b_val is None else b_val
+                            branch_fields = set(br.get('provided_fields', []))
+                            for field in ('r_pu', 'x_pu', 'b_pu'):
+                                if field in branch_fields:
+                                    provided_tr_fields.add(field)
+                            if 'tap' not in provided_tr_fields and 'tap' in branch_fields:
+                                tap = br.get('tap')
+                                provided_tr_fields.add('tap')
 
                     tr_info = {
                         'from_bus': f_b,
@@ -272,6 +335,7 @@ class ExcelCaseImporter:
                         'r_pu': r_val,
                         'x_pu': x_val,
                         'b_pu': b_val if b_val is not None else 0.0,
+                        'provided_fields': sorted(provided_tr_fields),
                     }
                     trans_dict[f"{f_b}_{t_b}"] = tr_info
                     trans_dict[f"{t_b}_{f_b}"] = tr_info
@@ -288,7 +352,9 @@ class ExcelCaseImporter:
                         try:
                             f_b = int(row[from_col])
                             t_b = int(row[to_col])
-                            tap_val = float(row[tap_col]) if pd.notna(row[tap_col]) else 1.0
+                            if not pd.notna(row[tap_col]):
+                                continue
+                            tap_val = float(row[tap_col])
                         except (ValueError, TypeError):
                             continue
                         if abs(tap_val - 1.0) > 1e-4 and f"{f_b}_{t_b}" not in trans_dict:
@@ -300,6 +366,9 @@ class ExcelCaseImporter:
                                 'r_pu': br.get('r_pu') if br else None,
                                 'x_pu': br.get('x_pu') if br else None,
                                 'b_pu': br.get('b_pu', 0.0) if br else 0.0,
+                                'provided_fields': sorted(
+                                    set(br.get('provided_fields', [])) | {'tap'} if br else {'tap'}
+                                ),
                             }
                             trans_dict[f"{f_b}_{t_b}"] = tr_info
                             trans_dict[f"{t_b}_{f_b}"] = tr_info
@@ -332,6 +401,32 @@ class ExcelCaseImporter:
         sbase = float(excel_data.get('sbase_mva', 100.0))
 
         applied_counts = {'bus': 0, 'generator': 0, 'load': 0, 'line': 0, 'transformer': 0}
+
+        def source_fields(record: Dict[str, Any] | None) -> set[str] | None:
+            if not isinstance(record, dict):
+                return None
+            provided = record.get('provided_fields')
+            if isinstance(provided, (list, tuple, set)):
+                return {str(field) for field in provided}
+            return None
+
+        def mark_import_state(
+            element: Dict[str, Any],
+            record: Dict[str, Any] | None,
+            requirements: Dict[str, str],
+        ) -> List[str]:
+            fields = source_fields(record)
+            missing = [
+                target for source, target in requirements.items()
+                if (
+                    source not in fields
+                    if fields is not None
+                    else not isinstance(record, dict) or record.get(source) is None
+                )
+            ]
+            element['parameterMissingFields'] = missing
+            element['parameterStatus'] = 'MISSING' if missing else 'VALID'
+            return missing
 
         # Build ID lookup and type lookup
         el_by_id = {str(el.get('id')): el for el in elements if el.get('id') is not None}
@@ -540,7 +635,20 @@ class ExcelCaseImporter:
                     el['bus_type'] = str(b_info.get('type') or b_info.get('bus_type') or ('3' if el['isSlack'] else '1'))
                     if 'max_vm' in b_info: el['maxVm'] = b_info['max_vm']
                     if 'min_vm' in b_info: el['minVm'] = b_info['min_vm']
+                    mark_import_state(el, b_info, {
+                        'is_slack': 'isSlack',
+                        'type': 'bus_type',
+                        'vm_pu': 'vPu',
+                        'va_deg': 'thetaDeg',
+                        'pload_pu': 'pPu',
+                        'qload_pu': 'qPu',
+                    })
                     applied_counts['bus'] += 1
+                else:
+                    el['parameterStatus'] = 'MISSING'
+                    el['parameterMissingFields'] = [
+                        'isSlack', 'bus_type', 'vPu', 'thetaDeg', 'pPu', 'qPu'
+                    ]
 
             # 2. Generator
             elif 'gen' in el_type:
@@ -580,7 +688,15 @@ class ExcelCaseImporter:
                         el['label'] = f"SC_{b_num} (동기조상기)"
                     else:
                         el['label'] = f"G_{b_num}" + (" (Slack)" if el['isSlack'] else "")
+                    mark_import_state(el, g_info, {
+                        'pg_pu': 'pPu',
+                        'qg_pu': 'qPu',
+                        'voltage_setpoint': 'vPu',
+                    })
                     applied_counts['generator'] += 1
+                else:
+                    el['parameterStatus'] = 'MISSING'
+                    el['parameterMissingFields'] = ['pPu', 'qPu', 'vPu']
                     if b_num is not None:
                         applied_gen_buses.add(int(b_num))
 
@@ -602,9 +718,16 @@ class ExcelCaseImporter:
                     el['pPu'] = float(b_info.get('pload_pu', 0.0))
                     el['qPu'] = float(b_info.get('qload_pu', 0.0))
                     el['label'] = f"Load_{b_num}"
+                    mark_import_state(el, b_info, {
+                        'pload_pu': 'pPu',
+                        'qload_pu': 'qPu',
+                    })
                     applied_counts['load'] += 1
                     if b_num is not None:
                         applied_load_buses.add(int(b_num))
+                else:
+                    el['parameterStatus'] = 'MISSING'
+                    el['parameterMissingFields'] = ['pPu', 'qPu']
 
             # 4. Transformer
             elif 'trans' in el_type:
@@ -631,6 +754,7 @@ class ExcelCaseImporter:
                 valid_branches = [b for b in elec_branches if b.get('r_pu') is not None and b.get('x_pu') is not None]
                 if valid_branches:
                     el['parameterStatus'] = 'VALID'
+                    el['parameterMissingFields'] = []
                     primary = valid_branches[0]
                     el['from_bus'] = primary['from_bus']
                     el['to_bus'] = primary['to_bus']
@@ -649,6 +773,7 @@ class ExcelCaseImporter:
                         el['label'] = f"T {', '.join(sub_labels)} ({len(valid_branches)} branches)"
                 else:
                     el['parameterStatus'] = 'MISSING'
+                    el['parameterMissingFields'] = ['rPu', 'xPu']
                     el['tapRatio'] = None
                     el['tap'] = None
                     el['rPu'] = None
@@ -789,11 +914,29 @@ class ExcelCaseImporter:
                             if (br_v.get('from_bus') == fb and br_v.get('to_bus') == tb) or (br_v.get('from_bus') == tb and br_v.get('to_bus') == fb):
                                 br_info = br_v
                                 break
-                if br_info and br_info.get('r_pu') is not None and br_info.get('x_pu') is not None:
+                branch_fields = source_fields(br_info)
+                required_branch_fields = ['r_pu', 'x_pu', 'b_pu']
+                requires_tap = bool(br_info and br_info.get('requires_tap'))
+                if requires_tap:
+                    required_branch_fields.append('tap')
+                missing_branch_fields = [
+                    {'r_pu': 'rPu', 'x_pu': 'xPu', 'b_pu': 'bPu', 'tap': 'tapRatio'}[field]
+                    for field in required_branch_fields
+                    if (
+                        field not in branch_fields
+                        if branch_fields is not None
+                        else not br_info or br_info.get(field) is None
+                    )
+                ]
+                if br_info:
+                    el['rPu'] = br_info.get('r_pu')
+                    el['xPu'] = br_info.get('x_pu')
+                    el['bPu'] = br_info.get('b_pu') if 'bPu' not in missing_branch_fields else None
+                    if requires_tap:
+                        el['tapRatio'] = br_info.get('tap') if 'tapRatio' not in missing_branch_fields else None
+                if br_info and not missing_branch_fields:
                     el['parameterStatus'] = 'VALID'
-                    el['rPu'] = br_info['r_pu']
-                    el['xPu'] = br_info['x_pu']
-                    el['bPu'] = br_info.get('b_pu', 0.0)
+                    el['parameterMissingFields'] = []
                     c_count = br_info.get('circuit_count', 1)
                     el['circuitCount'] = c_count
                     if c_count > 1:
@@ -802,9 +945,7 @@ class ExcelCaseImporter:
                     applied_counts['line'] += 1
                 else:
                     el['parameterStatus'] = 'MISSING'
-                    el['rPu'] = None
-                    el['xPu'] = None
-                    el['bPu'] = None
+                    el['parameterMissingFields'] = missing_branch_fields or ['rPu', 'xPu', 'bPu']
                     if fb is not None and tb is not None:
                         el['label'] = f"Line {fb}-{tb} (파라미터 누락)"
 
@@ -815,7 +956,7 @@ class ExcelCaseImporter:
                     el['tap'] = tr_info['tap']
                     applied_counts['transformer'] += 1
         # =========================================================================
-        # BUS VALIDATION GATEKEEPER & CROSS-CHECK PROPOSAL GENERATOR
+        # BUS VALIDATION GATEKEEPER (Must execute BEFORE generator auto-supplementation)
         # =========================================================================
         diagram_buses = set(el_id_to_bus_num.values())
         excel_buses = {int(k) for k in bus_dict.keys()}
@@ -945,6 +1086,8 @@ class ExcelCaseImporter:
                             }
                         })
 
+        mismatch_report['repair_proposals'] = repair_proposals
+
         summary = {
             'slack_bus_number': slack_bus_no,
             'applied_counts': applied_counts,
@@ -955,7 +1098,422 @@ class ExcelCaseImporter:
         }
         return elements, summary
 
-    def compare_elements_with_excel(self, elements: list, excel_data: dict) -> dict:
+    def apply_verified_sld_to_elements(
+        self,
+        elements: List[Dict[str, Any]],
+        excel_data: Dict[str, Any],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """Bind parsed Excel values using only explicit IDs and bus numbers.
+
+        Unlike the legacy canvas importer this method never creates topology,
+        derives numbers from labels/IDs, or changes element geometry.
+        """
+        from copy import deepcopy
+
+        updated = deepcopy(elements)
+        buses = excel_data.get('buses', {}) or {}
+        generators = excel_data.get('generators', {}) or {}
+        branches = excel_data.get('branches', {}) or {}
+        transformers = excel_data.get('transformers', {}) or {}
+        elements_by_id = {
+            str(element['id']): element
+            for element in updated
+            if isinstance(element, dict) and element.get('id') is not None
+        }
+
+        def element_type(element: Dict[str, Any]) -> str:
+            return str(element.get('type') or '').lower().replace('tool.', '')
+
+        def explicit_bus_number(element: Dict[str, Any]) -> int | None:
+            value = element.get('bus_number')
+            if value is None:
+                value = element.get('connected_bus_number')
+            if value is None:
+                value = element.get('busNumber')
+            try:
+                return int(value) if value is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        def explicit_node_bus_number(element: Dict[str, Any]) -> int | None:
+            value = element.get('bus_number')
+            if value is None:
+                value = element.get('busNumber')
+            try:
+                return int(value) if value is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        bus_number_counts: Dict[int, int] = {}
+        bus_id_to_number: Dict[str, int] = {}
+        for element in updated:
+            if element_type(element) != 'bus':
+                continue
+            bus_number = explicit_node_bus_number(element)
+            if bus_number is None:
+                continue
+            bus_number_counts[bus_number] = bus_number_counts.get(bus_number, 0) + 1
+            if element.get('id') is not None:
+                bus_id_to_number[str(element['id'])] = bus_number
+
+        def unique_bus_number(element: Dict[str, Any]) -> int | None:
+            bus_number = explicit_bus_number(element)
+            if bus_number is None or bus_number_counts.get(bus_number) != 1:
+                return None
+            parent_id = element.get('parentBusId')
+            if parent_id is not None:
+                parent_number = bus_id_to_number.get(str(parent_id))
+                if parent_number is None or parent_number != bus_number:
+                    return None
+            return bus_number
+
+        def record_for_pair(records: Dict[str, Any], first: int, second: int) -> Dict[str, Any] | None:
+            matches = []
+            seen_records = set()
+            for record in records.values():
+                if not isinstance(record, dict):
+                    continue
+                try:
+                    from_bus = int(record.get('from_bus'))
+                    to_bus = int(record.get('to_bus'))
+                except (TypeError, ValueError):
+                    continue
+                if {from_bus, to_bus} == {first, second} and first != second:
+                    signature = (
+                        from_bus,
+                        to_bus,
+                        record.get('r_pu'),
+                        record.get('x_pu'),
+                        record.get('b_pu'),
+                        record.get('tap'),
+                        record.get('requires_tap'),
+                        tuple(sorted(record.get('provided_fields', [])))
+                        if isinstance(record.get('provided_fields'), (list, tuple, set))
+                        else None,
+                    )
+                    if signature not in seen_records:
+                        seen_records.add(signature)
+                        matches.append(record)
+            return matches[0] if len(matches) == 1 else None
+
+        def has_excel_value(record: Dict[str, Any] | None, field: str) -> bool:
+            if not isinstance(record, dict):
+                return False
+            if isinstance(record.get('provided_fields'), (list, tuple, set)):
+                return field in record['provided_fields']
+            return record.get(field) is not None
+
+        missing_parameters_by_id: Dict[str, List[str]] = {}
+
+        def set_missing_parameters(element: Dict[str, Any], fields: List[str]) -> None:
+            if fields:
+                element['parameterStatus'] = 'MISSING'
+                element['parameterMissingFields'] = fields
+                missing_parameters_by_id[str(element.get('id') or '<unknown>')] = fields
+            else:
+                element['parameterStatus'] = 'VALID'
+                element['parameterMissingFields'] = []
+
+        def bind_branch_values(
+            element: Dict[str, Any], record: Dict[str, Any] | None, *, include_tap: bool
+        ) -> bool:
+            required = ['r_pu', 'x_pu', 'b_pu'] + (['tap'] if include_tap else [])
+            missing = [
+                {'r_pu': 'rPu', 'x_pu': 'xPu', 'b_pu': 'bPu', 'tap': 'tapRatio'}[field]
+                for field in required if not has_excel_value(record, field)
+            ]
+            r_value = record.get('r_pu') if has_excel_value(record, 'r_pu') else None
+            x_value = record.get('x_pu') if has_excel_value(record, 'x_pu') else None
+            if has_excel_value(record, 'b_pu'):
+                element['bPu'] = record['b_pu']
+            else:
+                element['bPu'] = None
+            if include_tap:
+                tap = record.get('tap') if has_excel_value(record, 'tap') else None
+                element['tapRatio'] = tap
+                element['tap'] = tap
+                if record:
+                    element['from_bus'] = record.get('from_bus')
+                    element['to_bus'] = record.get('to_bus')
+                    element['tapFromBus'] = record.get('from_bus')
+                    element['tapToBus'] = record.get('to_bus')
+                else:
+                    element['from_bus'] = None
+                    element['to_bus'] = None
+                    element['tapFromBus'] = None
+                    element['tapToBus'] = None
+            element['rPu'] = r_value
+            element['xPu'] = x_value
+            set_missing_parameters(element, missing)
+            if missing:
+                return False
+            return True
+
+        applied = {'bus': 0, 'generator': 0, 'load': 0, 'line': 0, 'transformer': 0}
+        missing_parameter_ids: List[str] = []
+        unresolved_topology_ids: List[str] = []
+        device_counts: Dict[tuple[str, int], int] = {}
+        for element in updated:
+            element_kind = element_type(element)
+            if element_kind in {'generator', 'load'}:
+                bus_number = unique_bus_number(element)
+                if bus_number is not None:
+                    key = (element_kind, bus_number)
+                    device_counts[key] = device_counts.get(key, 0) + 1
+
+        for element in updated:
+            kind = element_type(element)
+            element_id = str(element.get('id') or '<unknown>')
+            if kind == 'bus':
+                bus_number = explicit_node_bus_number(element)
+                if bus_number is None or bus_number_counts.get(bus_number) != 1:
+                    set_missing_parameters(element, ['bus_number'])
+                    unresolved_topology_ids.append(element_id)
+                    missing_parameter_ids.append(element_id)
+                    continue
+                bus_data = buses.get(str(bus_number), buses.get(bus_number))
+                if not isinstance(bus_data, dict):
+                    set_missing_parameters(element, ['bus_data'])
+                    unresolved_topology_ids.append(element_id)
+                    missing_parameter_ids.append(element_id)
+                    continue
+                for source_key, target_key in (
+                    ('is_slack', 'isSlack'),
+                    ('vm_pu', 'vPu'),
+                    ('va_deg', 'thetaDeg'),
+                    ('pload_pu', 'pPu'),
+                    ('qload_pu', 'qPu'),
+                ):
+                    if has_excel_value(bus_data, source_key):
+                        element[target_key] = bus_data[source_key]
+                bus_missing = [
+                    target_key for source_key, target_key in (
+                        ('is_slack', 'isSlack'),
+                        ('type', 'bus_type'),
+                        ('vm_pu', 'vPu'),
+                        ('va_deg', 'thetaDeg'),
+                        ('pload_pu', 'pPu'),
+                        ('qload_pu', 'qPu'),
+                    ) if not has_excel_value(bus_data, source_key)
+                ]
+                set_missing_parameters(element, bus_missing)
+                if bus_missing:
+                    missing_parameter_ids.append(element_id)
+                if has_excel_value(bus_data, 'type') or has_excel_value(bus_data, 'bus_type'):
+                    element['bus_type'] = bus_data.get('type') or bus_data.get('bus_type')
+                if not bus_missing:
+                    applied['bus'] += 1
+
+            elif kind in {'generator', 'load'}:
+                bus_number = unique_bus_number(element)
+                count_key = (kind, bus_number) if bus_number is not None else None
+                if bus_number is None or device_counts.get(count_key, 0) != 1:
+                    set_missing_parameters(element, ['bus_number', 'pPu', 'qPu'])
+                    unresolved_topology_ids.append(element_id)
+                    missing_parameter_ids.append(element_id)
+                    continue
+                if kind == 'generator':
+                    data = generators.get(str(bus_number), generators.get(bus_number))
+                    fields = (('pg_pu', 'pPu'), ('qg_pu', 'qPu'), ('voltage_setpoint', 'vPu'))
+                else:
+                    bus_data = buses.get(str(bus_number), buses.get(bus_number))
+                    data = bus_data if isinstance(bus_data, dict) else None
+                    fields = (('pload_pu', 'pPu'), ('qload_pu', 'qPu'))
+                if not isinstance(data, dict):
+                    set_missing_parameters(element, ['pPu', 'qPu'])
+                    missing_parameter_ids.append(element_id)
+                    continue
+                missing_device_fields = []
+                for source_key, target_key in fields:
+                    if has_excel_value(data, source_key):
+                        element[target_key] = data[source_key]
+                    else:
+                        missing_device_fields.append(target_key)
+                if kind == 'generator' and not has_excel_value(data, 'voltage_setpoint'):
+                    missing_device_fields.append('vPu')
+                elif kind == 'generator':
+                    element['vPu'] = data['voltage_setpoint']
+                if kind == 'generator' and data.get('is_slack') is not None:
+                    element['isSlack'] = bool(data['is_slack'])
+                set_missing_parameters(element, missing_device_fields)
+                if not missing_device_fields:
+                    applied[kind] += 1
+                else:
+                    missing_parameter_ids.append(element_id)
+
+        # Transformer branches are bound from the two exact bus IDs reached by
+        # their verified incident line endpoints. No labels or ID patterns are
+        # considered, and ambiguous degree remains explicitly missing.
+        for element in updated:
+            if element_type(element) != 'transformer':
+                continue
+            element_id = str(element.get('id') or '<unknown>')
+            connected_bus_numbers = []
+            for line in updated:
+                if element_type(line) != 'line':
+                    continue
+                endpoints = [
+                    line.get('startElementId'),
+                    line.get('endElementId'),
+                ]
+                if endpoints[0] is None or endpoints[1] is None:
+                    connected = line.get('connected_to')
+                    if isinstance(connected, list) and len(connected) == 2:
+                        endpoints = connected
+                if element_id not in {str(endpoint) for endpoint in endpoints if endpoint is not None}:
+                    continue
+                other_id = str(endpoints[1] if str(endpoints[0]) == element_id else endpoints[0])
+                other_number = bus_id_to_number.get(other_id)
+                if other_number is not None and bus_number_counts.get(other_number) == 1:
+                    if other_number not in connected_bus_numbers:
+                        connected_bus_numbers.append(other_number)
+            matched_elec_branches = []
+            if len(connected_bus_numbers) >= 2:
+                for i in range(len(connected_bus_numbers)):
+                    for j in range(i + 1, len(connected_bus_numbers)):
+                        first, second = connected_bus_numbers[i], connected_bus_numbers[j]
+                        tr_rec = record_for_pair(transformers, first, second)
+                        br_rec = record_for_pair(branches, first, second)
+                        rec = tr_rec or (br_rec if (br_rec and br_rec.get('requires_tap')) else None)
+                        if rec is not None:
+                            r_val = rec.get('r_pu') if has_excel_value(rec, 'r_pu') else None
+                            x_val = rec.get('x_pu') if has_excel_value(rec, 'x_pu') else None
+                            b_val = rec.get('b_pu', 0.0) if has_excel_value(rec, 'b_pu') else 0.0
+                            tap = rec.get('tap', 1.0) if has_excel_value(rec, 'tap') else 1.0
+                            fb_dir = int(rec.get('from_bus', first))
+                            tb_dir = int(rec.get('to_bus', second))
+                            matched_elec_branches.append({
+                                'from_bus': fb_dir,
+                                'to_bus': tb_dir,
+                                'tap_from_bus': fb_dir,
+                                'tap_to_bus': tb_dir,
+                                'r_pu': float(r_val) if r_val is not None else None,
+                                'x_pu': float(x_val) if x_val is not None else None,
+                                'b_pu': float(b_val) if b_val is not None else 0.0,
+                                'tap': float(tap),
+                                'label': f"T {fb_dir}-{tb_dir} (Tap: {tap})",
+                                'source_element_id': element_id,
+                                'is_transformer': True,
+                            })
+
+            if not matched_elec_branches and len(connected_bus_numbers) == 2:
+                record = record_for_pair(transformers, connected_bus_numbers[0], connected_bus_numbers[1])
+                if bind_branch_values(element, record, include_tap=True):
+                    applied['transformer'] += 1
+                else:
+                    missing_parameter_ids.append(element_id)
+            elif matched_elec_branches:
+                element['electrical_branches'] = matched_elec_branches
+                element['electricalBranches'] = matched_elec_branches
+                primary = matched_elec_branches[0]
+                element['from_bus'] = primary['from_bus']
+                element['to_bus'] = primary['to_bus']
+                element['tapFromBus'] = primary['tap_from_bus']
+                element['tapToBus'] = primary['tap_to_bus']
+                element['tapRatio'] = primary['tap']
+                element['tap'] = primary['tap']
+                element['rPu'] = primary['r_pu']
+                element['xPu'] = primary['x_pu']
+                element['bPu'] = primary['b_pu']
+                missing_fields = []
+                for b in matched_elec_branches:
+                    if b['r_pu'] is None: missing_fields.append('rPu')
+                    if b['x_pu'] is None: missing_fields.append('xPu')
+                set_missing_parameters(element, missing_fields)
+                if missing_fields:
+                    missing_parameter_ids.append(element_id)
+                else:
+                    applied['transformer'] += len(matched_elec_branches)
+            else:
+                bind_branch_values(element, None, include_tap=True)
+                unresolved_topology_ids.append(element_id)
+                missing_parameter_ids.append(element_id)
+
+        # A verified line is an electrical branch only when its explicit
+        # endpoint IDs name two uniquely numbered buses.
+        for element in updated:
+            if element_type(element) != 'line':
+                continue
+            element_id = str(element.get('id') or '<unknown>')
+            endpoints = [element.get('startElementId'), element.get('endElementId')]
+            if endpoints[0] is None or endpoints[1] is None:
+                connected = element.get('connected_to')
+                if isinstance(connected, list) and len(connected) == 2:
+                    endpoints = connected
+            start_id, end_id = (str(value) if value is not None else None for value in endpoints)
+            start = elements_by_id.get(start_id) if start_id is not None else None
+            end = elements_by_id.get(end_id) if end_id is not None else None
+            if element.get('electricalBranch') is False or not start or not end or \
+                    element_type(start) != 'bus' or element_type(end) != 'bus':
+                element['electricalBranch'] = False
+                element['isEquipmentLead'] = True
+                element['parameterStatus'] = 'NOT_APPLICABLE'
+                continue
+            first = bus_id_to_number.get(start_id)
+            second = bus_id_to_number.get(end_id)
+            if first is None or second is None or first == second or \
+                    bus_number_counts.get(first) != 1 or bus_number_counts.get(second) != 1:
+                element['parameterStatus'] = 'MISSING'
+                element['rPu'] = None
+                element['xPu'] = None
+                element['bPu'] = None
+                unresolved_topology_ids.append(element_id)
+                missing_parameter_ids.append(element_id)
+                continue
+            element['from_bus'] = first
+            element['to_bus'] = second
+            branch_record = record_for_pair(branches, first, second)
+            transformer_record = record_for_pair(transformers, first, second)
+            record = transformer_record or branch_record
+            include_tap = transformer_record is not None or bool(
+                branch_record and branch_record.get('requires_tap')
+            )
+            if not bind_branch_values(element, record, include_tap=include_tap):
+                missing_parameter_ids.append(element_id)
+            else:
+                applied['line'] += 1
+
+        return updated, {
+            'binding_mode': 'verified_sld_strict',
+            'topology_mutated': False,
+            'applied_counts': applied,
+            'missing_parameter_ids': sorted(set(missing_parameter_ids)),
+            'missing_parameters_by_id': missing_parameters_by_id,
+            'unresolved_topology_ids': sorted(set(unresolved_topology_ids)),
+            'power_flow_ready': not missing_parameter_ids and not unresolved_topology_ids,
+        }
+
+    def apply_verified_sld_with_excel(
+        self,
+        elements: List[Dict[str, Any]],
+        excel_data: Dict[str, Any],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Dict[str, Any]]:
+        mismatch_report = self.compare_elements_with_excel(
+            elements,
+            excel_data,
+            structured_bus_numbers_only=True,
+        )
+        if not mismatch_report.get('is_matched'):
+            from copy import deepcopy
+            return deepcopy(elements), {
+                'binding_mode': 'verified_sld_strict',
+                'blocked': True,
+                'topology_mutated': False,
+                'power_flow_ready': False,
+            }, mismatch_report
+
+        updated, summary = self.apply_verified_sld_to_elements(elements, excel_data)
+        summary['blocked'] = False
+        summary['mismatch_report'] = mismatch_report
+        return updated, summary, mismatch_report
+
+    def compare_elements_with_excel(
+        self,
+        elements: list,
+        excel_data: dict,
+        *,
+        structured_bus_numbers_only: bool = False,
+    ) -> dict:
         """도면의 캔버스 요소와 엑셀 계통 사양을 정밀 비교하여 불일치 내역 리포트를 생성합니다."""
         import re
 
@@ -979,6 +1537,8 @@ class ExcelCaseImporter:
         # 1. Map element ID to bus number
         el_id_to_bus_num = {}
         diagram_buses = set()
+        diagram_bus_counts = {}
+        unmapped_bus_ids = []
         for el in elements:
             el_type = get_el_type(el)
             if 'bus' in el_type and not any(k in el_type for k in ('gen', 'load', 'trans')):
@@ -990,11 +1550,11 @@ class ExcelCaseImporter:
                         b_num = int(b_num)
                     except (ValueError, TypeError):
                         b_num = None
-                if b_num is None and el.get('label'):
+                if b_num is None and not structured_bus_numbers_only and el.get('label'):
                     m = re.search(r'(\d+)', str(el.get('label')))
                     if m:
                         b_num = int(m.group(1))
-                if b_num is None and el.get('id'):
+                if b_num is None and not structured_bus_numbers_only and el.get('id'):
                     m = re.search(r'bus_(\d+)', str(el.get('id')))
                     if m:
                         b_num = int(m.group(1))
@@ -1005,26 +1565,42 @@ class ExcelCaseImporter:
                 if b_num is not None:
                     b_num = int(b_num)
                     diagram_buses.add(b_num)
+                    diagram_bus_counts[b_num] = diagram_bus_counts.get(b_num, 0) + 1
                     if el.get('id') is not None:
                         el_id_to_bus_num[str(el['id'])] = b_num
+                elif structured_bus_numbers_only:
+                    unmapped_bus_ids.append(str(el.get('id') or '<unknown>'))
 
         # 2. Extract diagram generators
         diagram_gens = set()
+        unmapped_device_ids = []
         for el in elements:
             el_type = get_el_type(el)
             if 'gen' in el_type:
                 parent_id = str(el.get('parentBusId') or '')
-                b_num = el.get('bus_number') or el.get('connected_bus_number') or el_id_to_bus_num.get(parent_id)
-                if b_num is None and el.get('label'):
+                b_num = el.get('bus_number')
+                if b_num is None:
+                    b_num = el.get('connected_bus_number')
+                if b_num is None:
+                    b_num = el.get('busNumber')
+                if b_num is None:
+                    b_num = el_id_to_bus_num.get(parent_id)
+                if b_num is None and not structured_bus_numbers_only and el.get('label'):
                     m = re.search(r'(\d+)', str(el.get('label')))
                     if m:
                         b_num = int(m.group(1))
-                if b_num is None and el.get('id'):
+                if b_num is None and not structured_bus_numbers_only and el.get('id'):
                     m = re.search(r'(\d+)', str(el.get('id')))
                     if m:
                         b_num = int(m.group(1))
                 if b_num is not None:
-                    diagram_gens.add(int(b_num))
+                    try:
+                        diagram_gens.add(int(b_num))
+                    except (ValueError, TypeError):
+                        if structured_bus_numbers_only:
+                            unmapped_device_ids.append(str(el.get('id') or '<unknown>'))
+                elif structured_bus_numbers_only:
+                    unmapped_device_ids.append(str(el.get('id') or '<unknown>'))
 
         # 3. Extract diagram loads
         diagram_loads = set()
@@ -1032,17 +1608,29 @@ class ExcelCaseImporter:
             el_type = get_el_type(el)
             if 'load' in el_type:
                 parent_id = str(el.get('parentBusId') or '')
-                b_num = el.get('bus_number') or el.get('connected_bus_number') or el_id_to_bus_num.get(parent_id)
-                if b_num is None and el.get('label'):
+                b_num = el.get('bus_number')
+                if b_num is None:
+                    b_num = el.get('connected_bus_number')
+                if b_num is None:
+                    b_num = el.get('busNumber')
+                if b_num is None:
+                    b_num = el_id_to_bus_num.get(parent_id)
+                if b_num is None and not structured_bus_numbers_only and el.get('label'):
                     m = re.search(r'(\d+)', str(el.get('label')))
                     if m:
                         b_num = int(m.group(1))
-                if b_num is None and el.get('id'):
+                if b_num is None and not structured_bus_numbers_only and el.get('id'):
                     m = re.search(r'(\d+)', str(el.get('id')))
                     if m:
                         b_num = int(m.group(1))
                 if b_num is not None:
-                    diagram_loads.add(int(b_num))
+                    try:
+                        diagram_loads.add(int(b_num))
+                    except (ValueError, TypeError):
+                        if structured_bus_numbers_only:
+                            unmapped_device_ids.append(str(el.get('id') or '<unknown>'))
+                elif structured_bus_numbers_only:
+                    unmapped_device_ids.append(str(el.get('id') or '<unknown>'))
 
         # 4. Extract Excel expectations first (to assist in branch/transformer matching)
         excel_buses = {int(k) for k in excel_data.get('buses', {}).keys()}
@@ -1069,6 +1657,7 @@ class ExcelCaseImporter:
         diagram_branches = set()
         trans_lead_line_ids = set()
         all_trans_buses = set()
+        unmapped_branch_ids = []
 
         for tr in elements:
             if 'trans' in get_el_type(tr):
@@ -1093,6 +1682,7 @@ class ExcelCaseImporter:
                                 b = el_id_to_bus_num.get(oid)
                                 if b is not None and b not in conn_buses:
                                     conn_buses.append(b)
+                                    all_trans_buses.add(int(b))
 
                 tr_s = str(tr.get('startElementId') or tr.get('start_element_id') or '')
                 tr_e = str(tr.get('endElementId') or tr.get('end_element_id') or '')
@@ -1100,25 +1690,40 @@ class ExcelCaseImporter:
                 b_e = el_id_to_bus_num.get(tr_e)
                 if b_s is not None and b_s not in conn_buses:
                     conn_buses.append(b_s)
+                    all_trans_buses.add(int(b_s))
                 if b_e is not None and b_e not in conn_buses:
                     conn_buses.append(b_e)
+                    all_trans_buses.add(int(b_e))
 
+                matched_any = bool(elec_brs)
                 if not elec_brs:
-                    # If 2 or more buses connect to this transformer (e.g. multi-port tie transformers)
                     if len(conn_buses) >= 2:
-                        found_any = False
+                        allowed_pairs = excel_transformers if structured_bus_numbers_only else (excel_transformers | excel_branches)
                         for i in range(len(conn_buses)):
                             for j in range(i + 1, len(conn_buses)):
                                 pair = tuple(sorted([int(conn_buses[i]), int(conn_buses[j])]))
-                                if pair in excel_transformers or pair in excel_branches:
+                                if pair in allowed_pairs:
                                     diagram_branches.add(pair)
-                                    found_any = True
-                        if not found_any and len(conn_buses) == 2:
+                                    matched_any = True
+                        if not matched_any and len(conn_buses) == 2 and not structured_bus_numbers_only:
                             diagram_branches.add(tuple(sorted([int(conn_buses[0]), int(conn_buses[1])])))
-                    elif len(conn_buses) == 1:
+                            matched_any = True
+                    elif len(conn_buses) == 1 and not structured_bus_numbers_only:
                         m = re.search(r'(\d+)\s*[-~_↔]\s*(\d+)', str(tr.get('label') or tr.get('id') or ''))
                         if m:
                             diagram_branches.add(tuple(sorted([int(m.group(1)), int(m.group(2))])))
+                            matched_any = True
+
+                if structured_bus_numbers_only and not matched_any:
+                    unmapped_branch_ids.append(t_id)
+
+        # Legacy comparison supports multi-bus substation transformers.  A
+        # verified SLD comparison must not use Excel transformer pairs to
+        # infer topology that its explicit endpoints did not establish.
+        if not structured_bus_numbers_only:
+            for fb, tb in excel_transformers:
+                if fb in all_trans_buses and tb in all_trans_buses:
+                    diagram_branches.add(tuple(sorted([fb, tb])))
 
         for el in elements:
             if 'line' in get_el_type(el):
@@ -1137,18 +1742,28 @@ class ExcelCaseImporter:
                 # Check if this is a lead to a generator or load
                 if el.get('isEquipmentLead') or el.get('is_equipment_lead') or el.get('isGenLead') or el.get('is_gen_lead') or el.get('electricalBranch') is False:
                     continue
-                if id_str.startswith('lead_') or 'lead' in id_str or '↔' in lbl_str:
+                if not structured_bus_numbers_only and (
+                    id_str.startswith('lead_') or 'lead' in id_str or '↔' in lbl_str
+                ):
                     continue
-                is_gen = 'gen' in s_type or 'gen' in e_type or 'gen' in s_str or 'gen' in e_str or 'g_' in s_str or 'g_' in e_str or 'gen' in lbl_str or 'gen' in id_str
-                is_load = 'load' in s_type or 'load' in e_type or 'load' in s_str or 'load' in e_str or 'load' in lbl_str or 'load' in id_str
-                is_lead = (is_gen or is_load) and ('lead' in id_str or 'lead' in lbl_str)
+                if structured_bus_numbers_only:
+                    is_gen = 'gen' in s_type or 'gen' in e_type
+                    is_load = 'load' in s_type or 'load' in e_type
+                else:
+                    is_gen = 'gen' in s_type or 'gen' in e_type or 'gen' in s_str or 'gen' in e_str or 'g_' in s_str or 'g_' in e_str or 'gen' in lbl_str or 'gen' in id_str
+                    is_load = 'load' in s_type or 'load' in e_type or 'load' in s_str or 'load' in e_str or 'load' in lbl_str or 'load' in id_str
+                is_lead = (is_gen or is_load) and (
+                    structured_bus_numbers_only or 'lead' in id_str or 'lead' in lbl_str
+                )
 
                 if is_lead:
                     continue
 
                 fb = el_id_to_bus_num.get(start_id)
                 tb = el_id_to_bus_num.get(end_id)
-                if fb is None or tb is None:
+                if (fb is None or tb is None) and structured_bus_numbers_only:
+                    unmapped_branch_ids.append(str(el.get('id') or '<unknown>'))
+                elif fb is None or tb is None:
                     m = re.search(r'(\d+)\s*[-~_]\s*(\d+)', str(el.get('label') or el.get('id') or ''))
                     if m:
                         fb = fb or int(m.group(1))
@@ -1222,6 +1837,40 @@ class ExcelCaseImporter:
                 "message": f"{b}번 모선의 부하 심볼이 도면에 누락되었습니다."
             })
 
+        duplicate_bus_numbers = sorted(
+            bus_number
+            for bus_number, count in diagram_bus_counts.items()
+            if count > 1
+        ) if structured_bus_numbers_only else []
+        for bus_number in duplicate_bus_numbers:
+            discrepancies.append({
+                "category": "bus",
+                "type": "duplicate",
+                "target": f"Bus {bus_number}",
+                "message": f"도면에 모선 번호 {bus_number}가 중복되어 있습니다."
+            })
+        for bus_id in unmapped_bus_ids:
+            discrepancies.append({
+                "category": "bus",
+                "type": "unmapped",
+                "target": bus_id,
+                "message": f"모선 {bus_id}에 구조화된 bus_number가 없어 엑셀과 안전하게 대조할 수 없습니다."
+            })
+        for element_id in unmapped_device_ids:
+            discrepancies.append({
+                "category": "device",
+                "type": "unmapped",
+                "target": element_id,
+                "message": f"설비 {element_id}의 연결 모선 번호가 명시되어 있지 않아 엑셀과 안전하게 대조할 수 없습니다."
+            })
+        for line_id in unmapped_branch_ids:
+            discrepancies.append({
+                "category": "branch",
+                "type": "unmapped",
+                "target": line_id,
+                "message": f"결선 {line_id}의 검증된 모선 종단을 확인할 수 없어 엑셀과 안전하게 대조할 수 없습니다."
+            })
+
         is_matched = (len(discrepancies) == 0)
 
         # Summary string
@@ -1232,13 +1881,91 @@ class ExcelCaseImporter:
         if surplus_branches: summary_parts.append(f"초과 선로: {len(surplus_branches)}개")
         if missing_gens: summary_parts.append(f"누락 발전기: {len(missing_gens)}개")
         if missing_loads: summary_parts.append(f"누락 부하: {len(missing_loads)}개")
+        if structured_bus_numbers_only and (unmapped_bus_ids or unmapped_device_ids or unmapped_branch_ids):
+            summary_parts.append(
+                f"구조화된 연결 번호 확인 필요: {len(unmapped_bus_ids) + len(unmapped_device_ids) + len(unmapped_branch_ids)}개"
+            )
 
         summary_text = " • ".join(summary_parts) if summary_parts else "모든 모선, 선로, 발전기, 부하가 일치합니다."
+
+        # Build repair proposals if bus validation passed
+        repair_proposals = []
+        if len(missing_buses) == 0 and len(surplus_buses) == 0:
+            for b_str, g_info in excel_data.get('generators', {}).items():
+                try:
+                    b_num = int(b_str)
+                except (ValueError, TypeError):
+                    continue
+                if g_info.get('status') == 0:
+                    continue
+                if b_num not in diagram_gens:
+                    target_bus_id = None
+                    for el in elements:
+                        if get_el_type(el) == 'bus' and el_id_to_bus_num.get(str(el.get('id'))) == b_num:
+                            target_bus_id = str(el.get('id'))
+                            break
+                    pg_mw = float(g_info.get('pg_mw', 0.0))
+                    pg_pu = float(g_info.get('pg_pu', 0.0))
+                    qg_mvar = float(g_info.get('qg_mvar', 0.0))
+                    qg_pu = float(g_info.get('qg_pu', 0.0))
+                    v_pu = float(g_info.get('voltage_setpoint', 1.0))
+                    is_slack = bool(g_info.get('is_slack', False))
+                    is_sc = bool(g_info.get('is_synchronous_condenser', False)) or (abs(pg_mw) < 1e-4 and abs(qg_mvar) > 1e-4)
+
+                    lbl = f"SC_{b_num} (동기조상기)" if is_sc else (f"G_{b_num}" + (" (Slack)" if is_slack else ""))
+                    repair_proposals.append({
+                        "category": "generator",
+                        "action": "suggest_add",
+                        "bus_number": b_num,
+                        "target_bus_id": target_bus_id,
+                        "reason": "EXCEL_EXISTS_VISION_MISSING",
+                        "message": f"Excel에는 Bus {b_num} 발전기({pg_mw:.1f} MW)가 존재하지만 도면에서는 검출되지 않았습니다.",
+                        "excel_data": {
+                            "bus_number": b_num,
+                            "pg_mw": pg_mw,
+                            "pg_pu": pg_pu,
+                            "qg_mvar": qg_mvar,
+                            "qg_pu": qg_pu,
+                            "v_pu": v_pu,
+                            "is_slack": is_slack,
+                            "is_synchronous_condenser": is_sc,
+                            "label": lbl,
+                        }
+                    })
+
+            for b_num in missing_loads:
+                b_info = excel_data.get('buses', {}).get(str(b_num)) or excel_data.get('buses', {}).get(b_num) or {}
+                p_mw = float(b_info.get('pload_mw', 0.0))
+                p_pu = float(b_info.get('pload_pu', 0.0))
+                q_mvar = float(b_info.get('qload_mvar', 0.0))
+                q_pu = float(b_info.get('qload_pu', 0.0))
+                target_bus_id = None
+                for el in elements:
+                    if get_el_type(el) == 'bus' and el_id_to_bus_num.get(str(el.get('id'))) == b_num:
+                        target_bus_id = str(el.get('id'))
+                        break
+                repair_proposals.append({
+                    "category": "load",
+                    "action": "suggest_add",
+                    "bus_number": b_num,
+                    "target_bus_id": target_bus_id,
+                    "reason": "EXCEL_EXISTS_VISION_MISSING",
+                    "message": f"Excel에는 Bus {b_num} 부하({p_mw:.1f} MW, {q_mvar:.1f} Mvar)가 존재하지만 도면에서는 심볼이 검출되지 않았습니다.",
+                    "excel_data": {
+                        "bus_number": b_num,
+                        "p_mw": p_mw,
+                        "p_pu": p_pu,
+                        "q_mvar": q_mvar,
+                        "q_pu": q_pu,
+                        "label": f"Load_{b_num}",
+                    }
+                })
 
         return {
             "is_matched": is_matched,
             "summary": summary_text,
             "discrepancies": discrepancies,
+            "repair_proposals": repair_proposals,
             "stats": {
                 "excel": {
                     "buses": len(excel_buses),
@@ -1262,5 +1989,9 @@ class ExcelCaseImporter:
                 "surplus_generators": surplus_gens,
                 "missing_loads": missing_loads,
                 "surplus_loads": surplus_loads,
+                "unmapped_buses": unmapped_bus_ids,
+                "unmapped_devices": unmapped_device_ids,
+                "unmapped_branches": unmapped_branch_ids,
+                "duplicate_bus_numbers": duplicate_bus_numbers,
             }
         }

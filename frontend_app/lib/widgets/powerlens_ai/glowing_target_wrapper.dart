@@ -10,6 +10,9 @@ class GlowingTargetWrapper extends StatefulWidget {
   final BorderRadius? borderRadius;
   final EdgeInsetsGeometry padding;
   final String? guideLabel;
+  final Color? highlightColor;
+  final bool subtlePulse;
+  final bool showGuideLabel;
 
   const GlowingTargetWrapper({
     super.key,
@@ -18,6 +21,9 @@ class GlowingTargetWrapper extends StatefulWidget {
     this.borderRadius,
     this.padding = EdgeInsets.zero,
     this.guideLabel,
+    this.highlightColor,
+    this.subtlePulse = false,
+    this.showGuideLabel = true,
   });
 
   @override
@@ -37,7 +43,9 @@ class _GlowingTargetWrapperState extends State<GlowingTargetWrapper>
       duration: const Duration(milliseconds: 1000),
     );
     _checkHighlight();
-    PowerLensAIService.instance.activeHighlightTarget.addListener(_onHighlightChanged);
+    PowerLensAIService.instance.activeHighlightTarget.addListener(
+      _onHighlightChanged,
+    );
   }
 
   @override
@@ -72,7 +80,9 @@ class _GlowingTargetWrapperState extends State<GlowingTargetWrapper>
 
   @override
   void dispose() {
-    PowerLensAIService.instance.activeHighlightTarget.removeListener(_onHighlightChanged);
+    PowerLensAIService.instance.activeHighlightTarget.removeListener(
+      _onHighlightChanged,
+    );
     _animController.dispose();
     super.dispose();
   }
@@ -86,7 +96,13 @@ class _GlowingTargetWrapperState extends State<GlowingTargetWrapper>
       animation: _animController,
       builder: (context, _) {
         final t = _animController.value;
-        final pulse = _isHighlighted ? (0.5 + 0.5 * math.sin(t * math.pi)) : 0.0;
+        final pulse = _isHighlighted
+            ? (0.5 + 0.5 * math.sin(t * math.pi))
+            : 0.0;
+        final highlightColor = widget.highlightColor ?? const Color(0xFF06B6D4);
+        final innerHighlightColor = widget.highlightColor == null
+            ? const Color(0xFF14B8A6)
+            : Color.lerp(highlightColor, Colors.white, 0.45)!;
 
         return Stack(
           fit: StackFit.passthrough,
@@ -98,24 +114,34 @@ class _GlowingTargetWrapperState extends State<GlowingTargetWrapper>
                 decoration: BoxDecoration(
                   borderRadius: radius,
                   boxShadow: _isHighlighted
-                      ? [
-                          // Outer radiant aura
-                          BoxShadow(
-                            color: const Color(0xFFF59E0B).withValues(
-                              alpha: 0.35 + 0.35 * pulse,
-                            ),
-                            blurRadius: 12 + 10 * pulse,
-                            spreadRadius: 2 + 4 * pulse,
-                          ),
-                          // Inner bright glow
-                          BoxShadow(
-                            color: const Color(0xFF38BDF8).withValues(
-                              alpha: 0.25 + 0.30 * pulse,
-                            ),
-                            blurRadius: 20 + 8 * pulse,
-                            spreadRadius: 1 + 2 * pulse,
-                          ),
-                        ]
+                      ? widget.subtlePulse
+                            ? [
+                                BoxShadow(
+                                  color: highlightColor.withValues(
+                                    alpha: 0.12 + 0.10 * pulse,
+                                  ),
+                                  blurRadius: 5 + 3 * pulse,
+                                  spreadRadius: 0.5 + 1.0 * pulse,
+                                ),
+                              ]
+                            : [
+                                // Outer radiant aura
+                                BoxShadow(
+                                  color: innerHighlightColor.withValues(
+                                    alpha: 0.35 + 0.35 * pulse,
+                                  ),
+                                  blurRadius: 12 + 10 * pulse,
+                                  spreadRadius: 2 + 4 * pulse,
+                                ),
+                                // Inner bright glow
+                                BoxShadow(
+                                  color: highlightColor.withValues(
+                                    alpha: 0.25 + 0.30 * pulse,
+                                  ),
+                                  blurRadius: 20 + 8 * pulse,
+                                  spreadRadius: 1 + 2 * pulse,
+                                ),
+                              ]
                       : null,
                 ),
                 child: DecoratedBox(
@@ -125,11 +151,11 @@ class _GlowingTargetWrapperState extends State<GlowingTargetWrapper>
                     border: _isHighlighted
                         ? Border.all(
                             color: Color.lerp(
-                              const Color(0xFFF59E0B),
-                              const Color(0xFF38BDF8),
+                              highlightColor,
+                              innerHighlightColor,
                               pulse,
                             )!.withValues(alpha: 0.85 + 0.15 * pulse),
-                            width: 2.5,
+                            width: widget.subtlePulse ? 1.8 : 2.5,
                           )
                         : null,
                   ),
@@ -137,21 +163,24 @@ class _GlowingTargetWrapperState extends State<GlowingTargetWrapper>
                 ),
               ),
             ),
-            if (_isHighlighted)
+            if (_isHighlighted && widget.showGuideLabel)
               Positioned(
                 top: -14,
                 right: 6,
                 child: IgnorePointer(
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
                     decoration: BoxDecoration(
                       gradient: const LinearGradient(
-                        colors: [Color(0xFFF59E0B), Color(0xFFD97706)],
+                        colors: [Color(0xFF0891B2), Color(0xFF0F766E)],
                       ),
                       borderRadius: BorderRadius.circular(12),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.amber.withValues(alpha: 0.6),
+                          color: highlightColor.withValues(alpha: 0.6),
                           blurRadius: 8,
                           offset: const Offset(0, 2),
                         ),

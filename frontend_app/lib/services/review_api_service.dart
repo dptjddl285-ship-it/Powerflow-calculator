@@ -4,7 +4,10 @@ import 'package:http/http.dart' as http;
 import '../models/review_models.dart';
 
 class ReviewApiService {
-  static const String baseUrl = 'http://127.0.0.1:8000';
+  static const String baseUrl = String.fromEnvironment(
+    'POWERLENS_API_BASE_URL',
+    defaultValue: 'http://127.0.0.1:8000',
+  );
 
   Future<ReviewDocument> detectObjects(
     Uint8List imageBytes,
@@ -107,6 +110,27 @@ class ReviewApiService {
 
     if (response.statusCode != 200) {
       throw Exception('Gate 검증 실패: HTTP ${response.statusCode}');
+    }
+
+    return jsonDecode(utf8.decode(response.bodyBytes));
+  }
+
+  Future<Map<String, dynamic>> verifyBusGate({
+    required String documentId,
+    required List<ReviewNodeItem> workingNodes,
+  }) async {
+    final uri = Uri.parse('$baseUrl/review/verify_bus_gate');
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'document_id': documentId,
+        'working_nodes': workingNodes.map((n) => n.toJson()).toList(),
+      }),
+    );
+
+    if (response.statusCode != 200) {
+      throw Exception('Bus Gate 검증 실패: HTTP ${response.statusCode}');
     }
 
     return jsonDecode(utf8.decode(response.bodyBytes));
@@ -319,13 +343,20 @@ class ReviewApiService {
     }
     final data = jsonDecode(utf8.decode(response.bodyBytes));
     if (data is List) {
-      return data.map((item) => Map<String, dynamic>.from(item as Map)).toList();
+      return data
+          .map((item) => Map<String, dynamic>.from(item as Map))
+          .toList();
     }
     return [];
   }
 
-  Future<Map<String, dynamic>> fetchAgentRun(String documentId, String runId) async {
-    final uri = Uri.parse('$baseUrl/review/documents/$documentId/agent-runs/$runId');
+  Future<Map<String, dynamic>> fetchAgentRun(
+    String documentId,
+    String runId,
+  ) async {
+    final uri = Uri.parse(
+      '$baseUrl/review/documents/$documentId/agent-runs/$runId',
+    );
     final response = await http.get(uri);
     if (response.statusCode != 200) {
       throw Exception('Agent 실행 상세 조회 실패: HTTP ${response.statusCode}');
@@ -357,20 +388,29 @@ class ReviewApiService {
     return jsonDecode(utf8.decode(response.bodyBytes));
   }
 
-  Future<Map<String, dynamic>> uploadExcelCase(Uint8List fileBytes, String filename) async {
+  Future<Map<String, dynamic>> uploadExcelCase(
+    Uint8List fileBytes,
+    String filename,
+  ) async {
     final uri = Uri.parse('$baseUrl/upload_excel');
     final request = http.MultipartRequest('POST', uri);
     // Use ascii safe filename to prevent Latin-1 encoding header exceptions on Dart http
     final safeName = filename.replaceAll(RegExp(r'[^\x00-\x7F]'), '_');
     request.files.add(
-      http.MultipartFile.fromBytes('file', fileBytes, filename: safeName.isNotEmpty ? safeName : 'case.xlsx'),
+      http.MultipartFile.fromBytes(
+        'file',
+        fileBytes,
+        filename: safeName.isNotEmpty ? safeName : 'case.xlsx',
+      ),
     );
 
     final streamedResponse = await request.send();
     final response = await http.Response.fromStream(streamedResponse);
 
     if (response.statusCode != 200) {
-      throw Exception('엑셀 업로드 요청 실패: HTTP ${response.statusCode} - ${response.body}');
+      throw Exception(
+        '엑셀 업로드 요청 실패: HTTP ${response.statusCode} - ${response.body}',
+      );
     }
 
     final data = jsonDecode(utf8.decode(response.bodyBytes));

@@ -70,7 +70,7 @@ class TestExcelDiscrepancyChecker(unittest.TestCase):
 
 
     def test_synchronous_condenser_load_equivalence(self):
-        """Load does not satisfy generator requirement; apply_to_elements auto-supplements missing generator."""
+        """Load does not satisfy generator requirement; the importer returns a proposal without mutation."""
         elements = []
         for k in self.excel_data["buses"].keys():
             elements.append({"id": f"bus_{k}", "type": "bus", "bus_number": int(k), "label": f"{k}"})
@@ -89,10 +89,13 @@ class TestExcelDiscrepancyChecker(unittest.TestCase):
         # Under proposal policy: elements are not mutated, and proposal is generated
         updated_elements, summary = self.importer.apply_to_elements(elements, self.excel_data)
         self.assertFalse(any('gen_auto' in str(e.get('id')) for e in updated_elements))
-        proposals = summary.get('repair_proposals', [])
-        self.assertTrue(any(p.get('category') == 'generator' and p.get('bus_number') == 14 for p in proposals))
         report = summary["mismatch_report"]
         self.assertIn(14, report["details"]["missing_generators"])
+        proposals = summary.get('repair_proposals', [])
+        self.assertTrue(any(
+            proposal.get("category") == "generator" and proposal.get("bus_number") == 14
+            for proposal in proposals
+        ))
 
     def test_transformer_multibus_connections(self):
         """Transformers connecting 9, 10, 11, 12 should resolve 9-12 and 10-11."""

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 import numpy as np
@@ -81,11 +83,13 @@ class AgentObjectReviewer:
         evidence: ObjectEvidence,
         image: Optional[np.ndarray] = None,
     ) -> AgentReviewResult:
-        import json
-        import urllib.request
+        from core.model_config import get_gemini_model_name, get_gemini_fallback_model_name
 
-        model_name = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={self.gemini_api_key}"
+        primary_model = get_gemini_model_name()
+        fallback_model = get_gemini_fallback_model_name()
+        models_to_try = [primary_model]
+        if fallback_model and fallback_model != primary_model:
+            models_to_try.append(fallback_model)
 
         system_instruction = (
             "당신은 전력계통 단선도(SLD) 객체 심볼 검수 전문 AI입니다.\n"
@@ -114,30 +118,37 @@ class AgentObjectReviewer:
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.1,
+                "maxOutputTokens": 800,
                 "response_mime_type": "application/json",
             }
         }
 
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=10.0) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            candidates = data.get("candidates", [])
-            if candidates:
-                text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
-                parsed = json.loads(text)
-                return AgentReviewResult(
-                    node_id=evidence.node_id,
-                    assessment=parsed.get("assessment", "CONFIRM" if not evidence.is_suspicious else "NEEDS_HUMAN_REVIEW"),
-                    message_ko=parsed.get("message_ko", f"{evidence.class_name.upper()} 심볼 분석 완료."),
-                    recommended_action=parsed.get("recommended_action", "CONFIRM" if not evidence.is_suspicious else "ASK_USER"),
-                    suggested_classes=parsed.get("suggested_classes", [evidence.class_name.lower()]),
-                    agent_status="GEMINI_LLM",
-                )
+        for idx, m_name in enumerate(models_to_try):
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{m_name}:generateContent?key={self.gemini_api_key}"
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=10.0) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                        parsed = json.loads(text)
+                        return AgentReviewResult(
+                            node_id=evidence.node_id,
+                            assessment=parsed.get("assessment", "CONFIRM" if not evidence.is_suspicious else "NEEDS_HUMAN_REVIEW"),
+                            message_ko=parsed.get("message_ko", f"{evidence.class_name.upper()} 심볼 분석 완료."),
+                            recommended_action=parsed.get("recommended_action", "CONFIRM" if not evidence.is_suspicious else "ASK_USER"),
+                            suggested_classes=parsed.get("suggested_classes", [evidence.class_name.lower()]),
+                            agent_status="GEMINI_LLM",
+                        )
+            except Exception as e:
+                print(f"[ObjectReviewer {m_name} Attempt {idx+1} Error]: {e}")
+                continue
 
         return self._deterministic_fallback_review(evidence, image)
 

@@ -12,12 +12,16 @@ import 'package:image_picker/image_picker.dart';
 import 'screens/review_page.dart';
 import 'models/drawing_element.dart';
 import 'models/powerlens_assistant_context.dart';
+import 'models/power_flow_readiness.dart';
+import 'models/power_flow_result_contract.dart';
+import 'models/verified_sld_canvas_mapper.dart';
 import 'services/powerlens_ai_service.dart';
 import 'services/review_api_service.dart';
 import 'widgets/inspector_panel.dart';
 import 'widgets/home/powerlens_home_empty_state.dart';
 import 'widgets/powerlens_ai/powerlens_ai_button.dart';
 import 'widgets/powerlens_ai/powerlens_ai_panel.dart';
+import 'widgets/powerlens_ai/powerlens_companion_layout.dart';
 import 'widgets/powerlens_ai/glowing_target_wrapper.dart';
 
 // 절대 끊기지 않는 무한 캔버스의 크기 (10만 픽셀)
@@ -65,6 +69,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
 
   Map<String, dynamic>? lastSimulationResult;
   int? excelBranchCount;
+  double powerFlowSBase = 100.0;
   bool showResultOverlay = false;
   bool showFlowDirection = true;
   bool showValueLabels = false;
@@ -75,10 +80,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
   final GlobalKey _powerFlowButtonKey = GlobalKey();
   final GlobalKey _resultButtonKey = GlobalKey();
   Alignment? _manualLensyAlignment;
-  String? _manualLensyTarget;
-  Alignment? _measuredLensyAlignment;
-  String? _measuredLensyTarget;
-  String? _lastLensySyncTarget;
+  bool _isLensyDragging = false;
   final ReviewApiService _apiService = ReviewApiService();
 
   @override
@@ -131,6 +133,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           elements.clear();
           selectedElement = null;
           lastSimulationResult = null;
+          excelBranchCount = null;
+          powerFlowSBase = 100.0;
           showResultOverlay = false;
           isInspectorOpen = false;
           _flowAnimController.stop();
@@ -153,6 +157,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
       case PowerLensAppAction.connectionFullReview:
       case PowerLensAppAction.connectionLinesOnly:
       case PowerLensAppAction.connectionNextLine:
+      case PowerLensAppAction.confirmBusNumber:
+      case PowerLensAppAction.confirmObjectCompleteness:
       case PowerLensAppAction.handoffToCanvas:
         // ReviewPage owns review evidence and its gate state. Returning false
         // lets the visible ReviewPage handler consume these actions while the
@@ -175,10 +181,17 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         }
         return false;
       case PowerLensAppAction.runPowerFlow:
-        if (elements.isEmpty) {
+        final readiness = PowerFlowReadiness.evaluate(elements);
+        if (!readiness.ready) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text("먼저 도면을 분석하거나 샘플을 불러와주세요.")),
+              SnackBar(
+                content: Text(
+                  '조류계산 준비가 필요합니다: ${readiness.blockers.join(' ')}',
+                ),
+                backgroundColor: Colors.orange.shade800,
+                duration: const Duration(seconds: 6),
+              ),
             );
           }
           return false;
@@ -186,13 +199,18 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         await _sendDataToServer();
         return true;
       case PowerLensAppAction.showPowerFlowResults:
-        if (lastSimulationResult == null) return false;
+        if (!PowerFlowResultContract.hasActualResult(lastSimulationResult)) {
+          return false;
+        }
         if (mounted) {
           setState(() => showResultOverlay = true);
           _showPowerFlowResultDialog(lastSimulationResult!);
         }
         return true;
       case PowerLensAppAction.toggleFlowDirection:
+        if (!PowerFlowResultContract.isConverged(lastSimulationResult)) {
+          return false;
+        }
         setState(() {
           showFlowDirection = !showFlowDirection;
           showResultOverlay = true;
@@ -204,7 +222,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         });
         return true;
       case PowerLensAppAction.showFlowDirection:
-        if (lastSimulationResult == null) return false;
+        if (!PowerFlowResultContract.isConverged(lastSimulationResult)) {
+          return false;
+        }
         setState(() {
           showFlowDirection = true;
           showResultOverlay = true;
@@ -218,12 +238,17 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         });
         return true;
       case PowerLensAppAction.toggleValueLabels:
+        if (!PowerFlowResultContract.hasActualResult(lastSimulationResult)) {
+          return false;
+        }
         setState(() {
           showValueLabels = !showValueLabels;
         });
         return true;
       case PowerLensAppAction.showValueLabels:
-        if (lastSimulationResult == null) return false;
+        if (!PowerFlowResultContract.hasActualResult(lastSimulationResult)) {
+          return false;
+        }
         setState(() => showValueLabels = true);
         return true;
       case PowerLensAppAction.hideValueLabels:
@@ -332,11 +357,12 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
 
     final focusedWidget = FocusManager.instance.primaryFocus;
     // Any focus outside canvas on an editable text field means the user is typing
-    final isEditingInput = focusedWidget != null && focusedWidget != _canvasFocusNode && (
-      focusedWidget.context?.widget is EditableText ||
-      focusedWidget.toString().contains('EditableText') ||
-      focusedWidget.toString().contains('TextField')
-    );
+    final isEditingInput =
+        focusedWidget != null &&
+        focusedWidget != _canvasFocusNode &&
+        (focusedWidget.context?.widget is EditableText ||
+            focusedWidget.toString().contains('EditableText') ||
+            focusedWidget.toString().contains('TextField'));
 
     if (isEditingInput) {
       if (event.logicalKey == LogicalKeyboardKey.escape) {
@@ -348,22 +374,26 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
     }
 
     // Zoom to fit: Ctrl + Space, Ctrl + F, or Ctrl + 0 (Prevents accidental trigger when typing 'F' or Space in labels)
-    if (isCtrl && (event.logicalKey == LogicalKeyboardKey.space ||
-                   event.logicalKey == LogicalKeyboardKey.keyF ||
-                   event.logicalKey == LogicalKeyboardKey.digit0)) {
+    if (isCtrl &&
+        (event.logicalKey == LogicalKeyboardKey.space ||
+            event.logicalKey == LogicalKeyboardKey.keyF ||
+            event.logicalKey == LogicalKeyboardKey.digit0)) {
       _zoomToFit();
       return;
     }
 
     // Only allow element deletion when Delete key is pressed on canvas
-    if (event.logicalKey == LogicalKeyboardKey.delete && selectedElement != null && _canvasFocusNode.hasFocus) {
+    if (event.logicalKey == LogicalKeyboardKey.delete &&
+        selectedElement != null &&
+        _canvasFocusNode.hasFocus) {
       _deleteSelectedElement();
       return;
-    } else if (selectedElement != null && _canvasFocusNode.hasFocus && (
-        event.logicalKey == LogicalKeyboardKey.arrowLeft ||
-        event.logicalKey == LogicalKeyboardKey.arrowRight ||
-        event.logicalKey == LogicalKeyboardKey.arrowUp ||
-        event.logicalKey == LogicalKeyboardKey.arrowDown)) {
+    } else if (selectedElement != null &&
+        _canvasFocusNode.hasFocus &&
+        (event.logicalKey == LogicalKeyboardKey.arrowLeft ||
+            event.logicalKey == LogicalKeyboardKey.arrowRight ||
+            event.logicalKey == LogicalKeyboardKey.arrowUp ||
+            event.logicalKey == LogicalKeyboardKey.arrowDown)) {
       final double step = isShift ? 10.0 : 1.0;
       if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
         _moveElement(selectedElement!, Offset(-step, 0));
@@ -375,7 +405,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         _moveElement(selectedElement!, Offset(0, step));
       }
       return;
-    } else if (selectedElement != null && (isCtrl || isAlt) && event.logicalKey == LogicalKeyboardKey.keyR) {
+    } else if (selectedElement != null &&
+        (isCtrl || isAlt) &&
+        event.logicalKey == LogicalKeyboardKey.keyR) {
       // Rotation now strictly requires Ctrl+R (or Alt+R) combination, preventing single 'R' collisions during label input
       _rotateElement(selectedElement!);
       return;
@@ -526,7 +558,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
               children: [
                 // Header
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 16,
+                  ),
                   color: const Color(0xFF0F172A),
                   child: Row(
                     children: [
@@ -535,9 +570,16 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                         decoration: BoxDecoration(
                           color: Colors.purpleAccent.withOpacity(0.25),
                           borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Colors.purpleAccent, width: 1.5),
+                          border: Border.all(
+                            color: Colors.purpleAccent,
+                            width: 1.5,
+                          ),
                         ),
-                        child: const Icon(Icons.auto_awesome, color: Colors.amberAccent, size: 22),
+                        child: const Icon(
+                          Icons.auto_awesome,
+                          color: Colors.amberAccent,
+                          size: 22,
+                        ),
                       ),
                       const SizedBox(width: 14),
                       const Expanded(
@@ -546,12 +588,19 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                           children: [
                             Text(
                               "PowerLens Pro 가이드 · AI 도면 검수실 (메인)",
-                              style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 17,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                             SizedBox(height: 2),
                             Text(
                               "AI 멀티에이전트 도면 검수 & AC 조류계산 완벽 가이드",
-                              style: TextStyle(color: Colors.white70, fontSize: 12),
+                              style: TextStyle(
+                                color: Colors.white70,
+                                fontSize: 12,
+                              ),
                             ),
                           ],
                         ),
@@ -574,12 +623,27 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                     indicatorWeight: 3,
                     labelColor: Colors.purpleAccent,
                     unselectedLabelColor: Colors.white60,
-                    labelStyle: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                    labelStyle: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
                     tabs: [
-                      Tab(icon: Icon(Icons.auto_awesome, size: 18), text: "AI 도면 검수실 (메인)"),
-                      Tab(icon: Icon(Icons.account_tree_outlined, size: 18), text: "계통 해석 순서"),
-                      Tab(icon: Icon(Icons.keyboard, size: 18), text: "키보드 단축키 (Ctrl+R)"),
-                      Tab(icon: Icon(Icons.mouse, size: 18), text: "마우스 & 캔버스 조작"),
+                      Tab(
+                        icon: Icon(Icons.auto_awesome, size: 18),
+                        text: "AI 도면 검수실 (메인)",
+                      ),
+                      Tab(
+                        icon: Icon(Icons.account_tree_outlined, size: 18),
+                        text: "계통 해석 순서",
+                      ),
+                      Tab(
+                        icon: Icon(Icons.keyboard, size: 18),
+                        text: "키보드 단축키 (Ctrl+R)",
+                      ),
+                      Tab(
+                        icon: Icon(Icons.mouse, size: 18),
+                        text: "마우스 & 캔버스 조작",
+                      ),
                     ],
                   ),
                 ),
@@ -599,21 +663,34 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                 ),
                 // Footer
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 12,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.grey.shade50,
-                    border: Border(top: BorderSide(color: Colors.grey.shade200)),
+                    border: Border(
+                      top: BorderSide(color: Colors.grey.shade200),
+                    ),
                   ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Row(
                         children: [
-                          const Icon(Icons.auto_awesome, size: 16, color: Colors.purpleAccent),
+                          const Icon(
+                            Icons.auto_awesome,
+                            size: 16,
+                            color: Colors.purpleAccent,
+                          ),
                           const SizedBox(width: 6),
                           Text(
                             "💡 Tip: 상단 [AI 도면 검수실] 버튼을 누르면 즉시 검수실로 이동합니다.",
-                            style: TextStyle(fontSize: 12, color: Colors.blueGrey.shade800, fontWeight: FontWeight.w600),
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.blueGrey.shade800,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                         ],
                       ),
@@ -621,11 +698,22 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFF0F172A),
                           foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 20,
+                            vertical: 10,
+                          ),
                         ),
                         onPressed: () => Navigator.of(ctx).pop(),
-                        child: const Text("닫기", style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                        child: const Text(
+                          "닫기",
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                       ),
                     ],
                   ),
@@ -655,7 +743,11 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
               ),
               borderRadius: BorderRadius.circular(12),
               boxShadow: [
-                BoxShadow(color: Colors.purple.withOpacity(0.25), blurRadius: 8, offset: const Offset(0, 3)),
+                BoxShadow(
+                  color: Colors.purple.withOpacity(0.25),
+                  blurRadius: 8,
+                  offset: const Offset(0, 3),
+                ),
               ],
             ),
             child: Row(
@@ -666,7 +758,11 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                     color: Colors.white.withOpacity(0.2),
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: const Icon(Icons.auto_awesome, color: Colors.amberAccent, size: 28),
+                  child: const Icon(
+                    Icons.auto_awesome,
+                    color: Colors.amberAccent,
+                    size: 28,
+                  ),
                 ),
                 const SizedBox(width: 14),
                 const Expanded(
@@ -675,12 +771,20 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                     children: [
                       Text(
                         "AI 도면 검수실이란?",
-                        style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                       SizedBox(height: 4),
                       Text(
                         "손그림/CAD 단선도 이미지와 계통 엑셀 데이터 사이의 불일치(부품 누락, 잘못된 선로 연결, 모선 번호 오류)를 멀티에이전트 AI가 스스로 발견하고 정밀 교정해주는 핵심 기능입니다.",
-                        style: TextStyle(color: Colors.white, fontSize: 12.5, height: 1.4),
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 12.5,
+                          height: 1.4,
+                        ),
                       ),
                     ],
                   ),
@@ -697,15 +801,27 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                 backgroundColor: const Color(0xFF7C3AED),
                 foregroundColor: Colors.white,
                 elevation: 2,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 12,
+                ),
               ),
               onPressed: () {
                 Navigator.of(ctx).pop();
                 _openReviewPage();
               },
-              icon: const Icon(Icons.open_in_new, size: 18, color: Colors.amberAccent),
-              label: const Text("✨ 지금 AI 도면 검수실 열기", style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold)),
+              icon: const Icon(
+                Icons.open_in_new,
+                size: 18,
+                color: Colors.amberAccent,
+              ),
+              label: const Text(
+                "✨ 지금 AI 도면 검수실 열기",
+                style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold),
+              ),
             ),
           ),
           const SizedBox(height: 20),
@@ -715,7 +831,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           _buildReviewPhaseCard(
             phaseNum: "Phase 1",
             title: "객체 검수 (Object Review)",
-            desc: "도면 이미지에서 추출된 모선(Bus), 발전기(Gen), 부하(Load), 변압기(Tr)의 바운딩 박스와 AI 신뢰도(Confidence)를 확인합니다. 미인식된 부품은 추가하고 오인식된 부품은 수정/제외합니다.",
+            desc:
+                "도면 이미지에서 추출된 모선(Bus), 발전기(Gen), 부하(Load), 변압기(Tr)의 바운딩 박스와 AI 신뢰도(Confidence)를 확인합니다. 미인식된 부품은 추가하고 오인식된 부품은 수정/제외합니다.",
             color: Colors.blue,
             icon: Icons.filter_center_focus,
           ),
@@ -723,7 +840,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           _buildReviewPhaseCard(
             phaseNum: "Phase 2",
             title: "모선 번호 매핑 (Bus Mapping Review)",
-            desc: "도면 텍스트 OCR 및 기하학적 공간 근접도를 기반으로 각 모선에 고유 번호(Bus Number)를 자동/수동 부여하고 인접 발전기/부하로 번호를 전파합니다. 중복 번호 및 미부여 문제를 해결합니다.",
+            desc:
+                "도면 텍스트 OCR 및 기하학적 공간 근접도를 기반으로 각 모선에 고유 번호(Bus Number)를 자동/수동 부여하고 인접 발전기/부하로 번호를 전파합니다. 중복 번호 및 미부여 문제를 해결합니다.",
             color: Colors.amber.shade900,
             icon: Icons.swap_horiz,
           ),
@@ -731,7 +849,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           _buildReviewPhaseCard(
             phaseNum: "Phase 3",
             title: "선로 결선 검수 (Connection Review)",
-            desc: "확정된 모선 노드를 기반으로 픽셀 스켈레톤화 및 선로 추적을 실행하여 송전선로(Branch), 변압기, 인입선 결선을 검수합니다. 모호한 선로(Ambiguous) 수동 교정 및 단선/고립 모선 토폴로지 결함을 해결합니다.",
+            desc:
+                "확정된 모선 노드를 기반으로 픽셀 스켈레톤화 및 선로 추적을 실행하여 송전선로(Branch), 변압기, 인입선 결선을 검수합니다. 모호한 선로(Ambiguous) 수동 교정 및 단선/고립 모선 토폴로지 결함을 해결합니다.",
             color: Colors.teal,
             icon: Icons.polyline,
           ),
@@ -739,7 +858,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           _buildReviewPhaseCard(
             phaseNum: "Phase 4",
             title: "최종 확인 & 엑셀 대조 (Verified Final & Excel)",
-            desc: "검증이 완료된 단선도(VerifiedSLD)를 확정하고, 전력계통 엑셀 파일(.xlsx)을 업로드하여 도면과 엑셀 간 설비 사양(모선/선로/발전기/부하)을 교차 대조(Cross-check)합니다. 불일치 발생 시 AI 진단 및 자동 보정 후 캔버스로 전송합니다.",
+            desc:
+                "검증이 완료된 단선도(VerifiedSLD)를 확정하고, 전력계통 엑셀 파일(.xlsx)을 업로드하여 도면과 엑셀 간 설비 사양(모선/선로/발전기/부하)을 교차 대조(Cross-check)합니다. 불일치 발생 시 AI 진단 및 자동 보정 후 캔버스로 전송합니다.",
             color: Colors.green,
             icon: Icons.verified,
           ),
@@ -765,9 +885,22 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text("활동기록 (Agent Activity - 추론 과정 및 감사 로그)", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF0F172A))),
+                          Text(
+                            "활동기록 (Agent Activity - 추론 과정 및 감사 로그)",
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                              color: Color(0xFF0F172A),
+                            ),
+                          ),
                           SizedBox(height: 2),
-                          Text("AI가 왜 특정 설비를 의심(Suspicious)으로 판정했는지, 어떤 규칙과 근거로 문제를 탐지했는지 단계별 사고 과정(Reasoning Steps)과 도구 실행 이력을 실시간으로 투명하게 확인합니다.", style: TextStyle(fontSize: 12, color: Colors.black87)),
+                          Text(
+                            "AI가 왜 특정 설비를 의심(Suspicious)으로 판정했는지, 어떤 규칙과 근거로 문제를 탐지했는지 단계별 사고 과정(Reasoning Steps)과 도구 실행 이력을 실시간으로 투명하게 확인합니다.",
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.black87,
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -777,15 +910,32 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Icon(Icons.chat_bubble_outline, color: Colors.purple, size: 20),
+                    Icon(
+                      Icons.chat_bubble_outline,
+                      color: Colors.purple,
+                      size: 20,
+                    ),
                     SizedBox(width: 10),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text("AI도우미 (Review Assistant - 상황 맞춤 진단 및 검수 가이드)", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Color(0xFF0F172A))),
+                          Text(
+                            "AI도우미 (Review Assistant - 상황 맞춤 진단 및 검수 가이드)",
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 13,
+                              color: Color(0xFF0F172A),
+                            ),
+                          ),
                           SizedBox(height: 2),
-                          Text("도면의 객체나 선로를 선택한 후 원클릭 추천 칩(우선순위 요약, 다음 단계 가이드, 의심 판정 근거, 클래스 변경 시 계통 영향 분석)을 눌러 실시간 진단 조언을 확인할 수 있습니다. (자연어로 도면을 자동 수정하는 봇이 아니며, 실제 객체 승인·수정·제외는 검수 패널의 전용 조작 버튼으로 안전하게 진행합니다.)", style: TextStyle(fontSize: 12, color: Colors.black87)),
+                          Text(
+                            "도면의 객체나 선로를 선택한 후 원클릭 추천 칩(우선순위 요약, 다음 단계 가이드, 의심 판정 근거, 클래스 변경 시 계통 영향 분석)을 눌러 실시간 진단 조언을 확인할 수 있습니다. (자연어로 도면을 자동 수정하는 봇이 아니며, 실제 객체 승인·수정·제외는 검수 패널의 전용 조작 버튼으로 안전하게 진행합니다.)",
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.black87,
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -824,7 +974,11 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
             ),
             child: Text(
               phaseNum,
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 11),
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 11,
+              ),
             ),
           ),
           const SizedBox(width: 12),
@@ -836,11 +990,25 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                   children: [
                     Icon(icon, size: 16, color: color),
                     const SizedBox(width: 6),
-                    Text(title, style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold, color: color)),
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.bold,
+                        color: color,
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 4),
-                Text(desc, style: const TextStyle(fontSize: 12.5, color: Colors.black87, height: 1.4)),
+                Text(
+                  desc,
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    color: Colors.black87,
+                    height: 1.4,
+                  ),
+                ),
               ],
             ),
           ),
@@ -866,15 +1034,28 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
             ),
             child: Column(
               children: [
-                _buildShortcutItem("Ctrl + R", "선택한 부품 90° 회전 (모선 가로/세로 전환, 발전기/부하/변압기 각도 회전, Alt+R 지원)", isHighlight: true),
+                _buildShortcutItem(
+                  "Ctrl + R",
+                  "선택한 부품 90° 회전 (모선 가로/세로 전환, 발전기/부하/변압기 각도 회전, Alt+R 지원)",
+                  isHighlight: true,
+                ),
                 const Divider(height: 14),
                 _buildShortcutItem("Del", "선택한 부품 즉시 삭제 (텍스트 입력 중 오동작 방지)"),
                 const Divider(height: 14),
-                _buildShortcutItem("방향키 (↑ ↓ ← →)", "선택 부품 1px 미세 이동 (Shift 누르면 10px씩 고속 이동)"),
+                _buildShortcutItem(
+                  "방향키 (↑ ↓ ← →)",
+                  "선택 부품 1px 미세 이동 (Shift 누르면 10px씩 고속 이동)",
+                ),
                 const Divider(height: 14),
-                _buildShortcutItem("Ctrl + Z  /  Ctrl + Y", "실행 취소 (Undo)  /  다시 실행 (Redo)"),
+                _buildShortcutItem(
+                  "Ctrl + Z  /  Ctrl + Y",
+                  "실행 취소 (Undo)  /  다시 실행 (Redo)",
+                ),
                 const Divider(height: 14),
-                _buildShortcutItem("Ctrl + Space  /  Ctrl + F", "도면 전체 화면 맞춤 (Zoom to Fit, Ctrl+0 지원)"),
+                _buildShortcutItem(
+                  "Ctrl + Space  /  Ctrl + F",
+                  "도면 전체 화면 맞춤 (Zoom to Fit, Ctrl+0 지원)",
+                ),
                 const Divider(height: 14),
                 _buildShortcutItem("Esc", "선택 해제 또는 현재 도구 취소"),
               ],
@@ -892,17 +1073,35 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
             ),
             child: Column(
               children: [
-                _buildShortcutItem("Alt + V (또는 Ctrl+Shift+V)", "선택 및 이동 도구 (Move Tool)"),
+                _buildShortcutItem(
+                  "Alt + V (또는 Ctrl+Shift+V)",
+                  "선택 및 이동 도구 (Move Tool)",
+                ),
                 const Divider(height: 14),
-                _buildShortcutItem("Alt + B (또는 Ctrl+Shift+B)", "모선 (Bus) 그리기 도구"),
+                _buildShortcutItem(
+                  "Alt + B (또는 Ctrl+Shift+B)",
+                  "모선 (Bus) 그리기 도구",
+                ),
                 const Divider(height: 14),
-                _buildShortcutItem("Alt + G (또는 Ctrl+Shift+G)", "발전기 (Generator) 배치 도구"),
+                _buildShortcutItem(
+                  "Alt + G (또는 Ctrl+Shift+G)",
+                  "발전기 (Generator) 배치 도구",
+                ),
                 const Divider(height: 14),
-                _buildShortcutItem("Alt + L (또는 Ctrl+Shift+L)", "부하 (Load) 배치 도구"),
+                _buildShortcutItem(
+                  "Alt + L (또는 Ctrl+Shift+L)",
+                  "부하 (Load) 배치 도구",
+                ),
                 const Divider(height: 14),
-                _buildShortcutItem("Alt + T (또는 Ctrl+Shift+T)", "변압기 (Transformer) 배치 도구"),
+                _buildShortcutItem(
+                  "Alt + T (또는 Ctrl+Shift+T)",
+                  "변압기 (Transformer) 배치 도구",
+                ),
                 const Divider(height: 14),
-                _buildShortcutItem("Alt + W (또는 Ctrl+Shift+W)", "송전선로 연결 도구 (Wire / Line)"),
+                _buildShortcutItem(
+                  "Alt + W (또는 Ctrl+Shift+W)",
+                  "송전선로 연결 도구 (Wire / Line)",
+                ),
               ],
             ),
           ),
@@ -914,11 +1113,19 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
   Widget _buildShortcutSectionTitle(String title) {
     return Text(
       title,
-      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+      style: const TextStyle(
+        fontSize: 14,
+        fontWeight: FontWeight.bold,
+        color: Color(0xFF0F172A),
+      ),
     );
   }
 
-  Widget _buildShortcutItem(String keys, String desc, {bool isHighlight = false}) {
+  Widget _buildShortcutItem(
+    String keys,
+    String desc, {
+    bool isHighlight = false,
+  }) {
     return Row(
       children: [
         Container(
@@ -926,7 +1133,11 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           decoration: BoxDecoration(
             color: isHighlight ? const Color(0xFF4F46E5) : Colors.white,
             borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: isHighlight ? const Color(0xFF4338CA) : Colors.grey.shade300),
+            border: Border.all(
+              color: isHighlight
+                  ? const Color(0xFF4338CA)
+                  : Colors.grey.shade300,
+            ),
             boxShadow: [
               BoxShadow(
                 color: Colors.black.withOpacity(0.04),
@@ -1011,28 +1222,32 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           _buildStepCard(
             step: "1",
             title: "계통 구성 (직접 그리기 또는 엑셀 가져오기)",
-            desc: "좌측 도구(B: 모선, W: 선로, G: 발전기, L: 부하)로 계통을 직접 설계하거나, 상단 [엑셀 가져오기]를 눌러 IEEE 24모선(case24_psse.xlsx) 등 표준 케이스를 즉시 로드할 수 있습니다.",
+            desc:
+                "좌측 도구(B: 모선, W: 선로, G: 발전기, L: 부하)로 계통을 직접 설계하거나, 상단 [엑셀 가져오기]를 눌러 IEEE 24모선(case24_psse.xlsx) 등 표준 케이스를 즉시 로드할 수 있습니다.",
             color: Colors.blue,
           ),
           const SizedBox(height: 14),
           _buildStepCard(
             step: "2",
             title: "기준 모선(Slack) 및 파라미터 확인",
-            desc: "계통 내 최소 1개의 모선은 슬랙 모선(Slack Bus, V=1.0 pu, θ=0°)으로 지정되어야 합니다. 각 발전기의 유효전력(PG)과 부하량(PD, QD)을 우측 속성 패널에서 확인합니다.",
+            desc:
+                "계통 내 최소 1개의 모선은 슬랙 모선(Slack Bus, V=1.0 pu, θ=0°)으로 지정되어야 합니다. 각 발전기의 유효전력(PG)과 부하량(PD, QD)을 우측 속성 패널에서 확인합니다.",
             color: Colors.amber.shade800,
           ),
           const SizedBox(height: 14),
           _buildStepCard(
             step: "3",
             title: "조류계산 실행 (AC Newton-Raphson)",
-            desc: "상단 우측의 파란색 [조류계산 실행] 버튼을 클릭합니다. 백엔드 전력 조류 해석 엔진이 4블록 야코비 행렬과 극좌표계 전력방정식을 풀어 1초 내에 수렴 결과를 도출합니다.",
+            desc:
+                "상단 우측의 파란색 [조류계산 실행] 버튼을 클릭합니다. 백엔드 전력 조류 해석 엔진이 4블록 야코비 행렬과 극좌표계 전력방정식을 풀어 1초 내에 수렴 결과를 도출합니다.",
             color: Colors.green,
           ),
           const SizedBox(height: 14),
           _buildStepCard(
             step: "4",
             title: "결과 확인 및 엑셀 보고서 다운로드",
-            desc: "캔버스 위에 각 선로를 흐르는 유효전력/무효전력(MW/MVAR)과 방향 화살표가 표시됩니다. 상단 [수치 결과표] 버튼을 누르면 모선별 전압 크기/위상각 및 총 계통 손실을 확인하고 엑셀로 내려받을 수 있습니다.",
+            desc:
+                "캔버스 위에 각 선로를 흐르는 유효전력/무효전력(MW/MVAR)과 방향 화살표가 표시됩니다. 상단 [수치 결과표] 버튼을 누르면 모선별 전압 크기/위상각 및 총 계통 손실을 확인하고 엑셀로 내려받을 수 있습니다.",
             color: Colors.purple,
           ),
         ],
@@ -1040,7 +1255,12 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
     );
   }
 
-  Widget _buildGuideCard({required IconData icon, required Color iconColor, required String title, required List<String> items}) {
+  Widget _buildGuideCard({
+    required IconData icon,
+    required Color iconColor,
+    required String title,
+    required List<String> items,
+  }) {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -1055,26 +1275,55 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
             children: [
               Icon(icon, color: iconColor, size: 20),
               const SizedBox(width: 8),
-              Text(title, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold, color: Color(0xFF0F172A))),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF0F172A),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 10),
-          ...items.map((it) => Padding(
-            padding: const EdgeInsets.only(bottom: 6),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text("• ", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.blueGrey)),
-                Expanded(child: Text(it, style: const TextStyle(fontSize: 12.5, color: Colors.black87, height: 1.4))),
-              ],
+          ...items.map(
+            (it) => Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    "• ",
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.blueGrey,
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      it,
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        color: Colors.black87,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
-          )),
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildStepCard({required String step, required String title, required String desc, required Color color}) {
+  Widget _buildStepCard({
+    required String step,
+    required String title,
+    required String desc,
+    required Color color,
+  }) {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -1088,16 +1337,37 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           CircleAvatar(
             radius: 14,
             backgroundColor: color,
-            child: Text(step, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+            child: Text(
+              step,
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+              ),
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(title, style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold, color: color)),
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.bold,
+                    color: color,
+                  ),
+                ),
                 const SizedBox(height: 4),
-                Text(desc, style: const TextStyle(fontSize: 12.5, color: Colors.black87, height: 1.4)),
+                Text(
+                  desc,
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    color: Colors.black87,
+                    height: 1.4,
+                  ),
+                ),
               ],
             ),
           ),
@@ -1142,13 +1412,24 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
 
   Offset _getSnapPoint(DrawingElement e, Offset touchPos) {
     if (e.type == Tool.bus) {
-      double cosA = math.cos(-e.angle); double sinA = math.sin(-e.angle);
+      double cosA = math.cos(-e.angle);
+      double sinA = math.sin(-e.angle);
       Offset rel = touchPos - e.position;
-      double localX = (rel.dx * cosA - rel.dy * sinA).clamp(-e.width/2, e.width/2);
-      double localY = (rel.dx * sinA + rel.dy * cosA).clamp(-e.height/2, e.height/2);
-      cosA = math.cos(e.angle); sinA = math.sin(e.angle);
-      return e.position + Offset(localX * cosA - localY * sinA, localX * sinA + localY * cosA);
-    } else if (e.type == Tool.generator || e.type == Tool.load || e.type == Tool.transformer) {
+      double localX = (rel.dx * cosA - rel.dy * sinA).clamp(
+        -e.width / 2,
+        e.width / 2,
+      );
+      double localY = (rel.dx * sinA + rel.dy * cosA).clamp(
+        -e.height / 2,
+        e.height / 2,
+      );
+      cosA = math.cos(e.angle);
+      sinA = math.sin(e.angle);
+      return e.position +
+          Offset(localX * cosA - localY * sinA, localX * sinA + localY * cosA);
+    } else if (e.type == Tool.generator ||
+        e.type == Tool.load ||
+        e.type == Tool.transformer) {
       Offset delta = touchPos - e.position;
       double dist = delta.distance;
       double r = math.max(e.width, e.height) / 2;
@@ -1169,7 +1450,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
       final pt = points[i];
       if (pt.dx >= x1 && pt.dx <= x2 && pt.dy >= y1 && pt.dy <= y2) {
         final prev = points[i - 1];
-        if (!(prev.dx >= x1 && prev.dx <= x2 && prev.dy >= y1 && prev.dy <= y2)) {
+        if (!(prev.dx >= x1 &&
+            prev.dx <= x2 &&
+            prev.dy >= y1 &&
+            prev.dy <= y2)) {
           return points.sublist(0, i + 1);
         }
       }
@@ -1188,9 +1472,15 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
     // 1. Prune contour hook at END (when endEl is a Bus)
     if (endEl != null && endEl.type == Tool.bus) {
       final int qTurns = ((endEl.angle / (math.pi / 2)).round() % 4 + 4) % 4;
-      final bool isVert = (qTurns % 2 == 0) ? (endEl.height > endEl.width) : (endEl.width > endEl.height);
-      final double busHalfW = (qTurns % 2 == 0) ? endEl.width / 2 : endEl.height / 2;
-      final double busHalfH = (qTurns % 2 == 0) ? endEl.height / 2 : endEl.width / 2;
+      final bool isVert = (qTurns % 2 == 0)
+          ? (endEl.height > endEl.width)
+          : (endEl.width > endEl.height);
+      final double busHalfW = (qTurns % 2 == 0)
+          ? endEl.width / 2
+          : endEl.height / 2;
+      final double busHalfH = (qTurns % 2 == 0)
+          ? endEl.height / 2
+          : endEl.width / 2;
 
       while (pts.length >= 3) {
         final Offset pLast = pts.last;
@@ -1209,7 +1499,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           // Vertical bus: spurious contour hook runs vertically parallel to bus (|dx| <= 10px, |dy| >= 6px)
           // immediately adjacent to bus, while approaching segment had horizontal movement (dxAnte >= 8px)
           final bool isParallelSpur = dxLast <= 10.0 && dyLast >= 6.0;
-          final bool isAdjacentToBus = distToCenterX <= busHalfW + 35.0 && distToCenterY <= busHalfH + 35.0;
+          final bool isAdjacentToBus =
+              distToCenterX <= busHalfW + 35.0 &&
+              distToCenterY <= busHalfH + 35.0;
           final bool isApproachingFromSide = dxAnte >= 8.0 || dxAnte >= dyAnte;
 
           if (isParallelSpur && isAdjacentToBus && isApproachingFromSide) {
@@ -1220,8 +1512,11 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           // Horizontal bus: spurious contour hook runs horizontally parallel to bus (|dy| <= 10px, |dx| >= 6px)
           // immediately adjacent to bus, while approaching segment had vertical movement (dyAnte >= 8px)
           final bool isParallelSpur = dyLast <= 10.0 && dxLast >= 6.0;
-          final bool isAdjacentToBus = distToCenterY <= busHalfH + 35.0 && distToCenterX <= busHalfW + 35.0;
-          final bool isApproachingVertically = dyAnte >= 8.0 || dyAnte >= dxAnte;
+          final bool isAdjacentToBus =
+              distToCenterY <= busHalfH + 35.0 &&
+              distToCenterX <= busHalfW + 35.0;
+          final bool isApproachingVertically =
+              dyAnte >= 8.0 || dyAnte >= dxAnte;
 
           if (isParallelSpur && isAdjacentToBus && isApproachingVertically) {
             pts.removeLast();
@@ -1235,9 +1530,15 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
     // 2. Prune contour hook at START (when startEl is a Bus)
     if (startEl != null && startEl.type == Tool.bus) {
       final int qTurns = ((startEl.angle / (math.pi / 2)).round() % 4 + 4) % 4;
-      final bool isVert = (qTurns % 2 == 0) ? (startEl.height > startEl.width) : (startEl.width > startEl.height);
-      final double busHalfW = (qTurns % 2 == 0) ? startEl.width / 2 : startEl.height / 2;
-      final double busHalfH = (qTurns % 2 == 0) ? startEl.height / 2 : startEl.width / 2;
+      final bool isVert = (qTurns % 2 == 0)
+          ? (startEl.height > startEl.width)
+          : (startEl.width > startEl.height);
+      final double busHalfW = (qTurns % 2 == 0)
+          ? startEl.width / 2
+          : startEl.height / 2;
+      final double busHalfH = (qTurns % 2 == 0)
+          ? startEl.height / 2
+          : startEl.width / 2;
 
       while (pts.length >= 3) {
         final Offset pFirst = pts[0];
@@ -1254,7 +1555,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
 
         if (isVert) {
           final bool isParallelSpur = dxFirst <= 10.0 && dyFirst >= 6.0;
-          final bool isAdjacentToBus = distToCenterX <= busHalfW + 35.0 && distToCenterY <= busHalfH + 35.0;
+          final bool isAdjacentToBus =
+              distToCenterX <= busHalfW + 35.0 &&
+              distToCenterY <= busHalfH + 35.0;
           final bool isLeavingFromSide = dxSec >= 8.0 || dxSec >= dySec;
 
           if (isParallelSpur && isAdjacentToBus && isLeavingFromSide) {
@@ -1263,7 +1566,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           }
         } else {
           final bool isParallelSpur = dyFirst <= 10.0 && dxFirst >= 6.0;
-          final bool isAdjacentToBus = distToCenterY <= busHalfH + 35.0 && distToCenterX <= busHalfW + 35.0;
+          final bool isAdjacentToBus =
+              distToCenterY <= busHalfH + 35.0 &&
+              distToCenterX <= busHalfW + 35.0;
           final bool isLeavingVertically = dySec >= 8.0 || dySec >= dxSec;
 
           if (isParallelSpur && isAdjacentToBus && isLeavingVertically) {
@@ -1312,7 +1617,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
     // Truncate spurs penetrating deep into bus body
     List<Offset> pts = _truncateSpursAtBus(rawPoints, endEl);
     if (startEl != null && startEl.type == Tool.bus) {
-      pts = _truncateSpursAtBus(pts.reversed.toList(), startEl).reversed.toList();
+      pts = _truncateSpursAtBus(
+        pts.reversed.toList(),
+        startEl,
+      ).reversed.toList();
     }
     if (pts.length < 2) pts = List.from(rawPoints);
 
@@ -1329,8 +1637,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
 
     // Special case: Generator or Load feeder lead to Bus
     if (startEl != null && endEl != null) {
-      final bool isStartDev = (startEl.type == Tool.generator || startEl.type == Tool.load);
-      final bool isEndDev = (endEl.type == Tool.generator || endEl.type == Tool.load);
+      final bool isStartDev =
+          (startEl.type == Tool.generator || startEl.type == Tool.load);
+      final bool isEndDev =
+          (endEl.type == Tool.generator || endEl.type == Tool.load);
       final bool isStartBus = startEl.type == Tool.bus;
       final bool isEndBus = endEl.type == Tool.bus;
 
@@ -1379,8 +1689,12 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
     simplified = _pruneBusTerminalHooks(simplified, startEl, endEl);
 
     // 2. Snap endpoints to component boundaries
-    Offset pStart = startEl != null ? _getSnapPoint(startEl, simplified.first) : simplified.first;
-    Offset pEnd = endEl != null ? _getSnapPoint(endEl, simplified.last) : simplified.last;
+    Offset pStart = startEl != null
+        ? _getSnapPoint(startEl, simplified.first)
+        : simplified.first;
+    Offset pEnd = endEl != null
+        ? _getSnapPoint(endEl, simplified.last)
+        : simplified.last;
 
     // Case A: 2 points -> Straight line
     if (simplified.length <= 2) {
@@ -1389,13 +1703,15 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
       if (dy < 30.0 || (dx > 0 && dy / dx < 0.25)) {
         // Snap horizontal
         final double yAvg = (pStart.dy + pEnd.dy) / 2;
-        if (startEl != null) pStart = _getSnapPoint(startEl, Offset(pStart.dx, yAvg));
+        if (startEl != null)
+          pStart = _getSnapPoint(startEl, Offset(pStart.dx, yAvg));
         if (endEl != null) pEnd = _getSnapPoint(endEl, Offset(pEnd.dx, yAvg));
         return [pStart, Offset(pEnd.dx, pStart.dy)];
       } else if (dx < 30.0 || (dy > 0 && dx / dy < 0.25)) {
         // Snap vertical
         final double xAvg = (pStart.dx + pEnd.dx) / 2;
-        if (startEl != null) pStart = _getSnapPoint(startEl, Offset(xAvg, pStart.dy));
+        if (startEl != null)
+          pStart = _getSnapPoint(startEl, Offset(xAvg, pStart.dy));
         if (endEl != null) pEnd = _getSnapPoint(endEl, Offset(xAvg, pEnd.dy));
         return [pStart, Offset(pStart.dx, pEnd.dy)];
       } else {
@@ -1470,10 +1786,18 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
     simplified = _pruneBusTerminalHooks(simplified, startEl, endEl);
 
     // 3. Snap endpoints to component boundaries (if available)
-    Offset pStart = startEl != null ? _getSnapPoint(startEl, simplified.first) : simplified.first;
-    Offset pEnd = endEl != null ? _getSnapPoint(endEl, simplified.last) : simplified.last;
+    Offset pStart = startEl != null
+        ? _getSnapPoint(startEl, simplified.first)
+        : simplified.first;
+    Offset pEnd = endEl != null
+        ? _getSnapPoint(endEl, simplified.last)
+        : simplified.last;
 
-    List<Offset> pts = [pStart, ...simplified.sublist(1, simplified.length - 1), pEnd];
+    List<Offset> pts = [
+      pStart,
+      ...simplified.sublist(1, simplified.length - 1),
+      pEnd,
+    ];
 
     // 4. Level out segments that are ALREADY nearly horizontal or vertical (within 4 degrees or 5px)
     // IMPORTANT: Diagonal lines (angle > 5 deg) are preserved 100% naturally!
@@ -1530,8 +1854,12 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
       for (var line in elements.where((e) => e.type == Tool.line)) {
         DrawingElement? startEl;
         DrawingElement? endEl;
-        try { startEl = elements.firstWhere((e) => e.id == line.startElementId); } catch (_) {}
-        try { endEl = elements.firstWhere((e) => e.id == line.endElementId); } catch (_) {}
+        try {
+          startEl = elements.firstWhere((e) => e.id == line.startElementId);
+        } catch (_) {}
+        try {
+          endEl = elements.firstWhere((e) => e.id == line.endElementId);
+        } catch (_) {}
 
         List<Offset> sourcePts = [];
         if (line.rawAiPath != null && line.rawAiPath!.length >= 2) {
@@ -1547,8 +1875,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         if (sourcePts.length >= 2) {
           if (startEl == null) {
             for (var b in elements.where((e) => e.type == Tool.bus)) {
-              if ((sourcePts.first.dx - b.position.dx).abs() <= b.width / 2 + 35.0 &&
-                  (sourcePts.first.dy - b.position.dy).abs() <= b.height / 2 + 35.0) {
+              if ((sourcePts.first.dx - b.position.dx).abs() <=
+                      b.width / 2 + 35.0 &&
+                  (sourcePts.first.dy - b.position.dy).abs() <=
+                      b.height / 2 + 35.0) {
                 startEl = b;
                 line.startElementId = b.id;
                 break;
@@ -1557,8 +1887,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           }
           if (endEl == null) {
             for (var b in elements.where((e) => e.type == Tool.bus)) {
-              if ((sourcePts.last.dx - b.position.dx).abs() <= b.width / 2 + 35.0 &&
-                  (sourcePts.last.dy - b.position.dy).abs() <= b.height / 2 + 35.0) {
+              if ((sourcePts.last.dx - b.position.dx).abs() <=
+                      b.width / 2 + 35.0 &&
+                  (sourcePts.last.dy - b.position.dy).abs() <=
+                      b.height / 2 + 35.0) {
                 endEl = b;
                 line.endElementId = b.id;
                 break;
@@ -1573,10 +1905,14 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           );
           line.position = clean.first;
           line.endPosition = clean.last;
-          line.midPosition = clean.length == 3 ? clean[1] : (clean.length > 3 ? clean[1] : null);
+          line.midPosition = clean.length == 3
+              ? clean[1]
+              : (clean.length > 3 ? clean[1] : null);
           line.aiPath = clean.length > 2 ? clean : null;
-          if (startEl != null) line.startAnchor = line.position - startEl.position;
-          if (endEl != null) line.endAnchor = line.endPosition! - endEl.position;
+          if (startEl != null)
+            line.startAnchor = line.position - startEl.position;
+          if (endEl != null)
+            line.endAnchor = line.endPosition! - endEl.position;
         }
       }
     });
@@ -1596,8 +1932,12 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
       final line = selectedElement!;
       DrawingElement? startEl;
       DrawingElement? endEl;
-      try { startEl = elements.firstWhere((e) => e.id == line.startElementId); } catch (_) {}
-      try { endEl = elements.firstWhere((e) => e.id == line.endElementId); } catch (_) {}
+      try {
+        startEl = elements.firstWhere((e) => e.id == line.startElementId);
+      } catch (_) {}
+      try {
+        endEl = elements.firstWhere((e) => e.id == line.endElementId);
+      } catch (_) {}
 
       List<Offset> sourcePts = [];
       if (line.rawAiPath != null && line.rawAiPath!.length >= 2) {
@@ -1613,8 +1953,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
       if (sourcePts.length >= 2) {
         if (startEl == null) {
           for (var b in elements.where((e) => e.type == Tool.bus)) {
-            if ((sourcePts.first.dx - b.position.dx).abs() <= b.width / 2 + 35.0 &&
-                (sourcePts.first.dy - b.position.dy).abs() <= b.height / 2 + 35.0) {
+            if ((sourcePts.first.dx - b.position.dx).abs() <=
+                    b.width / 2 + 35.0 &&
+                (sourcePts.first.dy - b.position.dy).abs() <=
+                    b.height / 2 + 35.0) {
               startEl = b;
               line.startElementId = b.id;
               break;
@@ -1623,8 +1965,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         }
         if (endEl == null) {
           for (var b in elements.where((e) => e.type == Tool.bus)) {
-            if ((sourcePts.last.dx - b.position.dx).abs() <= b.width / 2 + 35.0 &&
-                (sourcePts.last.dy - b.position.dy).abs() <= b.height / 2 + 35.0) {
+            if ((sourcePts.last.dx - b.position.dx).abs() <=
+                    b.width / 2 + 35.0 &&
+                (sourcePts.last.dy - b.position.dy).abs() <=
+                    b.height / 2 + 35.0) {
               endEl = b;
               line.endElementId = b.id;
               break;
@@ -1639,9 +1983,12 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         );
         line.position = clean.first;
         line.endPosition = clean.last;
-        line.midPosition = clean.length == 3 ? clean[1] : (clean.length > 3 ? clean[1] : null);
+        line.midPosition = clean.length == 3
+            ? clean[1]
+            : (clean.length > 3 ? clean[1] : null);
         line.aiPath = clean.length > 2 ? clean : null;
-        if (startEl != null) line.startAnchor = line.position - startEl.position;
+        if (startEl != null)
+          line.startAnchor = line.position - startEl.position;
         if (endEl != null) line.endAnchor = line.endPosition! - endEl.position;
       }
     });
@@ -1660,8 +2007,12 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
       for (var line in elements.where((e) => e.type == Tool.line)) {
         DrawingElement? startEl;
         DrawingElement? endEl;
-        try { startEl = elements.firstWhere((e) => e.id == line.startElementId); } catch (_) {}
-        try { endEl = elements.firstWhere((e) => e.id == line.endElementId); } catch (_) {}
+        try {
+          startEl = elements.firstWhere((e) => e.id == line.startElementId);
+        } catch (_) {}
+        try {
+          endEl = elements.firstWhere((e) => e.id == line.endElementId);
+        } catch (_) {}
 
         List<Offset> sourcePts = [];
         if (line.rawAiPath != null && line.rawAiPath!.length >= 2) {
@@ -1682,10 +2033,14 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           );
           line.position = clean.first;
           line.endPosition = clean.last;
-          line.midPosition = clean.length == 3 ? clean[1] : (clean.length > 3 ? clean[1] : null);
+          line.midPosition = clean.length == 3
+              ? clean[1]
+              : (clean.length > 3 ? clean[1] : null);
           line.aiPath = clean.length > 2 ? clean : null;
-          if (startEl != null) line.startAnchor = line.position - startEl.position;
-          if (endEl != null) line.endAnchor = line.endPosition! - endEl.position;
+          if (startEl != null)
+            line.startAnchor = line.position - startEl.position;
+          if (endEl != null)
+            line.endAnchor = line.endPosition! - endEl.position;
         }
       }
     });
@@ -1705,8 +2060,12 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
       final line = selectedElement!;
       DrawingElement? startEl;
       DrawingElement? endEl;
-      try { startEl = elements.firstWhere((e) => e.id == line.startElementId); } catch (_) {}
-      try { endEl = elements.firstWhere((e) => e.id == line.endElementId); } catch (_) {}
+      try {
+        startEl = elements.firstWhere((e) => e.id == line.startElementId);
+      } catch (_) {}
+      try {
+        endEl = elements.firstWhere((e) => e.id == line.endElementId);
+      } catch (_) {}
 
       List<Offset> sourcePts = [];
       if (line.rawAiPath != null && line.rawAiPath!.length >= 2) {
@@ -1727,9 +2086,12 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         );
         line.position = clean.first;
         line.endPosition = clean.last;
-        line.midPosition = clean.length == 3 ? clean[1] : (clean.length > 3 ? clean[1] : null);
+        line.midPosition = clean.length == 3
+            ? clean[1]
+            : (clean.length > 3 ? clean[1] : null);
         line.aiPath = clean.length > 2 ? clean : null;
-        if (startEl != null) line.startAnchor = line.position - startEl.position;
+        if (startEl != null)
+          line.startAnchor = line.position - startEl.position;
         if (endEl != null) line.endAnchor = line.endPosition! - endEl.position;
       }
     });
@@ -1840,6 +2202,61 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
     return match != null ? match.group(0)! : text;
   }
 
+  int? _busNumberForElement(DrawingElement element) {
+    if (element.busNumber != null) return element.busNumber;
+    if (element.verifiedClass != null) return null;
+    return int.tryParse(
+      _getBusNum(element.label.isNotEmpty ? element.label : element.id),
+    );
+  }
+
+  Map<String, dynamic>? _powerFlowEvidence() {
+    final result = lastSimulationResult;
+    if (!PowerFlowResultContract.hasActualResult(result)) return null;
+    final busResults = result!['bus_results'] as List;
+    final lineResults = result['line_results'] as List;
+    Map<String, dynamic>? lowestVoltage;
+    for (final raw in busResults.whereType<Map>()) {
+      final voltage = (raw['volt'] as num?)?.toDouble();
+      if (voltage == null || !voltage.isFinite) continue;
+      if (lowestVoltage == null ||
+          voltage < (lowestVoltage['voltage_pu'] as double)) {
+        lowestVoltage = {'bus': raw['bus'], 'voltage_pu': voltage};
+      }
+    }
+    Map<String, dynamic>? largestFlow;
+    for (final raw in lineResults.whereType<Map>()) {
+      final flow = (raw['p_from_mw'] as num?)?.toDouble();
+      if (flow == null || !flow.isFinite) continue;
+      if (largestFlow == null ||
+          flow.abs() > (largestFlow['absolute_mw'] as double)) {
+        largestFlow = {
+          'from_bus': raw['from_bus'],
+          'to_bus': raw['to_bus'],
+          'p_from_mw': flow,
+          'absolute_mw': flow.abs(),
+        };
+      }
+    }
+    final evidence = <String, dynamic>{
+      'converged': result['converged'],
+      'iterations': result['iterations'],
+      'max_mismatch': result['max_mismatch'],
+      'slack_bus': result['slack_bus'],
+      's_base_mva': result['s_base_mva'] ?? powerFlowSBase,
+      'summary': result['summary'],
+      'bus_results_available': busResults.isNotEmpty,
+      'bus_result_count': busResults.length,
+      'line_results_available': lineResults.isNotEmpty,
+      'line_result_count': lineResults.length,
+    };
+    if (lowestVoltage != null) evidence['lowest_voltage'] = lowestVoltage;
+    if (largestFlow != null) {
+      evidence['largest_absolute_line_flow'] = largestFlow;
+    }
+    return evidence;
+  }
+
   void _updateConnectedElementsId(DrawingElement bus) {
     String busNum = _getBusNum(bus.label.isNotEmpty ? bus.label : bus.id);
     int genCount = 1, loadCount = 1, transCount = 1;
@@ -1910,12 +2327,35 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
   }
 
   Future<void> _sendDataToServer() async {
-    final url = Uri.parse('http://127.0.0.1:8000/run_simulation');
+    if (isSimulating) return;
+    final readiness = PowerFlowReadiness.evaluate(elements);
+    if (!readiness.ready) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('조류계산 준비가 필요합니다: ${readiness.blockers.join(' ')}'),
+            backgroundColor: Colors.orange.shade800,
+            duration: const Duration(seconds: 6),
+          ),
+        );
+      }
+      return;
+    }
+
+    final url = Uri.parse('${ReviewApiService.baseUrl}/run_simulation');
     final payload = jsonEncode({
       'elements': elements.map((e) => e.toJson()).toList(),
+      's_base_mva': powerFlowSBase,
     });
 
-    setState(() => isSimulating = true);
+    setState(() {
+      isSimulating = true;
+      lastSimulationResult = null;
+      showResultOverlay = false;
+      showFlowDirection = false;
+      showValueLabels = false;
+      _flowAnimController.stop();
+    });
 
     try {
       final response = await http.post(
@@ -1928,57 +2368,85 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
 
       if (response.statusCode == 200) {
         final result = jsonDecode(response.body);
-        if (result['data'] != null &&
-            (result['status'] == 'success' || result['status'] == 'warning')) {
+        final rawData = result is Map ? result['data'] : null;
+        final solverData = rawData is Map<String, dynamic>
+            ? Map<String, dynamic>.from(rawData)
+            : null;
+        if (PowerFlowResultContract.hasActualResult(solverData)) {
+          final actualSolverData = solverData!;
+          final converged = PowerFlowResultContract.isConverged(
+            actualSolverData,
+          );
+          final success =
+              result is Map && result['status'] == 'success' && converged;
           setState(() {
-            lastSimulationResult = result['data'];
-            showResultOverlay = true;
-            showFlowDirection = true;
-            _flowAnimController.repeat();
-            if (result['data']['total_branches'] is num) {
-              excelBranchCount = (result['data']['total_branches'] as num)
+            lastSimulationResult = actualSolverData;
+            showResultOverlay = success;
+            showFlowDirection = success;
+            showValueLabels = false;
+            if (success) {
+              _flowAnimController.repeat();
+            } else {
+              _flowAnimController.stop();
+            }
+            if (actualSolverData['total_branches'] is num) {
+              excelBranchCount = (actualSolverData['total_branches'] as num)
                   .toInt();
             }
-            final busResults =
-                result['data']['bus_results'] as List<dynamic>? ?? [];
-            for (var br in busResults) {
-              int bNum = (br['bus'] as num).toInt();
-              double pgenPu = (br['pgen_pu'] as num?)?.toDouble() ?? 0.0;
-              double qgenPu = (br['qgen_pu'] as num?)?.toDouble() ?? 0.0;
-              double vPu = (br['volt_pu'] as num?)?.toDouble() ?? 1.0;
-              double angleDeg = (br['angle_deg'] as num?)?.toDouble() ?? 0.0;
-
-              for (var el in elements) {
-                if (el.type == Tool.bus &&
-                    (el.label == "$bNum" ||
-                        el.label.startsWith("$bNum ") ||
-                        el.id == "bus_$bNum")) {
-                  el.vPu = vPu;
-                  el.thetaDeg = angleDeg;
-                } else if (el.type == Tool.generator &&
-                    (el.label == "G_$bNum" ||
-                        el.label.startsWith("G_$bNum ") ||
-                        el.label.startsWith("SC_$bNum") ||
-                        el.id == "gen_$bNum" ||
-                        el.parentBusId == "bus_$bNum")) {
-                  el.pPu = pgenPu;
-                  el.qPu = qgenPu;
-                  el.vPu = vPu;
+            if (success) {
+              final busResults =
+                  actualSolverData['bus_results'] as List<dynamic>;
+              for (final rawBus in busResults) {
+                if (rawBus is! Map) continue;
+                final number = (rawBus['bus'] as num?)?.toInt();
+                if (number == null) continue;
+                final pgenPu = (rawBus['pgen_pu'] as num?)?.toDouble();
+                final qgenPu = (rawBus['qgen_pu'] as num?)?.toDouble();
+                final vPu = (rawBus['volt_pu'] as num?)?.toDouble();
+                final angleDeg = (rawBus['angle_deg'] as num?)?.toDouble();
+                for (final element in elements) {
+                  if (element.type == Tool.bus &&
+                      _busNumberForElement(element) == number) {
+                    if (vPu != null) element.vPu = vPu;
+                    if (angleDeg != null) element.thetaDeg = angleDeg;
+                  } else if (element.type == Tool.generator &&
+                      element.parentBusId != null &&
+                      elements.any(
+                        (bus) =>
+                            bus.type == Tool.bus &&
+                            bus.id == element.parentBusId &&
+                            _busNumberForElement(bus) == number,
+                      )) {
+                    if (pgenPu != null) element.pPu = pgenPu;
+                    if (qgenPu != null) element.qPu = qgenPu;
+                    if (vPu != null) element.vPu = vPu;
+                  }
                 }
               }
             }
           });
 
-          if (result['status'] == 'warning') {
+          if (!success) {
+            final iterations = actualSolverData['iterations'];
+            final mismatch = actualSolverData['max_mismatch'];
+            PowerLensAIService.instance.onStageChanged(
+              'POWERFLOW_NOT_CONVERGED',
+              _buildAssistantContext(),
+            );
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text(result['message'] ?? "조류 계산 미수렴 (발산)"),
+                content: Text(
+                  '조류계산 미수렴 — $iterations회 반복, 최대 mismatch $mismatch. 수렴 결과로 표시하지 않았습니다.',
+                ),
                 backgroundColor: Colors.orange,
                 duration: const Duration(seconds: 4),
               ),
             );
           } else {
-            PowerLensAIService.instance.onStageChanged('POWERFLOW_CONVERGED');
+            PowerLensAIService.instance.onStageChanged(
+              'POWERFLOW_CONVERGED',
+              _buildAssistantContext(),
+            );
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Row(
@@ -1991,7 +2459,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
-                        "조류계산 수렴 완료 (${result['data']['iterations']}회 반복) · 수치 표 또는 요소를 클릭해 확인하세요.",
+                        "조류계산 수렴 완료 (${actualSolverData['iterations']}회 반복, max mismatch ${actualSolverData['max_mismatch']}) · 결과 보기를 선택하세요.",
                         style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
                     ),
@@ -2002,7 +2470,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                 action: SnackBarAction(
                   label: "수치 표 보기",
                   textColor: Colors.cyanAccent,
-                  onPressed: () => _showPowerFlowResultDialog(result['data']),
+                  onPressed: () => _showPowerFlowResultDialog(actualSolverData),
                 ),
               ),
             );
@@ -2010,8 +2478,13 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(result['message'] ?? "조류 계산 실패"),
+              content: Text(
+                result is Map
+                    ? (result['message']?.toString() ?? '조류계산 결과를 확인할 수 없습니다.')
+                    : '조류계산 응답 형식이 올바르지 않습니다.',
+              ),
               backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 6),
             ),
           );
         }
@@ -2610,6 +3083,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
     Uint8List? initialImageBytes,
     String? initialFilename,
   }) async {
+    ScaffoldMessenger.of(context).clearSnackBars();
     bool hasApplied = false;
     final result = await Navigator.push<Map<String, dynamic>>(
       context,
@@ -2701,7 +3175,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         const SnackBar(content: Text("📊 엑셀 계통 데이터를 분석하고 있습니다...")),
       );
 
-      var uri = Uri.parse('http://127.0.0.1:8000/upload_excel');
+      var uri = Uri.parse('${ReviewApiService.baseUrl}/upload_excel');
       var request = http.MultipartRequest('POST', uri);
       request.files.add(
         http.MultipartFile.fromBytes('file', bytes, filename: file.name),
@@ -2746,6 +3220,12 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
   Future<void> _applyExcelDataToCanvas(Map<String, dynamic> excelData) async {
     _saveState();
     PowerLensAIService.instance.onStageChanged('EXCEL_LOADED');
+    final importedSBase = excelData['sbase_mva'];
+    if (importedSBase is num &&
+        importedSBase.toDouble().isFinite &&
+        importedSBase > 0) {
+      powerFlowSBase = importedSBase.toDouble();
+    }
 
     var buses = excelData['buses'] as Map<String, dynamic>? ?? {};
     var gens = excelData['generators'] as Map<String, dynamic>? ?? {};
@@ -2804,24 +3284,34 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           if (gens.containsKey(bKey)) {
             final gInfo = gens[bKey] ?? {};
             final gPos = Offset(bPos.dx, bPos.dy - 60);
-            final bool isSC = (gInfo['is_slack'] != true) && 
-                ((gInfo['isSynchronousCondenser'] == true) || 
-                 (gInfo['is_synchronous_condenser'] == true) ||
-                 (gInfo['label']?.toString().contains("SC") == true));
-            final genEl = DrawingElement(
-              id: isSC ? "sc_$bNum" : "gen_$bNum",
-              type: Tool.generator,
-              position: gPos,
-              width: 44,
-              height: 44,
-              parentBusId: busEl.id,
-              label: isSC ? "SC_$bNum (동기조상기)" : ("G_$bNum" + (gInfo['is_slack'] == true ? " (Slack)" : "")),
-            )
-              ..isSlack = (gInfo['is_slack'] == true)
-              ..isSynchronousCondenser = isSC
-              ..vPu = (gInfo['voltage_setpoint'] as num?)?.toDouble() ?? 1.0
-              ..pPu = (gInfo['is_slack'] == true) ? 0.0 : ((gInfo['pg_pu'] as num?)?.toDouble() ?? (isSC ? 0.0 : 1.0))
-              ..qPu = (gInfo['is_slack'] == true) ? 0.0 : ((gInfo['qg_pu'] as num?)?.toDouble() ?? 0.0);
+            final bool isSC =
+                (gInfo['is_slack'] != true) &&
+                ((gInfo['isSynchronousCondenser'] == true) ||
+                    (gInfo['is_synchronous_condenser'] == true) ||
+                    (gInfo['label']?.toString().contains("SC") == true));
+            final genEl =
+                DrawingElement(
+                    id: isSC ? "sc_$bNum" : "gen_$bNum",
+                    type: Tool.generator,
+                    position: gPos,
+                    width: 44,
+                    height: 44,
+                    parentBusId: busEl.id,
+                    label: isSC
+                        ? "SC_$bNum (동기조상기)"
+                        : ("G_$bNum" +
+                              (gInfo['is_slack'] == true ? " (Slack)" : "")),
+                  )
+                  ..isSlack = (gInfo['is_slack'] == true)
+                  ..isSynchronousCondenser = isSC
+                  ..vPu = (gInfo['voltage_setpoint'] as num?)?.toDouble() ?? 1.0
+                  ..pPu = (gInfo['is_slack'] == true)
+                      ? 0.0
+                      : ((gInfo['pg_pu'] as num?)?.toDouble() ??
+                            (isSC ? 0.0 : 1.0))
+                  ..qPu = (gInfo['is_slack'] == true)
+                      ? 0.0
+                      : ((gInfo['qg_pu'] as num?)?.toDouble() ?? 0.0);
             elements.add(genEl);
           }
 
@@ -2883,7 +3373,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
 
     // 1. Authoritative Backend Binding: Call backend /apply_excel_to_elements
     try {
-      final uri = Uri.parse('http://127.0.0.1:8000/apply_excel_to_elements');
+      final uri = Uri.parse(
+        '${ReviewApiService.baseUrl}/apply_excel_to_elements',
+      );
       final response = await http.post(
         uri,
         headers: {'Content-Type': 'application/json'},
@@ -2897,28 +3389,117 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         final res = jsonDecode(response.body);
         if (res['status'] == 'success' && res['elements'] is List) {
           final updatedList = res['elements'] as List;
+          final List<DrawingElement> newlyAddedGens = [];
           setState(() {
+            final existingIds = elements.map((e) => e.id).toSet();
             for (var updated in updatedList) {
               if (updated is! Map<String, dynamic>) continue;
               final id = updated['id']?.toString();
               if (id == null) continue;
-              for (var e in elements) {
-                if (e.id == id) {
-                  e.updateFromJson(updated);
-                  break;
+              if (existingIds.contains(id)) {
+                for (var e in elements) {
+                  if (e.id == id) {
+                    e.updateFromJson(updated);
+                    break;
+                  }
+                }
+              } else {
+                // New element from backend (e.g. gen_auto_...)
+                final typeStr = updated['type']?.toString().toLowerCase() ?? '';
+                if (typeStr == 'generator' || typeStr == 'tool.generator') {
+                  final parentBusId = updated['parentBusId']?.toString();
+                  DrawingElement? parentBus;
+                  if (parentBusId != null) {
+                    for (var e in elements) {
+                      if (e.id == parentBusId && e.type == Tool.bus) {
+                        parentBus = e;
+                        break;
+                      }
+                    }
+                  }
+                  final bPos = parentBus?.position ?? Offset.zero;
+                  final gPos = parentBus != null
+                      ? Offset(bPos.dx, bPos.dy - 60)
+                      : Offset.zero;
+                  final newGenData = Map<String, dynamic>.from(updated);
+                  if (newGenData['position'] == null) {
+                    newGenData['position'] = {'dx': gPos.dx, 'dy': gPos.dy};
+                  }
+                  if (newGenData['width'] == null) {
+                    newGenData['width'] = 44.0;
+                  }
+                  if (newGenData['height'] == null) {
+                    newGenData['height'] = 44.0;
+                  }
+                  final newEl = DrawingElement.fromJson(newGenData);
+                  elements.add(newEl);
+                  existingIds.add(id);
+                  newlyAddedGens.add(newEl);
+                } else if (typeStr == 'line' || typeStr == 'tool.line') {
+                  final newLineData = Map<String, dynamic>.from(updated);
+                  final sId = newLineData['startElementId']?.toString();
+                  final eId = newLineData['endElementId']?.toString();
+                  DrawingElement? startEl;
+                  DrawingElement? endEl;
+                  if (sId != null) {
+                    startEl = elements.where((e) => e.id == sId).firstOrNull;
+                  }
+                  if (eId != null) {
+                    endEl = elements.where((e) => e.id == eId).firstOrNull;
+                  }
+                  if (newLineData['position'] == null && startEl != null) {
+                    newLineData['position'] = {
+                      'dx': startEl.position.dx,
+                      'dy': startEl.position.dy,
+                    };
+                  }
+                  if (newLineData['endPosition'] == null && endEl != null) {
+                    newLineData['endPosition'] = {
+                      'dx': endEl.position.dx,
+                      'dy': endEl.position.dy,
+                    };
+                  }
+                  final newLeadEl = DrawingElement.fromJson(newLineData);
+                  elements.add(newLeadEl);
+                  existingIds.add(id);
                 }
               }
             }
           });
           final summary = res['summary'] as Map<String, dynamic>? ?? {};
-          final mismatchReport = (res['mismatch_report'] ?? summary['mismatch_report']) as Map<String, dynamic>?;
-          final List<dynamic> rawProps = (res['repair_proposals'] ?? summary['repair_proposals']) as List? ?? [];
-          final List<Map<String, dynamic>> repairProposals = rawProps.map((p) => Map<String, dynamic>.from(p as Map)).toList();
+          final mismatchReport =
+              (res['mismatch_report'] ?? summary['mismatch_report'])
+                  as Map<String, dynamic>?;
 
           if (mounted) {
-            if (mismatchReport != null && (mismatchReport['is_matched'] == false || repairProposals.isNotEmpty)) {
-              _showMismatchDialog(mismatchReport, excelData, repairProposals);
-            } else {
+            if (newlyAddedGens.isNotEmpty) {
+              String msg;
+              if (newlyAddedGens.length == 1) {
+                final g = newlyAddedGens.first;
+                final bNum = _getBusNum(
+                  g.label.isNotEmpty ? g.label : (g.parentBusId ?? g.id),
+                );
+                final mw = (g.pPu * powerFlowSBase)
+                    .toStringAsFixed(1)
+                    .replaceAll(RegExp(r'\.0$'), '');
+                msg =
+                    "Excel 교차검증으로 도면에서 미검출된 발전기 1개를 자동 보완했습니다.\nBus $bNum: $mw MW";
+              } else {
+                msg =
+                    "도면에서 미검출된 발전기 ${newlyAddedGens.length}개를 Excel 데이터 기준으로 자동 보완했습니다.";
+              }
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(msg),
+                  backgroundColor: Colors.blue.shade700,
+                  duration: const Duration(seconds: 4),
+                ),
+              );
+            }
+            if (mismatchReport != null &&
+                mismatchReport['is_matched'] == false) {
+              _showMismatchDialog(mismatchReport, excelData);
+            } else if (newlyAddedGens.isEmpty) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
                   content: Text(
@@ -2943,7 +3524,6 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
   void _showMismatchDialog(
     Map<String, dynamic> mismatchReport,
     Map<String, dynamic> excelData,
-    List<Map<String, dynamic>> repairProposals,
   ) {
     showDialog(
       context: context,
@@ -2952,178 +3532,143 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         mismatchReport: mismatchReport,
         excelData: excelData,
         elements: elements,
-        repairProposals: repairProposals,
-        onApplyProposal: (proposal) {
-          _applyEquipmentProposal(proposal);
+        onAutoRecover: () {
+          Navigator.of(ctx).pop();
+          _autoRecoverMissingElements(mismatchReport, excelData);
         },
-        onRejectProposal: (proposal) {
-          _rejectEquipmentProposal(proposal);
-        },
-        onCancel: () {},
       ),
     );
   }
 
-  void _applyEquipmentProposal(Map<String, dynamic> proposal) {
+  void _autoRecoverMissingElements(
+    Map<String, dynamic> mismatchReport,
+    Map<String, dynamic> excelData,
+  ) {
     _saveState();
-    final category = proposal['category']?.toString().toLowerCase() ?? '';
-    final busNum = (proposal['bus_number'] as num?)?.toInt();
-    final excelData = (proposal['excel_data'] as Map<String, dynamic>?) ?? {};
-
-    if (busNum == null) return;
+    final details = (mismatchReport['details'] as Map<String, dynamic>?) ?? {};
+    final missingBuses =
+        (details['missing_buses'] as List?)
+            ?.map((e) => (e as num).toInt())
+            .toList() ??
+        [];
+    final missingBranches = (details['missing_branches'] as List?) ?? [];
+    final missingGens =
+        (details['missing_generators'] as List?)
+            ?.map((e) => (e as num).toInt())
+            .toList() ??
+        [];
+    final missingLoads =
+        (details['missing_loads'] as List?)
+            ?.map((e) => (e as num).toInt())
+            .toList() ??
+        [];
 
     setState(() {
-      DrawingElement? parentBus;
+      double avgX = CANVAS_CENTER;
+      double avgY = CANVAS_CENTER;
+      int busCount = 0;
       for (var el in elements) {
         if (el.type == Tool.bus) {
-          if (el.busNumber == busNum) {
-            parentBus = el;
-            break;
-          }
-          final matchNum = _getBusNum(el.label.isNotEmpty ? el.label : el.id);
-          if (matchNum == busNum) {
-            parentBus = el;
-            break;
-          }
+          avgX += el.position.dx;
+          avgY += el.position.dy;
+          busCount++;
+        }
+      }
+      if (busCount > 0) {
+        avgX /= (busCount + 1);
+        avgY /= (busCount + 1);
+      }
+
+      int offsetIdx = 0;
+      for (var bNum in missingBuses) {
+        final newBus = DrawingElement(
+          id: "bus_$bNum",
+          type: Tool.bus,
+          position: Offset(avgX + (offsetIdx * 140) - 200, avgY + 180),
+          width: 120,
+          height: 10,
+          label: "$bNum",
+        );
+        elements.add(newBus);
+        offsetIdx++;
+      }
+
+      Map<int, DrawingElement> busMap = {};
+      for (var el in elements) {
+        if (el.type == Tool.bus) {
+          final bNum =
+              int.tryParse(
+                RegExp(r'\d+').firstMatch(el.label)?.group(0) ?? '',
+              ) ??
+              int.tryParse(RegExp(r'\d+').firstMatch(el.id)?.group(0) ?? '');
+          if (bNum != null) busMap[bNum] = el;
         }
       }
 
-      if (parentBus == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text("Bus $busNum 모선 요소를 Canvas에서 찾을 수 없어 설비를 추가할 수 없습니다."),
-            backgroundColor: Colors.redAccent,
-          ),
-        );
-        return;
+      for (var bNum in missingGens) {
+        final bus = busMap[bNum];
+        if (bus != null) {
+          final genEl = DrawingElement(
+            id: "gen_$bNum",
+            type: Tool.generator,
+            position: Offset(bus.position.dx + 20, bus.position.dy - 60),
+            width: 44,
+            height: 44,
+            parentBusId: bus.id,
+            label: "G_$bNum",
+          );
+          elements.add(genEl);
+        }
       }
 
-      final bPos = parentBus.position;
-      final targetBusId = parentBus.id;
+      for (var bNum in missingLoads) {
+        final bus = busMap[bNum];
+        if (bus != null) {
+          final loadEl = DrawingElement(
+            id: "load_$bNum",
+            type: Tool.load,
+            position: Offset(bus.position.dx + 20, bus.position.dy + 60),
+            width: 44,
+            height: 44,
+            parentBusId: bus.id,
+            label: "Load_$bNum",
+          );
+          elements.add(loadEl);
+        }
+      }
 
-      if (category == 'generator') {
-        final gPos = Offset(bPos.dx + 20, bPos.dy - 60);
-        final isSC = excelData['is_synchronous_condenser'] == true;
-        final isSlack = excelData['is_slack'] == true;
-        final genId = "gen_applied_${busNum}_${DateTime.now().millisecondsSinceEpoch}";
-        final leadId = "lead_gen_applied_${busNum}_${DateTime.now().millisecondsSinceEpoch}";
-
-        final genEl = DrawingElement(
-          id: genId,
-          type: Tool.generator,
-          position: gPos,
-          width: 44,
-          height: 44,
-          parentBusId: targetBusId,
-          busNumber: busNum,
-          label: excelData['label']?.toString() ?? (isSC ? "SC_$busNum (동기조상기)" : "G_$busNum"),
-          source: "excel_review_applied",
-          isEquipmentLead: false,
-          isGenLead: false,
-          electricalBranch: true,
-        )
-          ..isSlack = isSlack
-          ..isSynchronousCondenser = isSC
-          ..vPu = (excelData['v_pu'] as num?)?.toDouble() ?? 1.0
-          ..pPu = (excelData['pg_pu'] as num?)?.toDouble() ?? 0.0
-          ..qPu = (excelData['qg_pu'] as num?)?.toDouble() ?? 0.0;
-
-        final leadEl = DrawingElement(
-          id: leadId,
-          type: Tool.line,
-          position: gPos,
-          endPosition: bPos,
-          startElementId: genId,
-          endElementId: targetBusId,
-          label: "Lead G_$busNum ↔ Bus_$busNum",
-          source: "excel_review_applied",
-          isEquipmentLead: true,
-          isGenLead: true,
-          electricalBranch: false,
-        )
-          ..rPu = 0.0
-          ..xPu = 0.0
-          ..bPu = 0.0
-          ..tapRatio = 1.0;
-
-        elements.add(genEl);
-        elements.add(leadEl);
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text("✅ Bus $busNum 발전기 및 인입선이 Canvas에 추가되었습니다."),
-            backgroundColor: Colors.teal.shade700,
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      } else if (category == 'load') {
-        final lPos = Offset(bPos.dx + 20, bPos.dy + 60);
-        final loadId = "load_applied_${busNum}_${DateTime.now().millisecondsSinceEpoch}";
-        final leadId = "lead_load_applied_${busNum}_${DateTime.now().millisecondsSinceEpoch}";
-
-        final loadEl = DrawingElement(
-          id: loadId,
-          type: Tool.load,
-          position: lPos,
-          width: 36,
-          height: 40,
-          parentBusId: targetBusId,
-          busNumber: busNum,
-          label: excelData['label']?.toString() ?? "Load_$busNum",
-          source: "excel_review_applied",
-          isEquipmentLead: false,
-          isGenLead: false,
-          electricalBranch: true,
-        )
-          ..pPu = (excelData['p_pu'] as num?)?.toDouble() ?? 0.0
-          ..qPu = (excelData['q_pu'] as num?)?.toDouble() ?? 0.0;
-
-        final leadEl = DrawingElement(
-          id: leadId,
-          type: Tool.line,
-          position: lPos,
-          endPosition: bPos,
-          startElementId: loadId,
-          endElementId: targetBusId,
-          label: "Lead Load_$busNum ↔ Bus_$busNum",
-          source: "excel_review_applied",
-          isEquipmentLead: true,
-          isGenLead: false,
-          electricalBranch: false,
-        )
-          ..rPu = 0.0
-          ..xPu = 0.0
-          ..bPu = 0.0
-          ..tapRatio = 1.0;
-
-        elements.add(loadEl);
-        elements.add(leadEl);
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text("✅ Bus $busNum 부하 및 인입선이 Canvas에 추가되었습니다."),
-            backgroundColor: Colors.teal.shade700,
-            duration: const Duration(seconds: 2),
-          ),
-        );
+      for (var br in missingBranches) {
+        if (br is List && br.length >= 2) {
+          final fb = (br[0] as num).toInt();
+          final tb = (br[1] as num).toInt();
+          final b1 = busMap[fb];
+          final b2 = busMap[tb];
+          if (b1 != null && b2 != null) {
+            final lineEl = DrawingElement(
+              id: "line_${fb}_$tb",
+              type: Tool.line,
+              position: Offset(
+                (b1.position.dx + b2.position.dx) / 2,
+                (b1.position.dy + b2.position.dy) / 2,
+              ),
+              startElementId: b1.id,
+              endElementId: b2.id,
+              label: "Line $fb-$tb",
+            );
+            elements.add(lineEl);
+          }
+        }
       }
     });
-  }
 
-  void _rejectEquipmentProposal(Map<String, dynamic> proposal) {
-    final cat = proposal['category']?.toString() ?? '설비';
-    final bNum = proposal['bus_number'] ?? '';
-    debugPrint("[설비 교차검증 거부] Bus $bNum $cat 추가 제안이 사용자에 의해 거부되었습니다. (Canvas/Solver 변경 없음)");
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text("Bus $bNum $cat 추가 제안을 거부했습니다. (도면 및 계산 변경 없음)"),
-        backgroundColor: Colors.blueGrey,
-        duration: const Duration(seconds: 2),
-      ),
-    );
+    _applyExcelDataToCanvas(excelData);
   }
 
   void _applyAiDataToCanvas(Map<String, dynamic> aiData) {
+    if (aiData['status'] == 'VERIFIED') {
+      _applyVerifiedSldDataToCanvas(aiData);
+      return;
+    }
     _saveState();
     setState(() {
       elements.clear();
@@ -3194,12 +3739,20 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
 
         // Calculate 90-degree snapped rotation angle from metadata orientation if available
         double angle = 0.0;
-        final orientationMeta = node['orientation'] ?? 
-            (node['metadata'] is Map ? node['metadata']['orientation'] : null) ??
-            (node['parameters'] is Map ? node['parameters']['orientation'] : null);
-        final directionMeta = node['direction'] ?? 
+        final orientationMeta =
+            node['orientation'] ??
+            (node['metadata'] is Map
+                ? node['metadata']['orientation']
+                : null) ??
+            (node['parameters'] is Map
+                ? node['parameters']['orientation']
+                : null);
+        final directionMeta =
+            node['direction'] ??
             (node['metadata'] is Map ? node['metadata']['direction'] : null) ??
-            (node['parameters'] is Map ? node['parameters']['direction'] : null);
+            (node['parameters'] is Map
+                ? node['parameters']['direction']
+                : null);
 
         if (orientationMeta != null) {
           String orient = orientationMeta.toString().toLowerCase();
@@ -3269,14 +3822,22 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
             .toString();
         List<dynamic> rawPath = line['path'] ?? [];
         List<dynamic> connectedTo = line['connected_to'] ?? [];
-        
+
         DrawingElement? startEl;
         DrawingElement? endEl;
         if (connectedTo.isNotEmpty) {
-          try { startEl = elements.firstWhere((e) => e.id == connectedTo[0].toString()); } catch (_) {}
+          try {
+            startEl = elements.firstWhere(
+              (e) => e.id == connectedTo[0].toString(),
+            );
+          } catch (_) {}
         }
         if (connectedTo.length > 1) {
-          try { endEl = elements.firstWhere((e) => e.id == connectedTo[1].toString()); } catch (_) {}
+          try {
+            endEl = elements.firstWhere(
+              (e) => e.id == connectedTo[1].toString(),
+            );
+          } catch (_) {}
         }
 
         if (lineLabel.isEmpty && connectedTo.length >= 2) {
@@ -3311,8 +3872,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           if (parsedPath.isNotEmpty) {
             if (startEl == null) {
               for (var b in elements.where((e) => e.type == Tool.bus)) {
-                if ((parsedPath.first.dx - b.position.dx).abs() <= b.width / 2 + 35.0 &&
-                    (parsedPath.first.dy - b.position.dy).abs() <= b.height / 2 + 35.0) {
+                if ((parsedPath.first.dx - b.position.dx).abs() <=
+                        b.width / 2 + 35.0 &&
+                    (parsedPath.first.dy - b.position.dy).abs() <=
+                        b.height / 2 + 35.0) {
                   startEl = b;
                   break;
                 }
@@ -3320,8 +3883,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
             }
             if (endEl == null) {
               for (var b in elements.where((e) => e.type == Tool.bus)) {
-                if ((parsedPath.last.dx - b.position.dx).abs() <= b.width / 2 + 35.0 &&
-                    (parsedPath.last.dy - b.position.dy).abs() <= b.height / 2 + 35.0) {
+                if ((parsedPath.last.dx - b.position.dx).abs() <=
+                        b.width / 2 + 35.0 &&
+                    (parsedPath.last.dy - b.position.dy).abs() <=
+                        b.height / 2 + 35.0) {
                   endEl = b;
                   break;
                 }
@@ -3337,27 +3902,39 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
 
           Offset startPos = cleanPath.first;
           Offset endPos = cleanPath.last;
-          Offset? midPos = cleanPath.length == 3 ? cleanPath[1] : (cleanPath.length > 3 ? cleanPath[1] : null);
+          Offset? midPos = cleanPath.length == 3
+              ? cleanPath[1]
+              : (cleanPath.length > 3 ? cleanPath[1] : null);
 
-          elements.add(DrawingElement(
-            id: lineId,
-            type: Tool.line, 
-            position: startPos,
-            midPosition: midPos,
-            endPosition: endPos,
-            aiPath: cleanPath.length > 2 ? cleanPath : null,
-            rawAiPath: parsedPath,
-            label: lineLabel.isNotEmpty ? lineLabel : lineId,
-            startElementId: startEl != null ? startEl.id : (connectedTo.isNotEmpty ? connectedTo[0].toString() : null),
-            endElementId: endEl != null ? endEl.id : (connectedTo.length > 1 ? connectedTo[1].toString() : null),
-            startAnchor: startEl != null ? (startPos - startEl.position) : null,
-            endAnchor: endEl != null ? (endPos - endEl.position) : null,
-          ));
+          elements.add(
+            DrawingElement(
+              id: lineId,
+              type: Tool.line,
+              position: startPos,
+              midPosition: midPos,
+              endPosition: endPos,
+              aiPath: cleanPath.length > 2 ? cleanPath : null,
+              rawAiPath: parsedPath,
+              label: lineLabel.isNotEmpty ? lineLabel : lineId,
+              startElementId: startEl != null
+                  ? startEl.id
+                  : (connectedTo.isNotEmpty ? connectedTo[0].toString() : null),
+              endElementId: endEl != null
+                  ? endEl.id
+                  : (connectedTo.length > 1 ? connectedTo[1].toString() : null),
+              startAnchor: startEl != null
+                  ? (startPos - startEl.position)
+                  : null,
+              endAnchor: endEl != null ? (endPos - endEl.position) : null,
+            ),
+          );
         }
       }
 
       // 4. Connect every Generator & Load to its parent Bus (via bus number, line, or spatial proximity)
-      for (var dev in elements.where((e) => e.type == Tool.generator || e.type == Tool.load)) {
+      for (var dev in elements.where(
+        (e) => e.type == Tool.generator || e.type == Tool.load,
+      )) {
         if (dev.parentBusId == null || dev.parentBusId!.isEmpty) {
           int? bNum;
           final mId = RegExp(
@@ -3428,7 +4005,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
       // 5. For Loads without explicit orientation metadata from AI, compute orientation pointing away from parent Bus
       for (var el in elements.where((e) => e.type == Tool.load)) {
         if (!elementsWithExplicitOrientation.contains(el.id)) {
-          DrawingElement? parentBus = elements.where((e) => e.type == Tool.bus && e.id == el.parentBusId).firstOrNull;
+          DrawingElement? parentBus = elements
+              .where((e) => e.type == Tool.bus && e.id == el.parentBusId)
+              .firstOrNull;
           if (parentBus == null && elements.any((e) => e.type == Tool.bus)) {
             double minDist = double.infinity;
             for (var b in elements.where((e) => e.type == Tool.bus)) {
@@ -3478,6 +4057,139 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         _showPostCircuitCreationProposal();
       }
     });
+  }
+
+  Future<void> _applyVerifiedSldDataToCanvas(
+    Map<String, dynamic> verifiedData,
+  ) async {
+    final excelData = verifiedData['excel_data'];
+    if (excelData is! Map<String, dynamic>) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('검증된 Excel 제원이 없어 CAD로 이동할 수 없습니다.')),
+        );
+      }
+      return;
+    }
+
+    final mapping = VerifiedSldCanvasMapper.map(
+      verifiedData,
+      canvasCenter: const Offset(CANVAS_CENTER, CANVAS_CENTER),
+    );
+    if (!mapping.isValid) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('검증된 도면 handoff를 중단했습니다: ${mapping.error}')),
+        );
+      }
+      return;
+    }
+
+    try {
+      final response = await http.post(
+        Uri.parse('${ReviewApiService.baseUrl}/apply_excel_to_elements'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'elements': mapping.elements
+              .map((element) => element.toJson())
+              .toList(),
+          'excel_data': excelData,
+          'verified_sld_apply': true,
+        }),
+      );
+      if (!mounted) return;
+      if (response.statusCode != 200) {
+        throw StateError('Excel strict binding HTTP ${response.statusCode}');
+      }
+      final result = jsonDecode(response.body);
+      if (result is! Map || result['status'] != 'success') {
+        throw StateError('Excel strict binding 응답이 올바르지 않습니다.');
+      }
+      final summary = result['summary'] is Map
+          ? Map<String, dynamic>.from(result['summary'] as Map)
+          : <String, dynamic>{};
+      final mismatch = result['mismatch_report'];
+      if (summary['blocked'] == true) {
+        if (mismatch is Map<String, dynamic>) {
+          _showMismatchDialog(mismatch, Map<String, dynamic>.from(excelData));
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Excel/도면 불일치로 CAD handoff가 차단되었습니다.'),
+            ),
+          );
+        }
+        return;
+      }
+      final returnedElements = result['elements'];
+      if (returnedElements is! List ||
+          returnedElements.length != mapping.elements.length) {
+        throw StateError('strict binding이 도면 요소 목록을 변경했습니다.');
+      }
+      final mappedById = {
+        for (final element in mapping.elements) element.id: element,
+      };
+      final returnedIds = <String>{};
+      for (final raw in returnedElements) {
+        if (raw is! Map)
+          throw StateError('strict binding 요소 응답 형식이 올바르지 않습니다.');
+        final id = raw['id']?.toString();
+        final element = id == null ? null : mappedById[id];
+        if (element == null || !returnedIds.add(id!)) {
+          throw StateError('strict binding이 ID를 추가, 제거 또는 변경했습니다.');
+        }
+        element.updateFromJson(Map<String, dynamic>.from(raw));
+      }
+      if (returnedIds.length != mappedById.length ||
+          summary['topology_mutated'] != false) {
+        throw StateError('strict binding이 검증된 토폴로지를 보존하지 않았습니다.');
+      }
+
+      _saveState();
+      setState(() {
+        elements = mapping.elements;
+        selectedElement = null;
+        lastSimulationResult = null;
+        showResultOverlay = false;
+        final branchCount = excelData['total_branches'];
+        excelBranchCount = branchCount is num ? branchCount.toInt() : null;
+        final sBase = excelData['sbase_mva'];
+        if (sBase is num && sBase.toDouble().isFinite && sBase > 0) {
+          powerFlowSBase = sBase.toDouble();
+        }
+        _resetCamera();
+      });
+      isInspectorOpen = true;
+      PowerLensAIService.instance.onStageChanged('FINAL_CAD');
+      final missing = summary['missing_parameter_ids'] as List? ?? const [];
+      if (missing.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'CAD로 이동했습니다. Excel 전기 제원이 누락되어 계산은 차단됩니다: ${missing.join(', ')}',
+            ),
+            backgroundColor: Colors.orange.shade800,
+            duration: const Duration(seconds: 6),
+          ),
+        );
+      }
+      Future.delayed(const Duration(milliseconds: 600), () {
+        if (mounted && lastSimulationResult == null) {
+          _showPostCircuitCreationProposal();
+        }
+      });
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Excel 제원 strict binding 실패로 CAD handoff를 중단했습니다: $error',
+          ),
+          backgroundColor: Colors.red.shade700,
+          duration: const Duration(seconds: 6),
+        ),
+      );
+    }
   }
 
   void _showPostCircuitCreationProposal() {
@@ -3604,9 +4316,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
 
             // 2. Center Infinite Canvas (Expanded)
             Expanded(
-                child: Stack(
-                  key: _canvasStackKey,
-                  children: [
+              child: Stack(
+                key: _canvasStackKey,
+                children: [
                   _buildCanvas(),
                   _buildCanvasViewControls(),
                   _buildFlowDirectionLegend(),
@@ -3623,7 +4335,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                             bottomLeft: Radius.circular(8),
                           ),
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 8,
+                            ),
                             decoration: BoxDecoration(
                               color: const Color(0xFF0F172A),
                               borderRadius: const BorderRadius.only(
@@ -3631,18 +4346,30 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                                 bottomLeft: Radius.circular(8),
                               ),
                               boxShadow: [
-                                BoxShadow(color: Colors.black.withOpacity(0.15), blurRadius: 6, offset: const Offset(-2, 2)),
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.15),
+                                  blurRadius: 6,
+                                  offset: const Offset(-2, 2),
+                                ),
                               ],
                               border: Border.all(color: Colors.white24),
                             ),
                             child: const Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(Icons.chevron_left, size: 18, color: Colors.cyanAccent),
+                                Icon(
+                                  Icons.chevron_left,
+                                  size: 18,
+                                  color: Colors.cyanAccent,
+                                ),
                                 SizedBox(width: 4),
                                 Text(
                                   "속성 패널 열기",
-                                  style: TextStyle(color: Colors.white, fontSize: 11.5, fontWeight: FontWeight.bold),
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.bold,
+                                  ),
                                 ),
                               ],
                             ),
@@ -3676,77 +4403,160 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                   Positioned.fill(
                     child: AnimatedBuilder(
                       animation: PowerLensAIService.instance,
-                      builder: (context, _) {
-                        final isMobile =
-                            MediaQuery.of(context).size.width < 768;
-                        final coachTarget = elements.isEmpty
-                            ? 'home_upload'
-                            : (lastSimulationResult == null
-                                  ? 'final_powerflow'
-                                  : 'result_flow');
-                        _scheduleLensyTargetSync(coachTarget);
-                        return AnimatedAlign(
-                          alignment: _effectiveLensyAlignment(
+                      builder: (context, _) => LayoutBuilder(
+                        builder: (context, constraints) {
+                          final viewport = Size(
+                            constraints.maxWidth,
+                            constraints.maxHeight,
+                          );
+                          final isMobile = viewport.width < 768;
+                          final coachTarget = elements.isEmpty
+                              ? 'home_upload'
+                              : (lastSimulationResult == null
+                                    ? 'final_powerflow'
+                                    : 'result_flow');
+                          _scheduleLensyTargetSync(coachTarget);
+                          final speechBubbleText = elements.isEmpty
+                              ? "도면 사진 업로드 버튼을 눌러 시작해볼까요? ⚡"
+                              : (lastSimulationResult == null
+                                    ? "회로도가 완성됐어요. 조류계산을 실행해볼까요? ⚡"
+                                    : "계산이 끝났어요. 결과를 보여드릴게요! 🌊");
+                          if (isMobile) {
+                            return AnimatedAlign(
+                              alignment: _effectiveLensyAlignment(
+                                coachTarget,
+                                isMobile: true,
+                              ),
+                              duration: _isLensyDragging
+                                  ? Duration.zero
+                                  : const Duration(milliseconds: 200),
+                              curve: Curves.easeOutCubic,
+                              child: PowerLensAIFloatingButton(
+                                coachTarget: coachTarget,
+                                onDragDelta: (delta) => _handleLensyDrag(
+                                  delta,
+                                  coachTarget,
+                                  isMobile: true,
+                                ),
+                                onDragStart: _handleLensyDragStart,
+                                onDragEnd: _handleLensyDragEnd,
+                                onResetPosition: _resetLensyPosition,
+                                speechBubbleText: speechBubbleText,
+                                coachMessage: speechBubbleText,
+                                presenceState:
+                                    PowerLensAIService.instance.mascotState,
+                                onPressed: () {
+                                  showModalBottomSheet(
+                                    context: context,
+                                    isScrollControlled: true,
+                                    backgroundColor: Colors.transparent,
+                                    builder: (ctx) => PowerLensAIPanel(
+                                      assistantContext:
+                                          _buildAssistantContext(),
+                                      onClose: () => Navigator.pop(ctx),
+                                      isMobile: true,
+                                    ),
+                                  );
+                                },
+                                isOpen: false,
+                                isMobile: true,
+                              ),
+                            );
+                          }
+
+                          final panelBounds = _lensyPanelBounds(viewport);
+                          final alignment = _effectiveLensyAlignment(
                             coachTarget,
-                            isMobile: isMobile,
-                          ),
-                          duration: const Duration(milliseconds: 650),
-                          curve: Curves.easeInOutCubic,
-                          child: PowerLensAIFloatingButton(
-                            coachTarget: coachTarget,
-                            onDragDelta: (delta) => _handleLensyDrag(
-                              delta,
-                              coachTarget,
-                              isMobile: isMobile,
-                            ),
-                            speechBubbleText: elements.isEmpty
-                                ? "도면 사진 업로드 버튼을 눌러 시작해볼까요? ⚡"
-                                : (lastSimulationResult == null
-                                      ? "회로도가 완성됐어요. 조류계산을 실행해볼까요? ⚡"
-                                      : "계산이 끝났어요. 결과를 보여드릴게요! 🌊"),
-                            coachMessage: elements.isEmpty
-                                ? "도면 사진 업로드 버튼을 눌러 시작해볼까요? ⚡"
-                                : (lastSimulationResult == null
-                                      ? "회로도가 완성됐어요. 조류계산을 실행해볼까요? ⚡"
-                                      : "계산이 끝났어요. 결과를 보여드릴게요! 🌊"),
-                            presenceState:
-                                PowerLensAIService.instance.mascotState,
-                            onPressed: () {
-                              if (isMobile) {
-                                showModalBottomSheet(
-                                  context: context,
-                                  isScrollControlled: true,
-                                  backgroundColor: Colors.transparent,
-                                  builder: (ctx) => PowerLensAIPanel(
-                                    assistantContext: _buildAssistantContext(),
-                                    onClose: () => Navigator.pop(ctx),
-                                    isMobile: true,
-                                  ),
-                                );
-                              } else {
-                                setState(
-                                  () => _isAiPanelOpen = !_isAiPanelOpen,
-                                );
-                              }
-                            },
-                            isOpen: _isAiPanelOpen,
-                            isMobile: isMobile,
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                  if (_isAiPanelOpen &&
-                      MediaQuery.of(context).size.width >= 768)
-                    Positioned(
-                      right: 20,
-                      bottom: 70,
-                      child: PowerLensAIPanel(
-                        assistantContext: _buildAssistantContext(),
-                        onClose: () => setState(() => _isAiPanelOpen = false),
-                        isMobile: false,
+                            isMobile: false,
+                          );
+                          final groupRect = PowerLensCompanionLayout.groupRect(
+                            viewport: viewport,
+                            robotCenterAlignment: alignment,
+                            panelOpen: _isAiPanelOpen,
+                            panelBounds: panelBounds,
+                          );
+                          return Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              AnimatedPositioned(
+                                left: groupRect.left,
+                                top: groupRect.top,
+                                width: groupRect.width,
+                                height: groupRect.height,
+                                duration: _isLensyDragging
+                                    ? Duration.zero
+                                    : const Duration(milliseconds: 210),
+                                curve: Curves.easeOutCubic,
+                                child: Stack(
+                                  clipBehavior: Clip.none,
+                                  children: [
+                                    if (_isAiPanelOpen)
+                                      Positioned(
+                                        right: 0,
+                                        bottom:
+                                            PowerLensCompanionLayout
+                                                .robotAnchorHeight +
+                                            PowerLensCompanionLayout.panelGap,
+                                        child: PowerLensAIPanel(
+                                          assistantContext:
+                                              _buildAssistantContext(),
+                                          onClose: () => _setLensyPanelOpen(
+                                            false,
+                                            viewport,
+                                          ),
+                                          isMobile: false,
+                                          onCompanionDragDelta: (delta) =>
+                                              _handleLensyDrag(
+                                                delta,
+                                                coachTarget,
+                                                isMobile: false,
+                                              ),
+                                          onCompanionDragStart:
+                                              _handleLensyDragStart,
+                                          onCompanionDragEnd:
+                                              _handleLensyDragEnd,
+                                          onCompanionReset: _resetLensyPosition,
+                                          isCompanionMoved:
+                                              _manualLensyAlignment != null,
+                                          desktopMaxSize: panelBounds,
+                                        ),
+                                      ),
+                                    Positioned(
+                                      right: 0,
+                                      bottom: 0,
+                                      child: PowerLensAIFloatingButton(
+                                        coachTarget: coachTarget,
+                                        onDragDelta: (delta) =>
+                                            _handleLensyDrag(
+                                              delta,
+                                              coachTarget,
+                                              isMobile: false,
+                                            ),
+                                        onDragStart: _handleLensyDragStart,
+                                        onDragEnd: _handleLensyDragEnd,
+                                        onResetPosition: _resetLensyPosition,
+                                        speechBubbleText: speechBubbleText,
+                                        coachMessage: speechBubbleText,
+                                        presenceState: PowerLensAIService
+                                            .instance
+                                            .mascotState,
+                                        onPressed: () => _setLensyPanelOpen(
+                                          !_isAiPanelOpen,
+                                          viewport,
+                                        ),
+                                        isOpen: _isAiPanelOpen,
+                                        isMobile: false,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          );
+                        },
                       ),
                     ),
+                  ),
                 ],
               ),
             ),
@@ -3773,7 +4583,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                     selectedElement: selectedElement,
                     elements: elements,
                     simulationResult: lastSimulationResult,
-                    sBase: 100.0,
+                    sBase: powerFlowSBase,
                     onStateChanged: () {
                       _saveState();
                       setState(() {});
@@ -3872,8 +4682,13 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
             ? (lastSimulationResult!['total_branches'] as num?)?.toInt() ?? 0
             : elements.where(_isActualTransmissionOrTransformerLine).length);
     final bool hasElements = elements.isNotEmpty;
-    final bool hasResults = lastSimulationResult != null;
-    final bool converged = lastSimulationResult?['converged'] == true;
+    final bool hasResults = PowerFlowResultContract.hasActualResult(
+      lastSimulationResult,
+    );
+    final bool converged = PowerFlowResultContract.isConverged(
+      lastSimulationResult,
+    );
+    final readiness = PowerFlowReadiness.evaluate(elements);
     final workingNodes = elements
         .where((element) => element.type != Tool.line)
         .map(_assistantElementPayload)
@@ -3899,16 +4714,19 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           ? (excelBranchCount != null && excelBranchCount! > 0
                 ? 'EXCEL'
                 : 'FINAL_CAD')
-          : 'POWERFLOW',
+          : converged
+          ? 'POWERFLOW'
+          : 'POWERFLOW_NOT_CONVERGED',
       documentId: '',
       hasDiagram: hasElements,
       totalObjects: elements.length,
       totalBuses: busCount,
       totalConnections: lineCount,
       excelLoaded: excelBranchCount != null && excelBranchCount! > 0,
-      powerflowReady: busCount > 0 && lineCount > 0,
+      powerflowReady: readiness.ready,
       powerflowRunning: isSimulating,
       powerflowConverged: hasResults ? converged : null,
+      powerflowEvidence: _powerFlowEvidence(),
       selectedElement: selectedElement?.label,
       selectedNode: selectedNode,
       selectedLine: selectedLine,
@@ -3916,9 +4734,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
       workingLines: workingLines,
       currentBlockers: !hasElements
           ? ['단선도 도면 불러오기 또는 AI 분석']
-          : (excelBranchCount == null || excelBranchCount == 0)
-          ? ['엑셀 계통 제원(임피던스, P, Q, V) 연결']
-          : [],
+          : readiness.blockers,
     );
   }
 
@@ -3940,51 +4756,6 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
     );
   }
 
-  Alignment _lensyCoachAlignment(String target, {required bool isMobile}) {
-    if (isMobile) return const Alignment(0.92, 0.88);
-    switch (target) {
-      case 'home_upload':
-        return const Alignment(0.52, 0.02);
-      case 'final_powerflow':
-        return const Alignment(0.42, 0.48);
-      case 'result_flow':
-        return const Alignment(0.48, 0.72);
-      default:
-        return const Alignment(0.82, 0.82);
-    }
-  }
-
-  Alignment? _measureLensyCoachTarget(
-    String target, {
-    required bool isMobile,
-  }) {
-    if (isMobile) return null;
-    final targetKey = target == 'final_powerflow'
-        ? _powerFlowButtonKey
-        : (target == 'result_flow' ? _resultButtonKey : null);
-    final targetBox = targetKey?.currentContext?.findRenderObject() as RenderBox?;
-    final stackBox =
-        _canvasStackKey.currentContext?.findRenderObject() as RenderBox?;
-    if (targetBox == null || stackBox == null || !targetBox.hasSize) {
-      return null;
-    }
-    final stackSize = stackBox.size;
-    if (stackSize.width <= 1 || stackSize.height <= 1) return null;
-    final targetOrigin = targetBox.localToGlobal(Offset.zero);
-    final stackOrigin = stackBox.localToGlobal(Offset.zero);
-    final targetCenter = targetOrigin - stackOrigin +
-        Offset(targetBox.size.width / 2, targetBox.size.height / 2);
-    final companionPosition = targetCenter + const Offset(-118, -48);
-    return Alignment(
-      (((companionPosition.dx / stackSize.width) * 2) - 1)
-          .clamp(-0.94, 0.94)
-          .toDouble(),
-      (((companionPosition.dy / stackSize.height) * 2) - 1)
-          .clamp(-0.94, 0.94)
-          .toDouble(),
-    );
-  }
-
   void _scheduleLensyTargetSync(String target) {
     // Lensy remains anchored at bottom-right without jumping across controls
   }
@@ -3996,20 +4767,106 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
     return const Alignment(0.86, 0.86);
   }
 
-  void _handleLensyDrag(
-    Offset delta,
-    String target, {
-    required bool isMobile,
-  }) {
-    final size = MediaQuery.of(context).size;
+  void _handleLensyDrag(Offset delta, String target, {required bool isMobile}) {
+    final size =
+        _canvasStackKey.currentContext?.size ?? MediaQuery.of(context).size;
     final current = _effectiveLensyAlignment(target, isMobile: isMobile);
-    double clampAlignment(double value) =>
-        value.clamp(-0.94, 0.94).toDouble();
+    double clampAlignment(double value) => value.clamp(-0.94, 0.94).toDouble();
+    if (!isMobile) {
+      final viewport = Size(size.width, size.height);
+      final panelBounds = _lensyPanelBounds(viewport);
+      final currentRect = PowerLensCompanionLayout.groupRect(
+        viewport: viewport,
+        robotCenterAlignment: current,
+        panelOpen: _isAiPanelOpen,
+        panelBounds: panelBounds,
+      );
+      final nextCenter =
+          PowerLensCompanionLayout.robotCenter(currentRect) + delta;
+      final proposed = PowerLensCompanionLayout.groupRect(
+        viewport: viewport,
+        robotCenterAlignment: PowerLensCompanionLayout.alignmentForRobotCenter(
+          nextCenter,
+          viewport,
+        ),
+        panelOpen: _isAiPanelOpen,
+        panelBounds: panelBounds,
+      );
+      setState(() {
+        _manualLensyAlignment =
+            PowerLensCompanionLayout.alignmentForRobotCenter(
+              PowerLensCompanionLayout.robotCenter(proposed),
+              viewport,
+            );
+      });
+      return;
+    }
     setState(() {
       _manualLensyAlignment = Alignment(
         clampAlignment(current.x + delta.dx / math.max(size.width / 2, 1)),
         clampAlignment(current.y + delta.dy / math.max(size.height / 2, 1)),
       );
+    });
+  }
+
+  Size _lensyPanelBounds(Size viewport) {
+    final requestedWidth = (viewport.width * 0.76)
+        .clamp(380.0, 980.0)
+        .toDouble();
+    final width = math.min(
+      requestedWidth,
+      math.max(320.0, viewport.width - 24),
+    );
+    final reservedHeight =
+        PowerLensCompanionLayout.robotAnchorHeight +
+        PowerLensCompanionLayout.panelGap +
+        24;
+    final height = math.min(
+      760.0,
+      math.max(120.0, viewport.height - reservedHeight),
+    );
+    return Size(width, height);
+  }
+
+  void _setLensyPanelOpen(bool isOpen, Size viewport) {
+    final alignment = _effectiveLensyAlignment(
+      elements.isEmpty
+          ? 'home_upload'
+          : (lastSimulationResult == null ? 'final_powerflow' : 'result_flow'),
+      isMobile: false,
+    );
+    final proposed = PowerLensCompanionLayout.groupRect(
+      viewport: viewport,
+      robotCenterAlignment: alignment,
+      panelOpen: isOpen,
+      panelBounds: _lensyPanelBounds(viewport),
+    );
+    final center = PowerLensCompanionLayout.robotCenter(proposed);
+    setState(() {
+      _manualLensyAlignment = PowerLensCompanionLayout.alignmentForRobotCenter(
+        center,
+        viewport,
+      );
+      _isAiPanelOpen = isOpen;
+    });
+  }
+
+  void _handleLensyDragStart() {
+    if (!mounted) return;
+    setState(() => _isLensyDragging = true);
+  }
+
+  void _handleLensyDragEnd() {
+    if (!mounted || !_isLensyDragging) return;
+    setState(() => _isLensyDragging = false);
+  }
+
+  void _resetLensyPosition() {
+    if (!mounted) return;
+    PowerLensAIService.instance.resetPanelOffset();
+    setState(() {
+      _manualLensyAlignment = null;
+      _isLensyDragging = false;
     });
   }
 
@@ -4174,7 +5031,11 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           guideLabel: "✨ 선로 형태 보정 & 직각화",
           child: PopupMenuButton<String>(
             tooltip: "선로 형태 보정 및 정형화",
-            icon: const Icon(Icons.auto_fix_high, color: Colors.cyanAccent, size: 20),
+            icon: const Icon(
+              Icons.auto_fix_high,
+              color: Colors.cyanAccent,
+              size: 20,
+            ),
             enabled: elements.any((e) => e.type == Tool.line),
             onSelected: (mode) {
               if (mode == 'natural') {
@@ -4406,25 +5267,45 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                       targetId: 'palette_bus',
                       borderRadius: BorderRadius.circular(10),
                       guideLabel: "✨ 모선 그리기 도구",
-                      child: _paletteItem(Tool.bus, Icons.horizontal_rule, "모선", "B"),
+                      child: _paletteItem(
+                        Tool.bus,
+                        Icons.horizontal_rule,
+                        "모선",
+                        "B",
+                      ),
                     ),
                     GlowingTargetWrapper(
                       targetId: 'palette_generator',
                       borderRadius: BorderRadius.circular(10),
                       guideLabel: "✨ 발전기 추가 도구",
-                      child: _paletteItem(Tool.generator, Icons.motion_photos_on, "발전기", "G"),
+                      child: _paletteItem(
+                        Tool.generator,
+                        Icons.motion_photos_on,
+                        "발전기",
+                        "G",
+                      ),
                     ),
                     GlowingTargetWrapper(
                       targetId: 'palette_load',
                       borderRadius: BorderRadius.circular(10),
                       guideLabel: "✨ 부하 추가 도구",
-                      child: _paletteItem(Tool.load, Icons.arrow_downward, "부하", "L"),
+                      child: _paletteItem(
+                        Tool.load,
+                        Icons.arrow_downward,
+                        "부하",
+                        "L",
+                      ),
                     ),
                     GlowingTargetWrapper(
                       targetId: 'palette_transformer',
                       borderRadius: BorderRadius.circular(10),
                       guideLabel: "✨ 변압기 추가 도구",
-                      child: _paletteItem(Tool.transformer, Icons.crop_square, "변압기", "T"),
+                      child: _paletteItem(
+                        Tool.transformer,
+                        Icons.crop_square,
+                        "변압기",
+                        "T",
+                      ),
                     ),
                     GlowingTargetWrapper(
                       targetId: 'palette_line',
@@ -4446,7 +5327,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                     ),
                     const Divider(indent: 8, endIndent: 8, height: 16),
                     GlowingTargetWrapper(
-                      targetId: 'home_upload',
+                      targetId: 'canvas_ai_upload',
                       borderRadius: BorderRadius.circular(10),
                       guideLabel: "✨ 도면 분석",
                       child: _actionPaletteItem(
@@ -4623,18 +5504,21 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                 color: showResultOverlay ? Colors.blueAccent : Colors.grey,
               ),
               tooltip: showResultOverlay ? "조류계산 결과 숨기기" : "조류계산 결과 도면 표시",
-              onPressed: () => setState(() {
-                showResultOverlay = !showResultOverlay;
-                if (showResultOverlay &&
-                    showFlowDirection &&
-                    lastSimulationResult != null) {
-                  _flowAnimController.repeat();
-                } else {
-                  _flowAnimController.stop();
-                }
-              }),
+              onPressed:
+                  PowerFlowResultContract.isConverged(lastSimulationResult)
+                  ? () => setState(() {
+                      showResultOverlay = !showResultOverlay;
+                      if (showResultOverlay && showFlowDirection) {
+                        _flowAnimController.repeat();
+                      } else {
+                        _flowAnimController.stop();
+                      }
+                    })
+                  : null,
             ),
-            if (lastSimulationResult != null) ...[
+            if (PowerFlowResultContract.hasActualResult(
+              lastSimulationResult,
+            )) ...[
               IconButton(
                 icon: Icon(
                   showFlowDirection
@@ -4648,14 +5532,17 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                 tooltip: showFlowDirection
                     ? "선로 조류 흐름 애니메이션 숨기기"
                     : "선로 조류 흐름 애니메이션 보기",
-                onPressed: () => setState(() {
-                  showFlowDirection = !showFlowDirection;
-                  if (showFlowDirection && showResultOverlay) {
-                    _flowAnimController.repeat();
-                  } else {
-                    _flowAnimController.stop();
-                  }
-                }),
+                onPressed:
+                    PowerFlowResultContract.isConverged(lastSimulationResult)
+                    ? () => setState(() {
+                        showFlowDirection = !showFlowDirection;
+                        if (showFlowDirection && showResultOverlay) {
+                          _flowAnimController.repeat();
+                        } else {
+                          _flowAnimController.stop();
+                        }
+                      })
+                    : null,
               ),
               IconButton(
                 icon: Icon(
@@ -4666,8 +5553,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                       : Colors.grey,
                 ),
                 tooltip: showValueLabels ? "수치 상세 라벨 숨기기" : "수치 상세 라벨 보기",
-                onPressed: () =>
-                    setState(() => showValueLabels = !showValueLabels),
+                onPressed:
+                    PowerFlowResultContract.isConverged(lastSimulationResult)
+                    ? () => setState(() => showValueLabels = !showValueLabels)
+                    : null,
               ),
             ],
             IconButton(
@@ -4879,7 +5768,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
 
     // 1. Bus Result Badges
     for (var el in elements.where((e) => e.type == Tool.bus)) {
-      final busNum = _getBusNum(el.label.isNotEmpty ? el.label : el.id);
+      final busNum = _busNumberForElement(el)?.toString();
+      if (busNum == null) continue;
       final bRes = busResults.firstWhere(
         (b) => b['bus'].toString() == busNum,
         orElse: () => null,
@@ -4893,14 +5783,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         final double pload = (bRes['pload'] as num?)?.toDouble() ?? 0.0;
         final double qload = (bRes['qload'] as num?)?.toDouble() ?? 0.0;
 
-        Color voltColor = (v >= 0.95 && v <= 1.05)
-            ? Colors.greenAccent.shade700
-            : Colors.deepOrangeAccent;
+        const voltColor = Colors.cyanAccent;
 
-        if (showValueLabels || selectedElement?.id == el.id) {
-          // Detailed voltage and gen/load card. Numeric labels are intentionally
-          // absent from the default result canvas; selecting a bus remains an
-          // explicit, useful way to inspect its values.
+        if (showValueLabels) {
+          // Numeric result labels remain hidden until the user explicitly asks.
           overlays.add(
             Positioned(
               left: el.position.dx - 80,
@@ -5030,8 +5916,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
       final mid = el.midPosition ?? (el.position + el.endPosition!) / 2;
 
       if (isGenLead && (el.pPu.abs() > 0.001 || el.qPu.abs() > 0.001)) {
-        if (showValueLabels || selectedElement?.id == el.id) {
-          final double pMw = el.pPu * 100.0;
+        if (showValueLabels) {
+          final double pMw = el.pPu * powerFlowSBase;
           overlays.add(
             Positioned(
               left: mid.dx - 45,
@@ -5067,8 +5953,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
       }
 
       if (isLoadLead && (el.pPu.abs() > 0.001 || el.qPu.abs() > 0.001)) {
-        if (showValueLabels || selectedElement?.id == el.id) {
-          final double pMw = el.pPu * 100.0;
+        if (showValueLabels) {
+          final double pMw = el.pPu * powerFlowSBase;
           overlays.add(
             Positioned(
               left: mid.dx - 45,
@@ -5105,24 +5991,34 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
 
       if (startEl == null || endEl == null) continue;
 
-      final fb = _getBusNum(
-        startEl.label.isNotEmpty ? startEl.label : startEl.id,
-      );
-      final tb = _getBusNum(endEl.label.isNotEmpty ? endEl.label : endEl.id);
+      final fb = _busNumberForElement(startEl);
+      final tb = _busNumberForElement(endEl);
+      if (fb == null || tb == null) continue;
 
       final lRes = lineResults.firstWhere(
         (l) =>
-            (l['from_bus'].toString() == fb && l['to_bus'].toString() == tb) ||
-            (l['from_bus'].toString() == tb && l['to_bus'].toString() == fb),
+            (l['from_bus'] == fb && l['to_bus'] == tb) ||
+            (l['from_bus'] == tb && l['to_bus'] == fb),
         orElse: () => null,
       );
 
       if (lRes != null) {
-        final double pFrom = (lRes['p_from_mw'] as num?)?.toDouble() ?? 0.0;
+        final solverFrom = (lRes['from_bus'] as num?)?.toInt();
+        final solverTo = (lRes['to_bus'] as num?)?.toInt();
+        final pFromValue = (lRes['p_from_mw'] as num?)?.toDouble();
+        if (solverFrom == null || solverTo == null || pFromValue == null) {
+          continue;
+        }
+        final double pFrom = pFromValue;
         final double lossP = (lRes['loss_p_mw'] as num?)?.toDouble() ?? 0.0;
-        final bool isForward = (lRes['from_bus'].toString() == fb)
-            ? (pFrom >= 0)
-            : (pFrom < 0);
+        final isForward = PowerFlowResultContract.followsCanvasDirection(
+          canvasFromBus: fb,
+          canvasToBus: tb,
+          solverFromBus: solverFrom,
+          solverToBus: solverTo,
+          pFromMw: pFrom,
+        );
+        if (isForward == null) continue;
         final String fromLabel = isForward
             ? (startEl.label.isNotEmpty ? startEl.label : "Bus $fb")
             : (endEl.label.isNotEmpty ? endEl.label : "Bus $tb");
@@ -5134,9 +6030,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         // this same geometry for a negative P value keeps the animation on
         // the actual drawn line, including elbows and AI pixel traces.
         final basePath = _lineGeometry(el);
-        final flowPath = isForward
-            ? basePath
-            : basePath.reversed.toList(growable: false);
+        final flowPath = PowerFlowResultContract.orientRoute(
+          basePath,
+          isForward,
+        );
 
         // Animated arrowheads moving along the routed line. A short line gets
         // one arrow, longer lines get two or three; there are no circular
@@ -5170,8 +6067,8 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           }
         }
 
-        // Numerical MW text badge: Only shown if showValueLabels is ON or line is selected
-        if (showValueLabels || selectedElement?.id == el.id) {
+        // Numerical MW text badge: only shown after explicit user request.
+        if (showValueLabels) {
           overlays.add(
             Positioned(
               left: mid.dx - 65,
@@ -5327,10 +6224,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
               (e.id.startsWith("lead_") && e.id.contains("load")));
       if (isGenLead) {
         info +=
-            "발전: ${(e.pPu * 100.0).toStringAsFixed(1)} MW\n무효: ${(e.qPu * 100.0).toStringAsFixed(1)} MVAR";
+            "발전: ${(e.pPu * powerFlowSBase).toStringAsFixed(1)} MW\n무효: ${(e.qPu * powerFlowSBase).toStringAsFixed(1)} MVAR";
       } else if (isLoadLead) {
         info +=
-            "부하: ${(e.pPu * 100.0).toStringAsFixed(1)} MW\n무효: ${(e.qPu * 100.0).toStringAsFixed(1)} MVAR";
+            "부하: ${(e.pPu * powerFlowSBase).toStringAsFixed(1)} MW\n무효: ${(e.qPu * powerFlowSBase).toStringAsFixed(1)} MVAR";
       } else {
         info +=
             "${e.rPu}+j${e.xPu}" +
@@ -5454,14 +6351,17 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         elements.add(newEl);
         selectedElement = newEl;
         _canvasFocusNode.requestFocus();
-      } else if (selectedTool == Tool.generator || selectedTool == Tool.load || selectedTool == Tool.transformer) {
-        _saveState(); Offset finalPos = target != null ? _getSnapPoint(target, pos) : pos;
+      } else if (selectedTool == Tool.generator ||
+          selectedTool == Tool.load ||
+          selectedTool == Tool.transformer) {
+        _saveState();
+        Offset finalPos = target != null ? _getSnapPoint(target, pos) : pos;
         final newEl = DrawingElement(
-          id: newId, 
-          type: selectedTool, 
-          position: finalPos, 
-          width: 40, 
-          height: 40, 
+          id: newId,
+          type: selectedTool,
+          position: finalPos,
+          width: 40,
+          height: 40,
           parentBusId: target?.id,
           label: newId,
         );
@@ -5481,12 +6381,23 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         } else if (lineMid == null && target == null) {
           lineMid = pos;
         } else {
-          _saveState(); Offset endP = target != null ? _getSnapPoint(target, pos) : pos;
-          final newLine = DrawingElement(id: newId, type: Tool.line, position: lineStart!, midPosition: lineMid, endPosition: endP, startElementId: pendingStartId, endElementId: target?.id, startAnchor: pendingStartAnchor, endAnchor: target != null ? (endP - target.position) : null);
+          _saveState();
+          Offset endP = target != null ? _getSnapPoint(target, pos) : pos;
+          final newLine = DrawingElement(
+            id: newId,
+            type: Tool.line,
+            position: lineStart!,
+            midPosition: lineMid,
+            endPosition: endP,
+            startElementId: pendingStartId,
+            endElementId: target?.id,
+            startAnchor: pendingStartAnchor,
+            endAnchor: target != null ? (endP - target.position) : null,
+          );
           elements.add(newLine);
           selectedElement = newLine;
           _canvasFocusNode.requestFocus();
-          
+
           if (target != null && pendingStartId != null) {
             DrawingElement? startEl;
             try {
@@ -5508,8 +6419,13 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
           pendingStartId = null;
         }
       } else if (selectedTool == Tool.text) {
-        _saveState(); 
-        final newText = DrawingElement(id: newId, type: Tool.text, position: pos, label: "텍스트 입력");
+        _saveState();
+        final newText = DrawingElement(
+          id: newId,
+          type: Tool.text,
+          position: pos,
+          label: "텍스트 입력",
+        );
         elements.add(newText);
         selectedElement = newText;
         _canvasFocusNode.requestFocus();
@@ -5549,7 +6465,7 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                     ? const Color(0xFF059669)
                     : const Color(0xFF7C3AED)));
     Color drawColor = isSelected ? const Color(0xFF2563EB) : baseColor;
-    
+
     final int quarterTurns = ((e.angle / (math.pi / 2)).round() % 4 + 4) % 4;
     final int counterQuarterTurns = (4 - quarterTurns) % 4;
 
@@ -5561,30 +6477,30 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         alignment: Alignment.center,
         children: [
           Container(
-            width: e.width, 
-            height: e.height, 
+            width: e.width,
+            height: e.height,
             decoration: BoxDecoration(
-              color: Colors.white, 
+              color: Colors.white,
               border: Border.all(
-                color: isSelected ? const Color(0xFF2563EB) : drawColor, 
+                color: isSelected ? const Color(0xFF2563EB) : drawColor,
                 width: isSelected ? 2.5 : 2.0,
-              ), 
+              ),
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: isSelected ? const Color(0x332563EB) : Colors.black12, 
+                  color: isSelected ? const Color(0x332563EB) : Colors.black12,
                   blurRadius: isSelected ? 8 : 3,
                 ),
               ],
-            ), 
+            ),
             child: Center(
               child: RotatedBox(
                 quarterTurns: counterQuarterTurns,
                 child: Text(
-                  isSC ? "SC" : (e.isSlack ? "S" : "G"), 
+                  isSC ? "SC" : (e.isSlack ? "S" : "G"),
                   style: TextStyle(
-                    color: drawColor, 
-                    fontWeight: FontWeight.bold, 
+                    color: drawColor,
+                    fontWeight: FontWeight.bold,
                     fontSize: isSC ? e.height * 0.35 : e.height * 0.45,
                   ),
                 ),
@@ -5600,7 +6516,11 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.9),
                   borderRadius: BorderRadius.circular(3),
-                  border: Border.all(color: isSelected ? const Color(0xFF2563EB) : Colors.black12),
+                  border: Border.all(
+                    color: isSelected
+                        ? const Color(0xFF2563EB)
+                        : Colors.black12,
+                  ),
                 ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -5608,19 +6528,27 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                     Text(
                       e.label.isNotEmpty ? e.label : e.id,
                       style: TextStyle(
-                        fontWeight: FontWeight.bold, 
-                        color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF0F172A), 
+                        fontWeight: FontWeight.bold,
+                        color: isSelected
+                            ? const Color(0xFF2563EB)
+                            : const Color(0xFF0F172A),
                         fontSize: 10,
                       ),
                     ),
                     if (e.isAutoAddedFromExcel)
                       Container(
                         margin: const EdgeInsets.only(top: 1),
-                        padding: const EdgeInsets.symmetric(horizontal: 2.5, vertical: 0.5),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 2.5,
+                          vertical: 0.5,
+                        ),
                         decoration: BoxDecoration(
                           color: const Color(0xFFFEF3C7),
                           borderRadius: BorderRadius.circular(2),
-                          border: Border.all(color: const Color(0xFFD97706), width: 0.5),
+                          border: Border.all(
+                            color: const Color(0xFFD97706),
+                            width: 0.5,
+                          ),
                         ),
                         child: const Text(
                           "Excel 보완",
@@ -5640,8 +6568,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
       );
     } else if (e.type == Tool.load) {
       shapeContent = CustomPaint(
-        size: Size(e.width, e.height), 
-        painter: LoadArrowPainter(color: isSelected ? const Color(0xFF2563EB) : drawColor),
+        size: Size(e.width, e.height),
+        painter: LoadArrowPainter(
+          color: isSelected ? const Color(0xFF2563EB) : drawColor,
+        ),
       );
     } else if (e.type == Tool.transformer) {
       bool isVert = e.height >= e.width;
@@ -5650,8 +6580,11 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
         alignment: Alignment.center,
         children: [
           CustomPaint(
-            size: Size(e.width, e.height), 
-            painter: TransformerPainter(color: isSelected ? const Color(0xFF2563EB) : drawColor, isVertical: isVert),
+            size: Size(e.width, e.height),
+            painter: TransformerPainter(
+              color: isSelected ? const Color(0xFF2563EB) : drawColor,
+              isVertical: isVert,
+            ),
           ),
           Positioned(
             top: -18,
@@ -5791,17 +6724,26 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                       });
                     },
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 1,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.white.withValues(alpha: 0.92),
                         borderRadius: BorderRadius.circular(3),
-                        border: Border.all(color: isSelected ? const Color(0xFF2563EB) : Colors.black12),
+                        border: Border.all(
+                          color: isSelected
+                              ? const Color(0xFF2563EB)
+                              : Colors.black12,
+                        ),
                       ),
                       child: Text(
                         e.label.isNotEmpty ? e.label : e.id,
                         style: TextStyle(
-                          fontWeight: FontWeight.bold, 
-                          color: isSelected ? const Color(0xFF2563EB) : const Color(0xFF0F172A), 
+                          fontWeight: FontWeight.bold,
+                          color: isSelected
+                              ? const Color(0xFF2563EB)
+                              : const Color(0xFF0F172A),
                           fontSize: 10,
                         ),
                       ),
@@ -5839,7 +6781,9 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                   }
                 },
                 child: MouseRegion(
-                  cursor: selectedTool == Tool.move ? SystemMouseCursors.move : SystemMouseCursors.click,
+                  cursor: selectedTool == Tool.move
+                      ? SystemMouseCursors.move
+                      : SystemMouseCursors.click,
                   child: RotatedBox(
                     quarterTurns: quarterTurns,
                     child: SizedBox(
@@ -5856,7 +6800,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                                 width: e.width + 8,
                                 height: e.height + 8,
                                 decoration: BoxDecoration(
-                                  border: Border.all(color: const Color(0xFF2563EB), width: 1.5),
+                                  border: Border.all(
+                                    color: const Color(0xFF2563EB),
+                                    width: 1.5,
+                                  ),
                                   borderRadius: BorderRadius.circular(4),
                                 ),
                               ),
@@ -5868,7 +6815,10 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                                 onPanStart: (_) => _saveState(),
                                 onPanUpdate: (d) {
                                   setState(() {
-                                    e.width = (e.width + d.delta.dx).clamp(20, 800);
+                                    e.width = (e.width + d.delta.dx).clamp(
+                                      20,
+                                      800,
+                                    );
                                     if (e.type != Tool.bus) e.height = e.width;
                                   });
                                 },
@@ -5881,9 +6831,17 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                                     height: 12,
                                     decoration: BoxDecoration(
                                       color: Colors.white,
-                                      border: Border.all(color: const Color(0xFF2563EB), width: 2),
+                                      border: Border.all(
+                                        color: const Color(0xFF2563EB),
+                                        width: 2,
+                                      ),
                                       borderRadius: BorderRadius.circular(2),
-                                      boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 2)],
+                                      boxShadow: const [
+                                        BoxShadow(
+                                          color: Colors.black26,
+                                          blurRadius: 2,
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 ),
@@ -5915,14 +6873,23 @@ class PowerCanvasPageState extends State<PowerCanvasPage>
                       decoration: const BoxDecoration(
                         color: Color(0xFF2563EB),
                         shape: BoxShape.circle,
-                        boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2))],
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black26,
+                            blurRadius: 4,
+                            offset: Offset(0, 2),
+                          ),
+                        ],
                       ),
-                      child: const Icon(Icons.rotate_right, size: 18, color: Colors.white),
+                      child: const Icon(
+                        Icons.rotate_right,
+                        size: 18,
+                        color: Colors.white,
+                      ),
                     ),
                   ),
                 ),
               ),
-
           ],
         ),
       ),

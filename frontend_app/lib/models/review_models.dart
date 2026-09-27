@@ -113,15 +113,16 @@ class ReviewNodeItem {
       confidence: (json['confidence'] as num?)?.toDouble() ?? 0.0,
       source: json['source']?.toString() ?? 'unknown',
       reviewStatus:
-          json['review_status']?.toString().toUpperCase() ?? 'DETECTED',
+          (json['review_status'] ?? json['status'])?.toString().toUpperCase() ??
+          'DETECTED',
       reviewReasons: reasons,
       agentExplanation: json['agent_explanation']?.toString(),
       recommendedAction: json['recommended_action']?.toString(),
-      evidence: json['evidence'] is Map<String, dynamic>
-          ? json['evidence']
+      evidence: json['evidence'] is Map
+          ? Map<String, dynamic>.from(json['evidence'] as Map)
           : {},
-      metadata: json['metadata'] is Map<String, dynamic>
-          ? json['metadata']
+      metadata: json['metadata'] is Map
+          ? Map<String, dynamic>.from(json['metadata'] as Map)
           : {},
       displayLabel:
           json['display_name']?.toString() ?? json['display_label']?.toString(),
@@ -163,6 +164,8 @@ class ReviewNodeItem {
       'label_offset_dx': labelOffsetDx,
       'label_offset_dy': labelOffsetDy,
       'bus_number': busNumber,
+      'bus_number_status': busNumberStatus,
+      'bus_number_reasons': busNumberReasons,
       'connected_bus_number': connectedBusNumber,
       'connected_bus_id': connectedBusId,
     };
@@ -278,6 +281,731 @@ class MissingCandidateItem {
   }
 }
 
+class ObjectReviewGateEvaluator {
+  static List<String> getBlockers({
+    required List<ReviewNodeItem> workingNodes,
+    required List<MissingCandidateItem> missingCandidates,
+  }) {
+    final blockers = <String>[];
+    final validNodes = workingNodes
+        .where((n) => n.reviewStatus != 'REJECTED')
+        .toList();
+    if (validNodes.isEmpty) {
+      blockers.add("유효한 전력 설비 심볼이 없습니다.");
+    }
+    final suspiciousNodes = validNodes
+        .where((n) => n.reviewStatus == 'SUSPICIOUS')
+        .toList();
+    if (suspiciousNodes.isNotEmpty) {
+      blockers.add("확인이 필요한 의심 객체(${suspiciousNodes.length}개)가 남아 있습니다.");
+    }
+    final unresolvedCands = missingCandidates
+        .where((c) => c.status == 'OPEN')
+        .toList();
+    if (unresolvedCands.isNotEmpty) {
+      blockers.add("미해결된 누락 의심 영역(${unresolvedCands.length}개)이 있습니다.");
+    }
+    return blockers;
+  }
+
+  static bool canVerifyGate({
+    required List<ReviewNodeItem> workingNodes,
+    required List<MissingCandidateItem> missingCandidates,
+  }) {
+    return getBlockers(
+      workingNodes: workingNodes,
+      missingCandidates: missingCandidates,
+    ).isEmpty;
+  }
+
+  static Set<String> computeGuideNodeIds({
+    required List<ReviewNodeItem> workingNodes,
+    List<Map<String, dynamic>>? focusTargets,
+  }) {
+    final ids = <String>{};
+    for (final node in workingNodes) {
+      if (node.reviewStatus == 'SUSPICIOUS') {
+        ids.add(node.id);
+      }
+    }
+    if (focusTargets != null) {
+      final nodeMap = {for (final n in workingNodes) n.id: n};
+      for (final target in focusTargets) {
+        final type = target['type']?.toString().toUpperCase();
+        final id = target['id']?.toString();
+        if (type == 'OBJECT' && id != null) {
+          final node = nodeMap[id];
+          // Fabricated ID protection: node must actually exist in workingNodes
+          // Resolved protection: if node is already CONFIRMED or REJECTED, do not retain review warning guide
+          if (node != null &&
+              node.reviewStatus != 'REJECTED' &&
+              node.reviewStatus != 'CONFIRMED') {
+            ids.add(id);
+          }
+        }
+      }
+    }
+    return ids;
+  }
+
+  static String getSpeechBubbleText({
+    required int suspiciousCount,
+    required int unresolvedCandidatesCount,
+    String? selectedLabel,
+  }) {
+    if (suspiciousCount > 0) {
+      final label = selectedLabel ?? '첫 번째 검토 항목';
+      return "객체를 확인해봤어요. 대부분 괜찮고, 제가 다시 봤으면 하는 것부터 보여드릴게요.\n"
+          "도면에 표시된 $label의 AI 판단 근거를 확인한 뒤 [맞음] 또는 [수정]을 선택해주세요.";
+    }
+    if (unresolvedCandidatesCount > 0) {
+      return "의심 객체는 모두 확인되었으나, 누락 후보 $unresolvedCandidatesCount건이 남아 있어요.\n"
+          "목록에서 복구하거나 문제없음 처리 후 [객체 검수 완료]를 눌러주세요.";
+    }
+    return "도면 내 객체 인식이 완료되었어요!\n"
+        "설비 종류별 탭을 눌러 유형을 한 번씩 확인한 뒤, Lensy에게 완료를 알려주세요.";
+  }
+}
+
+class BusReviewGateEvaluator {
+  static List<String> getBlockers({
+    required List<ReviewNodeItem> workingNodes,
+  }) {
+    final blockers = <String>[];
+    final busNodes = workingNodes
+        .where(
+          (n) =>
+              n.className.toLowerCase() == 'bus' &&
+              n.reviewStatus.toUpperCase() != 'REJECTED',
+        )
+        .toList();
+
+    if (busNodes.isEmpty) {
+      blockers.add("도면 내 유효한 모선(Bus) 객체가 없습니다.");
+      return blockers;
+    }
+
+    final counts = <int, int>{};
+    for (final b in busNodes) {
+      if (b.busNumber != null && b.busNumber! > 0) {
+        counts[b.busNumber!] = (counts[b.busNumber!] ?? 0) + 1;
+      }
+    }
+    final duplicates = counts.entries
+        .where((e) => e.value > 1)
+        .map((e) => e.key)
+        .toList();
+
+    final missingNumberBuses = <String>[];
+    final invalidNumberBuses = <String>[];
+    final outOfRangeBuses = <String>[];
+    final duplicateBuses = <String>[];
+    final uncertainStatusBuses = <String>[];
+
+    for (final b in busNodes) {
+      final num = b.busNumber;
+      final status = (b.busNumberStatus ?? '').toUpperCase();
+      final reasons = b.busNumberReasons;
+      final hasActiveDupReason = reasons.any(
+        (r) => r.toUpperCase().startsWith('DUPLICATE_BUS_NUMBER_'),
+      );
+
+      if (num == null) {
+        missingNumberBuses.add(b.id);
+      } else if (num <= 0) {
+        invalidNumberBuses.add(b.id);
+      } else if (num > 50) {
+        outOfRangeBuses.add(b.id);
+      } else if (duplicates.contains(num) || hasActiveDupReason) {
+        duplicateBuses.add(b.id);
+      } else if (status == 'UNCERTAIN') {
+        uncertainStatusBuses.add(b.id);
+      }
+    }
+
+    if (duplicates.isNotEmpty || duplicateBuses.isNotEmpty) {
+      final dupStr = duplicates.isNotEmpty
+          ? duplicates.map((n) => "#$n").join(", ")
+          : "확인 필요";
+      blockers.add("중복된 모선 번호($dupStr)가 존재합니다. 각각 고유한 번호로 수정해 주세요.");
+    }
+    if (missingNumberBuses.isNotEmpty) {
+      blockers.add("번호가 미지정된 모선(${missingNumberBuses.length}개)이 있습니다.");
+    }
+    if (invalidNumberBuses.isNotEmpty) {
+      blockers.add(
+        "유효하지 않은 번호(0 이하)를 가진 모선(${invalidNumberBuses.length}개)이 있습니다.",
+      );
+    }
+    if (outOfRangeBuses.isNotEmpty) {
+      blockers.add(
+        "허용 범위(1~50)를 벗어난 번호를 가진 모선(${outOfRangeBuses.length}개)이 있습니다.",
+      );
+    }
+    if (uncertainStatusBuses.isNotEmpty) {
+      blockers.add(
+        "판독 상태가 불확실(UNCERTAIN)한 모선(${uncertainStatusBuses.length}개)이 있습니다.",
+      );
+    }
+
+    return blockers;
+  }
+
+  static bool canVerifyGate({required List<ReviewNodeItem> workingNodes}) {
+    return getBlockers(workingNodes: workingNodes).isEmpty;
+  }
+
+  static Set<String> computeGuideBusIds({
+    required List<ReviewNodeItem> workingNodes,
+    List<Map<String, dynamic>>? focusTargets,
+  }) {
+    final ids = <String>{};
+    final busNodes = workingNodes
+        .where(
+          (n) =>
+              n.className.toLowerCase() == 'bus' &&
+              n.reviewStatus.toUpperCase() != 'REJECTED',
+        )
+        .toList();
+
+    final counts = <int, int>{};
+    for (final b in busNodes) {
+      if (b.busNumber != null && b.busNumber! > 0) {
+        counts[b.busNumber!] = (counts[b.busNumber!] ?? 0) + 1;
+      }
+    }
+    final duplicates = counts.entries
+        .where((e) => e.value > 1)
+        .map((e) => e.key)
+        .toSet();
+
+    for (final b in busNodes) {
+      final num = b.busNumber;
+      final status = (b.busNumberStatus ?? '').toUpperCase();
+      final reasons = b.busNumberReasons;
+      final hasActiveDupReason = reasons.any(
+        (r) => r.toUpperCase().startsWith('DUPLICATE_BUS_NUMBER_'),
+      );
+
+      if (num == null ||
+          num <= 0 ||
+          num > 50 ||
+          duplicates.contains(num) ||
+          status == 'UNCERTAIN' ||
+          hasActiveDupReason) {
+        ids.add(b.id);
+      }
+    }
+
+    if (focusTargets != null) {
+      final nodeMap = {for (final n in workingNodes) n.id: n};
+      for (final target in focusTargets) {
+        final type = target['type']?.toString().toUpperCase();
+        final id = target['id']?.toString();
+        // Canonical focus target type is 'OBJECT'. Legacy 'BUS' is disallowed.
+        if (type == 'OBJECT' && id != null) {
+          final node = nodeMap[id];
+          if (node != null &&
+              node.className.toLowerCase() == 'bus' &&
+              node.reviewStatus != 'REJECTED' &&
+              ids.contains(id)) {
+            ids.add(id);
+          }
+        }
+      }
+    }
+
+    return ids;
+  }
+
+  static String getSpeechBubbleText({
+    required List<ReviewNodeItem> workingNodes,
+    String? selectedLabel,
+  }) {
+    final activeBuses = workingNodes
+        .where(
+          (node) =>
+              node.className.toLowerCase() == 'bus' &&
+              node.reviewStatus.toUpperCase() != 'REJECTED',
+        )
+        .toList();
+    if (activeBuses.isEmpty) {
+      return "유효한 모선(Bus) 객체가 없습니다.\n"
+          "객체 검수에서 모선 인식을 확인해주세요.";
+    }
+
+    final issueIds = computeGuideBusIds(workingNodes: activeBuses);
+    final issueCount = issueIds.length;
+
+    if (issueCount > 0) {
+      return "모선 번호를 전체 확인했어요.\n"
+          "다시 확인하면 좋은 모선이 ${issueCount}개 있어요.\n"
+          "도면에 표시해둘게요.";
+    }
+
+    return "모선 번호 확인이 완료되었습니다.\n"
+        "도면의 모선 번호가 맞는지 확인한 뒤 [모선 검수 완료]를 눌러주세요.";
+  }
+}
+
+class BusReviewUiState {
+  static const noActiveBusMessage = '유효한 모선(Bus) 객체가 없습니다. 객체 검수를 확인해주세요.';
+
+  final int totalBuses;
+  final int verifiedBuses;
+  final int issueBuses;
+
+  const BusReviewUiState({
+    required this.totalBuses,
+    required this.verifiedBuses,
+    required this.issueBuses,
+  });
+
+  bool get hasIssues => issueBuses > 0;
+
+  bool get isBlocked => totalBuses == 0 || hasIssues;
+
+  String get subtitle => '모선 번호 검수';
+
+  String get nextActionText {
+    if (totalBuses == 0) return noActiveBusMessage;
+    if (hasIssues) return '번호 확인이 필요한 모선 $issueBuses개를 확인하세요.';
+    return '모선 번호 확인이 완료되었습니다. 도면 확인 후 [모선 검수 완료]를 눌러주세요.';
+  }
+
+  static List<ReviewNodeItem> activeBusNodes(Iterable<ReviewNodeItem> nodes) {
+    return nodes
+        .where(
+          (node) =>
+              node.className.toLowerCase() == 'bus' &&
+              node.reviewStatus.toUpperCase() != 'REJECTED',
+        )
+        .toList();
+  }
+
+  factory BusReviewUiState.fromNodes(Iterable<ReviewNodeItem> nodes) {
+    final active = activeBusNodes(nodes);
+    final issueIds = BusReviewGateEvaluator.computeGuideBusIds(
+      workingNodes: active,
+    );
+    return BusReviewUiState(
+      totalBuses: active.length,
+      verifiedBuses: active.length - issueIds.length,
+      issueBuses: issueIds.length,
+    );
+  }
+
+  static String rowBadgeText({
+    required ReviewNodeItem node,
+    required List<ReviewNodeItem> workingNodes,
+  }) {
+    final issueIds = BusReviewGateEvaluator.computeGuideBusIds(
+      workingNodes: activeBusNodes(workingNodes),
+    );
+    if (!issueIds.contains(node.id)) return '확인됨';
+
+    final active = activeBusNodes(workingNodes);
+    final counts = <int, int>{};
+    for (final bus in active) {
+      if (bus.busNumber != null && bus.busNumber! > 0) {
+        counts[bus.busNumber!] = (counts[bus.busNumber!] ?? 0) + 1;
+      }
+    }
+    final hasDuplicateReason = node.busNumberReasons.any(
+      (reason) => reason.toUpperCase().startsWith('DUPLICATE_BUS_NUMBER_'),
+    );
+    final hasDuplicateNumber =
+        node.busNumber != null && (counts[node.busNumber!] ?? 0) > 1;
+    return hasDuplicateNumber || hasDuplicateReason ? '중복 번호' : '검토필요';
+  }
+
+  static List<ReviewNodeItem> filter(
+    Iterable<ReviewNodeItem> nodes, {
+    String status = 'ALL',
+  }) {
+    final active = activeBusNodes(nodes);
+    final issueIds = BusReviewGateEvaluator.computeGuideBusIds(
+      workingNodes: active,
+    );
+    if (status == 'UNCERTAIN') {
+      return active.where((node) => issueIds.contains(node.id)).toList();
+    }
+    if (status == 'VERIFIED') {
+      return active.where((node) => !issueIds.contains(node.id)).toList();
+    }
+    return active;
+  }
+}
+
+class BusReviewUiPolicy {
+  static bool canEnterBusMapping({required bool objectGateVerified}) {
+    return objectGateVerified;
+  }
+
+  static bool shouldIgnoreGlobalKeyForBus({
+    required bool isBusPhase,
+    required bool isTyping,
+    required String keyLabel,
+  }) {
+    if (!isBusPhase || isTyping) return false;
+    return const {
+      'Arrow Right',
+      'Arrow Left',
+      'Arrow Up',
+      'Arrow Down',
+      'Enter',
+      'Numpad Enter',
+    }.contains(keyLabel);
+  }
+}
+
+/// Deterministic, exception-first policy for the Connection Review V2 gate.
+///
+/// This helper is deliberately independent of widgets so the final CTA,
+/// Lensy focus targets, and tests all use the same rules. A clean DETECTED
+/// line is usable without an individual approval action. Only actual
+/// exceptions or authoritative topology errors are returned as blockers.
+class ConnectionReviewGateEvaluator {
+  static const noActiveLineMessage = '유효한 결선 선로가 없습니다. 결선 검출을 확인해주세요.';
+  static const primaryActionLabel = '결선 검수 완료';
+  static const filterAll = 'ALL';
+  static const filterNeedsReview = 'NEEDS_REVIEW';
+  static const filterCrossing = 'CROSSING';
+
+  static List<ReviewLineItem> activeLines(Iterable<ReviewLineItem> lines) {
+    return lines
+        .where((line) => line.reviewStatus.toUpperCase() != 'REJECTED')
+        .toList();
+  }
+
+  /// Production filter contract shared by the Connection V2 widget and tests.
+  /// Empty filtered results stay empty; callers must not fall back to ALL.
+  static List<ReviewLineItem> filter(
+    Iterable<ReviewLineItem> lines, {
+    String status = filterAll,
+  }) {
+    final normalized = status.toUpperCase();
+    if (normalized == 'REJECTED') {
+      return lines
+          .where((line) => line.reviewStatus.toUpperCase() == 'REJECTED')
+          .toList();
+    }
+
+    final active = activeLines(lines);
+    switch (normalized) {
+      case filterNeedsReview:
+      case 'AMBIGUOUS':
+        return active.where(isExceptionLine).toList();
+      case filterCrossing:
+        return active.where(isUnresolvedCrossing).toList();
+      case 'ERROR_ONLY':
+        return active.where(lineHasCriticalIssue).toList();
+      case 'DETECTED':
+        return active
+            .where((line) => line.reviewStatus.toUpperCase() == 'DETECTED')
+            .toList();
+      case 'AUTO_CONFIRMED':
+        return active
+            .where(
+              (line) =>
+                  line.reviewStatus.toUpperCase() == 'CONFIRMED' &&
+                  !line.source.contains('human'),
+            )
+            .toList();
+      case 'HUMAN_CONFIRMED':
+        return active
+            .where(
+              (line) =>
+                  line.reviewStatus.toUpperCase() == 'CONFIRMED' &&
+                  line.source.contains('human'),
+            )
+            .toList();
+      case filterAll:
+      default:
+        return active;
+    }
+  }
+
+  static ReviewLineItem? selectedLineForFilter({
+    required Iterable<ReviewLineItem> workingLines,
+    required String status,
+    ReviewLineItem? selectedLine,
+  }) {
+    if (selectedLine == null) return null;
+    final visible = filter(workingLines, status: status);
+    return visible.any((line) => line.lineId == selectedLine.lineId)
+        ? selectedLine
+        : null;
+  }
+
+  static bool isCriticalIssue(Map<String, dynamic> issue) {
+    return issue['severity']?.toString().toLowerCase() == 'error';
+  }
+
+  static List<Map<String, dynamic>> _lineIssues(ReviewLineItem line) {
+    final issues = <Map<String, dynamic>>[...line.validationIssues];
+    final nested = line.evidence['validation_issues'];
+    if (nested is List) {
+      for (final issue in nested) {
+        if (issue is Map<String, dynamic>) issues.add(issue);
+      }
+    }
+    return issues;
+  }
+
+  static bool lineHasCriticalIssue(ReviewLineItem line) {
+    return _lineIssues(line).any(isCriticalIssue);
+  }
+
+  static String _criticalIssueIdentity(
+    Map<String, dynamic> issue, {
+    String fallback = '',
+  }) {
+    final code = issue['code']?.toString().trim() ?? '';
+    final message = issue['message']?.toString().trim() ?? '';
+    if (code.isNotEmpty || message.isNotEmpty) {
+      return 'evidence:$code:$message';
+    }
+    final id = issue['issue_id'] ?? issue['id'];
+    if (id != null && id.toString().trim().isNotEmpty) {
+      return 'id:${id.toString()}';
+    }
+    final lineId = issue['line_id'] ?? issue['lineId'];
+    if (lineId != null && lineId.toString().trim().isNotEmpty) {
+      return 'line:${lineId.toString()}';
+    }
+    return 'fallback:$fallback:${issue.toString()}';
+  }
+
+  static int criticalErrorCount({
+    required List<ReviewLineItem> workingLines,
+    List<Map<String, dynamic>> topologyIssues = const [],
+  }) {
+    final identities = <String>{};
+    for (final line in activeLines(workingLines)) {
+      for (final issue in _lineIssues(line).where(isCriticalIssue)) {
+        identities.add(_criticalIssueIdentity(issue, fallback: line.lineId));
+      }
+    }
+    for (final issue in topologyIssues.where(isCriticalIssue)) {
+      identities.add(_criticalIssueIdentity(issue));
+    }
+    return identities.length;
+  }
+
+  static bool _containsCrossingKey(String key) {
+    final normalized = key.toLowerCase();
+    return normalized.contains('cross') ||
+        normalized.contains('overlap') ||
+        normalized.contains('intersection') ||
+        normalized.contains('교차');
+  }
+
+  static bool _evidenceValueExists(Object? value) {
+    if (value == null) return false;
+    if (value is bool) return value;
+    if (value is String) {
+      final normalized = value.trim().toLowerCase();
+      return normalized.isNotEmpty &&
+          normalized != 'false' &&
+          normalized != 'none' &&
+          normalized != 'null';
+    }
+    if (value is Iterable || value is Map) return (value as dynamic).isNotEmpty;
+    return true;
+  }
+
+  /// Returns true only when the payload contains explicit crossing/overlap
+  /// evidence. A path alone is never treated as crossing evidence.
+  static bool hasCrossingEvidence(ReviewLineItem line) {
+    bool inspectMap(Map<String, dynamic> map) {
+      for (final entry in map.entries) {
+        if (_containsCrossingKey(entry.key) &&
+            _evidenceValueExists(entry.value)) {
+          return true;
+        }
+        if (entry.value is Map<String, dynamic> &&
+            inspectMap(entry.value as Map<String, dynamic>)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    if (inspectMap(line.evidence)) return true;
+    return _lineIssues(line).any(
+      (issue) =>
+          inspectMap(issue) ||
+          (_containsCrossingKey(issue['code']?.toString() ?? '') &&
+              _evidenceValueExists(issue['message'])),
+    );
+  }
+
+  static bool isCrossingResolved(ReviewLineItem line) {
+    final resolution = line.connectionReviewResolution?.toUpperCase();
+    return resolution == 'CONNECTED' || resolution == 'CROSSING_ONLY';
+  }
+
+  static bool isUnresolvedCrossing(ReviewLineItem line) {
+    return hasCrossingEvidence(line) && !isCrossingResolved(line);
+  }
+
+  static bool isExceptionLine(ReviewLineItem line) {
+    return line.reviewStatus.toUpperCase() == 'AMBIGUOUS' ||
+        lineHasCriticalIssue(line) ||
+        isUnresolvedCrossing(line);
+  }
+
+  static List<String> getBlockers({
+    required List<ReviewLineItem> workingLines,
+    List<Map<String, dynamic>> topologyIssues = const [],
+  }) {
+    final blockers = <String>[];
+    final active = activeLines(workingLines);
+    if (active.isEmpty) {
+      blockers.add(noActiveLineMessage);
+      return blockers;
+    }
+
+    final ambiguousCount = active
+        .where((line) => line.reviewStatus.toUpperCase() == 'AMBIGUOUS')
+        .length;
+    if (ambiguousCount > 0) {
+      blockers.add('확인이 필요한 결선 $ambiguousCount건이 남아 있습니다.');
+    }
+
+    final crossingCount = active.where(isUnresolvedCrossing).length;
+    if (crossingCount > 0) {
+      blockers.add('교차 여부 확인이 필요한 결선 $crossingCount건이 남아 있습니다.');
+    }
+
+    final criticalErrorCountValue = criticalErrorCount(
+      workingLines: workingLines,
+      topologyIssues: topologyIssues,
+    );
+    if (criticalErrorCountValue > 0) {
+      blockers.add('전기적 연결 오류 $criticalErrorCountValue건을 해결해야 합니다.');
+    }
+    return blockers;
+  }
+
+  static bool canVerifyGate({
+    required List<ReviewLineItem> workingLines,
+    List<Map<String, dynamic>> topologyIssues = const [],
+  }) {
+    return getBlockers(
+      workingLines: workingLines,
+      topologyIssues: topologyIssues,
+    ).isEmpty;
+  }
+
+  static String? _issueId(Map<String, dynamic> issue) {
+    final raw = issue['issue_id'] ?? issue['id'];
+    return raw?.toString();
+  }
+
+  static Set<String> _issueComponentIds(Map<String, dynamic> issue) {
+    final ids = <String>{};
+    final raw = issue['component_ids'] ?? issue['related_ids'];
+    if (raw is List) ids.addAll(raw.map((value) => value.toString()));
+    final lineId = issue['line_id'] ?? issue['lineId'];
+    if (lineId != null) ids.add(lineId.toString());
+    return ids;
+  }
+
+  static Set<String> computeGuideLineIds({
+    required List<ReviewLineItem> workingLines,
+    List<Map<String, dynamic>> topologyIssues = const [],
+    List<Map<String, dynamic>>? focusTargets,
+  }) {
+    final active = activeLines(workingLines);
+    final ids = <String>{
+      for (final line in active)
+        if (isExceptionLine(line)) line.lineId,
+    };
+    final criticalIssues = topologyIssues.where(isCriticalIssue).toList();
+    for (final issue in criticalIssues) {
+      final components = _issueComponentIds(issue);
+      for (final line in active) {
+        if (components.contains(line.lineId) ||
+            line.connectedTo.any(components.contains)) {
+          ids.add(line.lineId);
+        }
+      }
+    }
+    if (focusTargets != null) {
+      for (final target in focusTargets) {
+        final type = target['type']?.toString().toUpperCase();
+        final id = target['id']?.toString();
+        final matching = active.where((item) => item.lineId == id);
+        final line = matching.isEmpty ? null : matching.first;
+        if (type == 'LINE' && line != null && isExceptionLine(line)) {
+          ids.add(line.lineId);
+        }
+      }
+    }
+    return ids;
+  }
+
+  static Set<String> computeGuideIssueIds({
+    List<Map<String, dynamic>> topologyIssues = const [],
+    List<ReviewLineItem> workingLines = const [],
+    List<Map<String, dynamic>>? focusTargets,
+  }) {
+    final ids = <String>{
+      for (final issue in topologyIssues.where(isCriticalIssue))
+        if (_issueId(issue) != null) _issueId(issue)!,
+    };
+    for (final line in activeLines(workingLines)) {
+      for (final issue in _lineIssues(line).where(isCriticalIssue)) {
+        if (_issueId(issue) != null) ids.add(_issueId(issue)!);
+      }
+    }
+    if (focusTargets != null) {
+      final validIds = <String>{
+        for (final issue in topologyIssues)
+          if (_issueId(issue) != null) _issueId(issue)!,
+      }.whereType<String>().toSet();
+      ids.addAll(
+        focusTargets
+            .where(
+              (target) => target['type']?.toString().toUpperCase() == 'ISSUE',
+            )
+            .map((target) => target['id']?.toString())
+            .whereType<String>()
+            .where(validIds.contains),
+      );
+    }
+    return ids;
+  }
+
+  static String lineStatusLabel(ReviewLineItem line) {
+    final status = line.reviewStatus.toUpperCase();
+    if (status == 'REJECTED') return '제외';
+    if (lineHasCriticalIssue(line)) return '전기 오류';
+    if (isUnresolvedCrossing(line)) return '교차 검토';
+    if (status == 'AMBIGUOUS') return '확인 필요';
+    return 'AI 확인 · 정상 연결';
+  }
+
+  static ReviewLineItem reassignTarget(ReviewLineItem line, String targetId) {
+    final endpoints = List<String>.from(line.connectedTo);
+    if (endpoints.isEmpty) return line;
+    if (endpoints.length == 1) {
+      endpoints.add(targetId);
+    } else {
+      endpoints[1] = targetId;
+    }
+    final reassigned = line.copyWith(
+      connectedTo: endpoints,
+      reviewStatus: 'CONFIRMED',
+      source: 'human_reconnected',
+    );
+    reassigned.connectionReviewResolution = null;
+    return reassigned;
+  }
+}
+
 class CompletenessReviewResult {
   final String assessment;
   final String messageKo;
@@ -325,6 +1053,8 @@ class ReviewLineItem {
   String reviewStatus; // 'DETECTED', 'AMBIGUOUS', 'CONFIRMED', 'REJECTED'
   String source;
   List<Map<String, dynamic>> validationIssues;
+  Map<String, dynamic> evidence;
+  String? connectionReviewResolution;
   String? agentExplanation;
   String? recommendedAction;
   List<String> candidateTargets;
@@ -346,6 +1076,8 @@ class ReviewLineItem {
     this.reviewStatus = 'DETECTED',
     this.source = 'ai_detected',
     this.validationIssues = const [],
+    this.evidence = const {},
+    this.connectionReviewResolution,
     this.agentExplanation,
     this.recommendedAction,
     this.candidateTargets = const [],
@@ -398,6 +1130,11 @@ class ReviewLineItem {
       parsedCandidates = rawCandidates.map((e) => e.toString()).toList();
     }
 
+    final rawEvidence = json['evidence'];
+    final parsedEvidence = rawEvidence is Map<String, dynamic>
+        ? rawEvidence
+        : <String, dynamic>{};
+
     return ReviewLineItem(
       lineId: json['line_id']?.toString() ?? json['id']?.toString() ?? '',
       connectedTo: parsedConnected,
@@ -406,9 +1143,16 @@ class ReviewLineItem {
       targetPort: json['target_port']?.toString() ?? 'auto',
       traceMethod: json['trace_method']?.toString() ?? 'electrical_graph',
       reviewStatus:
-          json['review_status']?.toString().toUpperCase() ?? 'DETECTED',
+          (json['review_status'] ?? json['status'])?.toString().toUpperCase() ??
+          'DETECTED',
       source: json['source']?.toString() ?? 'ai_detected',
       validationIssues: parsedIssues,
+      evidence: parsedEvidence,
+      connectionReviewResolution:
+          (json['connection_review_resolution'] ??
+                  json['crossing_resolution'] ??
+                  json['crossingResolution'])
+              ?.toString(),
       agentExplanation: json['agent_explanation']?.toString(),
       recommendedAction: json['recommended_action']?.toString(),
       candidateTargets: parsedCandidates,
@@ -431,6 +1175,9 @@ class ReviewLineItem {
       'review_status': reviewStatus,
       'source': source,
       'validation_issues': validationIssues,
+      'evidence': evidence,
+      if (connectionReviewResolution != null)
+        'connection_review_resolution': connectionReviewResolution,
       if (agentExplanation != null) 'agent_explanation': agentExplanation,
       if (recommendedAction != null) 'recommended_action': recommendedAction,
       'candidate_targets': candidateTargets,
@@ -452,6 +1199,8 @@ class ReviewLineItem {
     String? reviewStatus,
     String? source,
     List<Map<String, dynamic>>? validationIssues,
+    Map<String, dynamic>? evidence,
+    String? connectionReviewResolution,
     String? agentExplanation,
     String? recommendedAction,
     List<String>? candidateTargets,
@@ -471,6 +1220,9 @@ class ReviewLineItem {
       reviewStatus: reviewStatus ?? this.reviewStatus,
       source: source ?? this.source,
       validationIssues: validationIssues ?? List.from(this.validationIssues),
+      evidence: evidence ?? Map<String, dynamic>.from(this.evidence),
+      connectionReviewResolution:
+          connectionReviewResolution ?? this.connectionReviewResolution,
       agentExplanation: agentExplanation ?? this.agentExplanation,
       recommendedAction: recommendedAction ?? this.recommendedAction,
       candidateTargets: candidateTargets ?? List.from(this.candidateTargets),

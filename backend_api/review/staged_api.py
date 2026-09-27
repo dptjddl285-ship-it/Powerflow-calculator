@@ -9,8 +9,10 @@ from typing import Any
 
 from pathlib import Path
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile
+from fastapi.responses import JSONResponse
 
 import core.env_loader
+from core.bus_review_contract import evaluate_bus_mapping
 from core.adaptive_vision_pipeline import (
     detect_sld_connections_adaptive,
     detect_sld_objects_adaptive,
@@ -21,6 +23,11 @@ from core.bus_number_linker import (
     synchronize_node_and_line_ids,
 )
 from core.pipeline_policy import validate_graph
+from agent.connection_review_contract import (
+    active_connection_lines,
+    connection_blockers,
+    critical_connection_error_count,
+)
 from review.session_store import session_store
 from review.schemas import (
     AgentChatRequest,
@@ -34,6 +41,7 @@ from review.schemas import (
     ValidateTopologyRequest,
     VerifyFinalGateRequest,
     VerifyObjectsGateRequest,
+    VerifyBusGateRequest,
 )
 from agent import (
     chat_reviewer,
@@ -277,6 +285,101 @@ async def review_verify_objects_gate(request: VerifyObjectsGateRequest):
 
 
 # ==========================================
+# 🚪 [Review API 4-B] Bus Gate 검증 (Bus Mapping V2)
+# ==========================================
+@router.post("/review/verify_bus_gate")
+async def review_verify_bus_gate(request: VerifyBusGateRequest):
+    print(
+        f"\n🚪 [Bus Gate 검증 요청] Document: {request.document_id}, "
+        f"Working nodes: {len(request.working_nodes)}"
+    )
+    try:
+        bus_state = evaluate_bus_mapping(request.working_nodes)
+        bus_nodes = bus_state["buses"]
+
+        blockers = []
+        focus_node_ids = []
+
+        if len(bus_nodes) == 0:
+            blockers.append("도면 내 유효한 모선(Bus) 객체가 없습니다.")
+            return {
+                "status": "success",
+                "gate_status": "BLOCKED",
+                "message": "도면 내 유효한 모선(Bus) 객체가 없습니다.",
+                "blockers": blockers,
+                "focus_node_ids": focus_node_ids,
+                "bus_summary": {
+                    "total_buses": 0,
+                    "verified_buses": 0,
+                    "issue_buses": 0,
+                    "duplicates": [],
+                },
+            }
+
+        missing_number_buses = []
+        invalid_number_buses = []
+        duplicate_buses = []
+        uncertain_status_buses = []
+
+        for b in bus_nodes:
+            bid = str(b.get("id", ""))
+            reasons = bus_state["issue_reasons"].get(bid, [])
+            if "MISSING_BUS_NUMBER" in reasons:
+                missing_number_buses.append(bid)
+            if "INVALID_BUS_NUMBER" in reasons:
+                invalid_number_buses.append(bid)
+            if "DUPLICATE_BUS_NUMBER" in reasons or "ACTIVE_DUPLICATE_REASON" in reasons:
+                duplicate_buses.append(bid)
+            if "UNCERTAIN_BUS_NUMBER" in reasons:
+                uncertain_status_buses.append(bid)
+            if reasons:
+                focus_node_ids.append(bid)
+
+        duplicates = sorted(bus_state["duplicates"])
+        if duplicates or duplicate_buses:
+            dup_nums_str = ", ".join(f"#{d}" for d in duplicates) if duplicates else "확인 필요"
+            blockers.append(f"중복된 모선 번호({dup_nums_str})가 존재합니다. 각각 고유한 번호로 수정해 주세요.")
+        if missing_number_buses:
+            blockers.append(f"번호가 미지정된 모선({len(missing_number_buses)}개)이 있습니다.")
+        if invalid_number_buses:
+            blockers.append(f"유효하지 않은 번호(0 이하)를 가진 모선({len(invalid_number_buses)}개)이 있습니다.")
+        if uncertain_status_buses:
+            blockers.append(f"판독 상태가 불확실(UNCERTAIN)한 모선({len(uncertain_status_buses)}개)이 있습니다.")
+
+        total_buses = bus_state["total"]
+        issue_count = bus_state["issue_count"]
+        verified_count = bus_state["verified_count"]
+
+        bus_summary = {
+            "total_buses": total_buses,
+            "verified_buses": verified_count,
+            "issue_buses": issue_count,
+            "duplicates": duplicates,
+        }
+
+        if blockers:
+            return {
+                "status": "success",
+                "gate_status": "BLOCKED",
+                "message": blockers[0] if len(blockers) == 1 else f"모선 확인 필요 항목 {issue_count}건이 남아있어 결선 단계로 진행할 수 없습니다.",
+                "blockers": blockers,
+                "focus_node_ids": focus_node_ids,
+                "bus_summary": bus_summary,
+            }
+
+        return {
+            "status": "success",
+            "gate_status": "BUS_VERIFIED",
+            "message": "모든 모선 번호가 유효하고 고유하게 확인되었습니다. (BUS VERIFIED)",
+            "blockers": [],
+            "focus_node_ids": [],
+            "bus_summary": bus_summary,
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+# ==========================================
 # 🔗 [Review API 5] 확정 객체 기반 결선 검출
 # ==========================================
 @router.post("/review/detect_connections")
@@ -366,6 +469,11 @@ async def review_link_bus_numbers(request: LinkBusNumbersRequest):
             "document_id": request.document_id,
             "nodes": updated_nodes,
             "bus_number_report": bus_report,
+            "model_used": bus_report.get("model_used"),
+            "fallback_used": bus_report.get("fallback_used", False),
+            "primary_model": bus_report.get("primary_model"),
+            "fallback_model": bus_report.get("fallback_model"),
+            "http_code": bus_report.get("http_code"),
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -517,6 +625,24 @@ async def review_verify_final_gate(request: VerifyFinalGateRequest):
                 "message": f"Document session '{request.document_id}' not found or expired",
             }
 
+        # Connection Review V2 is authoritative before any normalization or
+        # graph repair: raw line evidence must not be hidden by a clean graph.
+        raw_connection_blockers = connection_blockers(request.working_lines, [])
+        if raw_connection_blockers:
+            active_lines = active_connection_lines(request.working_lines)
+            critical_count = critical_connection_error_count(
+                active_lines,
+                [],
+            )
+            return {
+                "status": "success",
+                "gate_status": "BLOCKED",
+                "document_id": request.document_id,
+                "message": raw_connection_blockers[0],
+                "critical_issue_count": max(1, critical_count),
+                "issues": [],
+            }
+
         # 1. Check confirmed nodes (clean DETECTED are auto-confirmed)
         confirmed_nodes = []
         suspicious_nodes = []
@@ -542,26 +668,14 @@ async def review_verify_final_gate(request: VerifyFinalGateRequest):
 
         # 2. Check confirmed lines (clean DETECTED are auto-confirmed)
         accepted_lines = []
-        ambiguous_lines = []
         for l in request.working_lines:
             status = str(l.get("review_status", "")).upper()
             if status == "REJECTED":
                 continue
-            elif status == "AMBIGUOUS":
-                ambiguous_lines.append(l)
             else:
                 l_copy = dict(l)
                 l_copy["review_status"] = "CONFIRMED"
                 accepted_lines.append(l_copy)
-
-        if len(ambiguous_lines) > 0:
-            return {
-                "status": "success",
-                "gate_status": "BLOCKED",
-                "document_id": request.document_id,
-                "message": f"미해결 결선 오류 선로(AMBIGUOUS)가 {len(ambiguous_lines)}개 남아있습니다. (승인 또는 제외 필요)",
-                "critical_issue_count": len(ambiguous_lines),
-            }
 
         # 3. Synchronize IDs so bus_XX, gen_XX, load_XX match bus numbers 1:1!
         confirmed_nodes = propagate_bus_numbers_to_devices(confirmed_nodes, accepted_lines)
@@ -683,7 +797,15 @@ async def review_agent_chat(request: AgentChatRequest):
             "status": "success",
             "document_id": request.document_id,
             "reply_ko": result.get("reply_ko", ""),
+            "decision": result.get("decision", "UNKNOWN"),
+            "intent": result.get("intent", "UNKNOWN"),
+            "action_mode": result.get("action_mode", "NONE"),
+            "action_id": result.get("action_id"),
+            "action_params": result.get("action_params", {}),
             "highlight_target": result.get("highlight_target"),
+            "focus_targets": result.get("focus_targets", []),
+            "evidence_summary": result.get("evidence_summary", {}),
+            "summary_text": result.get("summary_text", result.get("reply_ko", "")),
             "agent_status": result.get("agent_status", "DETERMINISTIC"),
             "provider_mode": result.get("provider_mode", "local"),
             "display_mode": result.get("display_mode", ""),
@@ -691,7 +813,7 @@ async def review_agent_chat(request: AgentChatRequest):
             "context_summary": result.get("context_summary", {}),
         }
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
 
 # ==========================================
@@ -716,7 +838,7 @@ async def review_proactive_summary(request: ProactiveSummaryRequest):
             **res,
         }
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(e)})
 
 
 @router.get("/review/provider_status")
@@ -729,11 +851,16 @@ async def review_provider_status():
     """
     try:
         provider = get_assistant_provider()
-        return {
+        response = {
             "status": "ok",
             "provider_mode": provider.provider_name,
             "display_mode": provider.display_mode_name,
         }
+        if provider.provider_name == "gemini":
+            response["primary_model"] = getattr(provider, "primary_model_name", None)
+            response["fallback_model"] = getattr(provider, "fallback_model_name", None)
+            response["fallback_configured"] = bool(response["fallback_model"])
+        return response
     except Exception as exc:
         return {"status": "error", "provider_mode": "local", "message": str(exc)}
 
