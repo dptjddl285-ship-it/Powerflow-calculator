@@ -3,7 +3,7 @@
 
 이 문서는 **PowerLens Pro(전력계통 AI 단선도 인식 및 조류계산 플랫폼)** 프로젝트의 현재 최신 상태와 아키텍처, 실행/테스트 방법, 그리고 새로 합류한 팀원이 즉시 작업을 이어받을 수 있는 모든 인수인계 정보를 담고 있는 **공식 핸드오프 문서**입니다.
 
-코드나 설정을 수정하기 전에 반드시 이 문서와 프로젝트 루트의 [`POWERLENS_AGENT_RULES.md`](./POWERLENS_AGENT_RULES.md)를 정독해 주십시오.
+코드나 설정을 수정하기 전에 반드시 이 문서와 [`docs/internal/POWERLENS_AGENT_RULES.md`](./internal/POWERLENS_AGENT_RULES.md)를 정독해 주십시오.
 
 ---
 
@@ -101,16 +101,20 @@ Powerflow-calculator/
 │   ├── build/web/                   # 프로덕션 Flutter Web 빌드 아티팩트 (원클릭 실행용 추적)
 │   └── test/                        # Flutter 위젯 및 AI 서비스 인텐트 테스트
 ├── docs/                            # 프로젝트 공식 문서 및 핸드오프 자료
-│   └── handoff/screenshots/         # 8대 대표 검증 화면 스크린샷 모음
-├── main_server.py                   # 루트 위치 편의용 백엔드 실행 스크립트
-├── run_powerlens.py                 # 백엔드+웹서버 동시 구동 및 브라우저 자동 실행 런처
-├── run_powerlens.bat                # Windows 사용자용 더블클릭 실행 배치 파일
-├── case24_psse.xlsx                 # IEEE 24-bus 표준 PSS/E 계통 제원 샘플 엑셀
-├── 검사사진.jpg                     # IEEE 24-bus 테스트 단선도 샘플 이미지
-├── .env.example                     # 백엔드 환경변수 설정 템플릿 (키 미포함)
-├── POWERLENS_AGENT_RULES.md         # 프로젝트 전역 에이전트/개발 불변 규칙 (Source of Truth)
-├── PROGRESS_REPORT.md               # 5대 핵심 UX 요구사항 완료 보고서
-└── TEAM_HANDOFF.md                  # (본 문서) 신규 팀원 인수인계 가이드
+│   ├── README.md                        # 문서 허브
+│   ├── SYSTEM_ARCHITECTURE.md           # 시스템 구성도
+│   ├── TECHNICAL_DOCUMENTATION.md       # 상세 기술 문서
+│   ├── WORKFLOW.md                      # 워크플로 정의서
+│   ├── EVALUATION.md                    # 기술 검증 및 성능 평가 보고서
+│   ├── images/                          # 대표 화면 스크린샷 모음
+│   ├── patent/                          # 특허 출원 명세서
+│   ├── internal/                        # 팀 내부 규칙 및 인수인계
+│   │   ├── POWERLENS_AGENT_RULES.md     # 프로젝트 전역 개발 불변 규칙
+│   │   └── TEAM_HANDOFF.md              # (본 문서) 신규 팀원 인수인계 가이드
+│   └── archive/                         # 진행 보고서 아카이브
+├── scripts/                             # 통합 실행 스크립트 (run_powerlens.py 등)
+├── run.bat                              # Windows 원클릭 실행 스크립트
+└── README.md                            # 프로젝트 대표 안내서
 ```
 
 ---
@@ -158,7 +162,7 @@ graph TD
    - Human 확인: 검증 결과 요약 카드 확인.
    - 다음 Gate: `VerifiedSLD` JSON 생성.
 7. **Excel Import (계통 제원 바인딩)**:
-   - 입력: PSS/E 포맷 Excel 파일 (`case24_psse.xlsx`).
+   - 입력: 엑셀 파일 (Primary E2E 기준: `case24_ieee_rts_diagram_aligned.xlsx`, 보조 솔버 벤치마크: `case24_psse.xlsx`).
    - 자동 처리: `ExcelCaseImporter`를 통한 임피던스(R, X, B), 발전/부하 용량(P, Q), 슬랙/PV/PQ 모선 속성 자동 주입.
    - 다음 Gate: 바인딩 요약 확인 후 `[캔버스로 이동]`.
 8. **CAD Canvas (회로도 인터랙티브 편집)**:
@@ -176,7 +180,7 @@ graph TD
 
 | 모듈 / 기능 | 상태 | 세부 설명 및 현재 구현 내용 |
 | :--- | :---: | :--- |
-| **Gemini Review Assistant Provider** | `IMPLEMENTED` | `backend_api/agent/providers.py`에서 Google Gemini 모델(`gemini-3.5-flash-lite`)과 연동. 단선도 도면 및 현재 AppContext(단계, 설비 요약, 토폴로지 이슈)를 근거로 상황별 전문 한국어 가이드 제공. |
+| **Gemini Review Assistant Provider** | `IMPLEMENTED` | `backend_api/agent/providers.py`에서 Google Gemini 모델(`gemini-3.8-flash`, 폴백 `gemini-3.6-flash`)과 연동. 단선도 도면 및 현재 AppContext(단계, 설비 요약, 토폴로지 이슈)를 근거로 상황별 전문 한국어 가이드 제공. |
 | **Local Assistant Fallback** | `IMPLEMENTED` | Gemini API 키가 없거나 네트워크 장애 시 `LocalReviewAssistantProvider`로 무중단 자동 전환. 결정론적 규칙으로 단계별 핵심 안내 및 블로커 설명 제공. |
 | **Provider Status Endpoint** | `IMPLEMENTED` | `GET /review/provider_status` 엔드포인트를 통해 API 키나 비밀정보를 프론트에 노출하지 않고 현재 백엔드 활성 모드(`gemini` vs `local`)를 UI 헤더에 표시. |
 | **AppContext Serialization** | `IMPLEMENTED` | `frontend_app/lib/models/powerlens_assistant_context.dart`에서 현재 화면, 단계, 선택 노드, 작업 설비 수, 토폴로지 오류, 전력조류 상태를 JSON으로 직렬화하여 백엔드에 안전하게 전송. |
@@ -232,9 +236,9 @@ Lensy의 제품 목표는 다음과 같습니다:
 | 기능 항목 | 상태 | 세부 검증 내용 |
 | :--- | :---: | :--- |
 | **VerifiedSLD Schema** | `IMPLEMENTED` | 검수 완료된 도면의 노드, 선로, 모선 매핑을 불변의 구조화된 JSON 데이터로 안전하게 캡슐화. |
-| **Backend ExcelCaseImporter** | `IMPLEMENTED` | 중복 파서를 단일화하여 `case24_psse.xlsx`로부터 모선/발전/부하/선로 파라미터를 100% 백엔드에서 정합성 있게 추출. |
+| **Backend ExcelCaseImporter** | `IMPLEMENTED` | 중복 파서를 단일화하여 `case24_ieee_rts_diagram_aligned.xlsx` 및 `case24_psse.xlsx`로부터 모선/발전/부하/선로 파라미터를 100% 백엔드에서 정합성 있게 추출. |
 | **Parameter Mapping & Canvas Transfer** | `IMPLEMENTED` | 도면의 검증된 기하학적 형상 위에 계통 전기적 제원을 결합하여 Web CAD 캔버스로 무결 손실 전달. |
-| **Full AC Newton-Raphson Solver** | `IMPLEMENTED` | $\pi$-등가회로 서셉턴스($B/2$), 오프노미널 탭비 변압기 모델링. IEEE 24-bus RTS 계통에서 4회 반복 내 수렴(최대 잔차 $4 \times 10^{-8}$) 검증 통과. |
+| **Full AC Newton-Raphson Solver** | `IMPLEMENTED` | $\pi$-등가회로 서셉턴스($B/2$), 오프노미널 탭비 변압기 모델링. 24모선 계통에서 4 iterations 내 수렴 (tolerance $10^{-4}$) 검증 통과. |
 | **Signed Line Power Flow & Direction** | `IMPLEMENTED` | $P_{\text{from-to}}$의 부호에 따라 송전선로의 물리적 절곡 선(Polyline)을 따라 정방향/역방향 화살표(➔)가 흐르는 벡터 렌더러 구현. |
 | **Line Flow MW Badge** | `IMPLEMENTED` | `Bus A ➔ Bus B: XX.X MW` 직관적 흐름 배지 및 하단 `⚡ 범례: 화살표 (➔) = 유효전력(P) 흐름 방향` 표시. |
 | **Natural Language Actions** | `IMPLEMENTED` | • **"계산 진행" / "조류계산 해줘"** ➔ 실제 백엔드 시뮬레이션 호출 및 결과 갱신<br>• **"결과 보여줘"** ➔ 오버레이 HUD 팝업 활성화<br>• **"숫자는 치우고 흐름만 보여줘" / "화살표만 보여줘"** ➔ 수치 라벨 숨김 및 화살표 가시화 다중 액션 동시 실행 |
@@ -267,7 +271,8 @@ cp .env.example .env
 ```ini
 GEMINI_API_KEY=<YOUR_GEMINI_API_KEY>
 GOOGLE_API_KEY=<YOUR_GEMINI_API_KEY>
-GEMINI_MODEL=gemini-3.5-flash-lite
+GEMINI_MODEL=gemini-3.8-flash
+GEMINI_FALLBACK_MODEL=gemini-3.6-flash
 AI_PROVIDER=gemini
 ```
 > [!CAUTION]
@@ -413,17 +418,17 @@ flutter build web
 
 | 파일 경로 | 핵심 역할 및 설명 |
 | :--- | :--- |
-| [`POWERLENS_AGENT_RULES.md`](./POWERLENS_AGENT_RULES.md) | 프로젝트의 최상위 불변 규칙 문서 (제품 철학, 에이전트 행동 강령, 금지 사항) |
-| [`run_powerlens.py`](./run_powerlens.py) | 백엔드와 프론트엔드 정적 웹서버를 한 번에 띄우는 원클릭 실행 런처 |
-| [`backend_api/agent/providers.py`](./backend_api/agent/providers.py) | Gemini / Local Assistant 프로바이더 구현체 및 Lensy 프롬프트 엔지니어링 |
-| [`backend_api/review/staged_api.py`](./backend_api/review/staged_api.py) | 단계별 검수 세션, 최종 게이트 판정, 어시스턴트 채팅 및 프로바이더 상태 API |
-| [`backend_api/core/power_flow_solver.py`](./backend_api/core/power_flow_solver.py) | 순수 파이썬/NumPy 기반 정밀 Full AC Newton-Raphson 조류계산 솔버 |
-| [`backend_api/core/excel_case_importer.py`](./backend_api/core/excel_case_importer.py) | PSS/E 엑셀 파일을 파싱하여 도면 요소에 전기적 제원을 결합하는 일원화 파서 |
-| [`frontend_app/lib/services/powerlens_ai_service.dart`](./frontend_app/lib/services/powerlens_ai_service.dart) | 프론트엔드 Lensy 통신 서비스, 자연어 인텐트 파서 및 앱 액션 실행 브리지 |
-| [`frontend_app/lib/models/powerlens_assistant_context.dart`](./frontend_app/lib/models/powerlens_assistant_context.dart) | 프론트엔드 실시간 계통/도면 상태를 에이전트에 전달하기 위한 컨텍스트 모델 |
-| [`frontend_app/lib/screens/review_page.dart`](./frontend_app/lib/screens/review_page.dart) | 객체 검수, 모선 매핑, 결선 검수, 최종 검증이 이루어지는 단계별 검수실 화면 |
-| [`frontend_app/lib/widgets/powerlens_ai/powerlens_ai_button.dart`](./frontend_app/lib/widgets/powerlens_ai/powerlens_ai_button.dart) | Lensy 로봇 아바타, 선제적 말풍선 코칭 및 인터랙티브 플로팅 위젯 |
-| [`frontend_app/lib/main.dart`](./frontend_app/lib/main.dart) | 인터랙티브 CAD 캔버스, 단축키 처리, 조류 흐름 화살표(➔) 벡터 렌더러 |
+| [`docs/internal/POWERLENS_AGENT_RULES.md`](./internal/POWERLENS_AGENT_RULES.md) | 프로젝트의 최상위 불변 규칙 문서 (제품 철학, 에이전트 행동 강령, 금지 사항) |
+| [`scripts/run_powerlens.py`](../scripts/run_powerlens.py) | 백엔드와 프론트엔드 정적 웹서버를 한 번에 띄우는 원클릭 실행 런처 |
+| [`backend_api/agent/providers.py`](../backend_api/agent/providers.py) | Gemini / Local Assistant 프로바이더 구현체 및 Lensy 프롬프트 엔지니어링 |
+| [`backend_api/review/staged_api.py`](../backend_api/review/staged_api.py) | 단계별 검수 세션, 최종 게이트 판정, 어시스턴트 채팅 및 프로바이더 상태 API |
+| [`backend_api/core/power_flow_solver.py`](../backend_api/core/power_flow_solver.py) | 순수 파이썬/NumPy 기반 정밀 Full AC Newton-Raphson 조류계산 솔버 |
+| [`backend_api/core/excel_case_importer.py`](../backend_api/core/excel_case_importer.py) | PSS/E 엑셀 파일을 파싱하여 도면 요소에 전기적 제원을 결합하는 일원화 파서 |
+| [`frontend_app/lib/services/powerlens_ai_service.dart`](../frontend_app/lib/services/powerlens_ai_service.dart) | 프론트엔드 Lensy 통신 서비스, 자연어 인텐트 파서 및 앱 액션 실행 브리지 |
+| [`frontend_app/lib/models/powerlens_assistant_context.dart`](../frontend_app/lib/models/powerlens_assistant_context.dart) | 프론트엔드 실시간 계통/도면 상태를 에이전트에 전달하기 위한 컨텍스트 모델 |
+| [`frontend_app/lib/screens/review_page.dart`](../frontend_app/lib/screens/review_page.dart) | 객체 검수, 모선 매핑, 결선 검수, 최종 검증이 이루어지는 단계별 검수실 화면 |
+| [`frontend_app/lib/widgets/powerlens_ai/powerlens_ai_button.dart`](../frontend_app/lib/widgets/powerlens_ai/powerlens_ai_button.dart) | Lensy 로봇 아바타, 선제적 말풍선 코칭 및 인터랙티브 플로팅 위젯 |
+| [`frontend_app/lib/main.dart`](../frontend_app/lib/main.dart) | 인터랙티브 CAD 캔버스, 단축키 처리, 조류 흐름 화살표(➔) 벡터 렌더러 |
 
 ---
 
